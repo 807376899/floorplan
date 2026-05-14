@@ -162,6 +162,92 @@ button:hover,
   overflow: hidden;
 }
 
+.data-panel {
+  margin-top: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.panel-heading h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.panel-heading p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.editor-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.data-editor {
+  max-height: 440px;
+  overflow: auto;
+}
+
+.data-editor table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-editor th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f8fafc;
+  color: #475467;
+  text-align: left;
+  font-weight: 700;
+  border-bottom: 1px solid var(--line);
+}
+
+.data-editor th,
+.data-editor td {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 6px;
+}
+
+.data-editor input {
+  width: 126px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ink);
+  padding: 6px 7px;
+}
+
+.data-editor input:focus {
+  outline: 0;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(31, 122, 140, 0.12);
+}
+
+.delete-cell button {
+  min-height: 32px;
+  padding: 5px 9px;
+}
+
 .floor-switcher,
 .details {
   min-width: 0;
@@ -284,6 +370,10 @@ button:hover,
 
   .workspace {
     grid-template-columns: 1fr;
+  }
+
+  .panel-heading {
+    flex-direction: column;
   }
 
   .floor-switcher {

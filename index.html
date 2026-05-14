@@ -13,7 +13,7 @@
       <section class="topbar" aria-label="数据导入和筛选">
         <div class="brand">
           <h1>实验室分布图生成器</h1>
-          <p>CSV/Excel 转 JSON，并按走廊分段、南北侧、端头房间和学院颜色生成 2D SVG 分布图。</p>
+          <p>CSV/Excel 转 JSON，支持在线修改表格，并按走廊分段、端头房间和学院颜色生成 2D SVG 分布图。</p>
         </div>
 
         <div class="controls">
@@ -23,6 +23,7 @@
           </label>
           <button id="loadSampleBtn" type="button">载入测试数据</button>
           <button id="downloadJsonBtn" type="button">导出 JSON</button>
+          <button id="downloadCsvBtn" type="button">导出 CSV</button>
         </div>
       </section>
 
@@ -60,6 +61,20 @@
           <h2>JSON 预览</h2>
           <pre id="jsonPreview"></pre>
         </aside>
+      </section>
+
+      <section class="data-panel" aria-label="表格数据编辑">
+        <div class="panel-heading">
+          <div>
+            <h2>表格数据</h2>
+            <p>直接修改单元格后点击“应用修改”。若要表达 L/T 型楼，可调整走廊段、走廊方向、分段X、分段Y。</p>
+          </div>
+          <div class="editor-actions">
+            <button id="addRowBtn" type="button">新增房间</button>
+            <button id="applyTableBtn" type="button">应用修改</button>
+          </div>
+        </div>
+        <div id="dataEditor" class="data-editor"></div>
       </section>
     </main>
   </body>
