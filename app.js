@@ -37,8 +37,12 @@ const state = {
 const els = {
   fileInput: document.querySelector("#fileInput"),
   loadSampleBtn: document.querySelector("#loadSampleBtn"),
+  downloadTemplateBtn: document.querySelector("#downloadTemplateBtn"),
   downloadJsonBtn: document.querySelector("#downloadJsonBtn"),
   downloadCsvBtn: document.querySelector("#downloadCsvBtn"),
+  fitCanvasBtn: document.querySelector("#fitCanvasBtn"),
+  actualCanvasBtn: document.querySelector("#actualCanvasBtn"),
+  canvasModeText: document.querySelector("#canvasModeText"),
   addRowBtn: document.querySelector("#addRowBtn"),
   applyTableBtn: document.querySelector("#applyTableBtn"),
   buildingSelect: document.querySelector("#buildingSelect"),
@@ -55,8 +59,11 @@ const els = {
 
 els.fileInput.addEventListener("change", handleFileImport);
 els.loadSampleBtn.addEventListener("click", loadSampleData);
+els.downloadTemplateBtn.addEventListener("click", downloadTemplate);
 els.downloadJsonBtn.addEventListener("click", downloadJson);
 els.downloadCsvBtn.addEventListener("click", downloadCsv);
+els.fitCanvasBtn.addEventListener("click", () => setCanvasMode("fit"));
+els.actualCanvasBtn.addEventListener("click", () => setCanvasMode("actual"));
 els.addRowBtn.addEventListener("click", addEditorRow);
 els.applyTableBtn.addEventListener("click", applyEditorRows);
 els.buildingSelect.addEventListener("change", () => {
@@ -69,6 +76,9 @@ els.floorSelect.addEventListener("change", () => {
   render();
 });
 els.collegeSelect.addEventListener("change", render);
+window.addEventListener("resize", () => {
+  if (els.floorplan.classList.contains("is-fit")) applyCanvasMode();
+});
 
 loadSampleData();
 
@@ -386,7 +396,7 @@ function renderFloorplan(rooms, colors, selectedCollege) {
   const roomMarkup = layout.rooms.map((roomBox) => roomToSvg(roomBox, colors, selectedCollege, false)).join("");
 
   els.floorplan.innerHTML = `
-    <svg viewBox="0 0 ${layout.width} ${layout.height}" width="${layout.width}" height="${layout.height}" role="img" aria-label="实验室 SVG 分布图">
+    <svg viewBox="0 0 ${layout.width} ${layout.height}" role="img" aria-label="实验室 SVG 分布图" data-layout-width="${layout.width}" data-layout-height="${layout.height}">
       <defs><pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 L 0 0 0 24" fill="none" stroke="#e8edf3" stroke-width="1"/></pattern></defs>
       <rect x="0" y="0" width="${layout.width}" height="${layout.height}" fill="url(#grid)"/>
       <text x="34" y="42" font-size="24" font-weight="700" fill="#18212f">${escapeSvg(els.buildingSelect.value)} ${escapeSvg(els.floorSelect.value)}层</text>
@@ -407,6 +417,7 @@ function renderFloorplan(rooms, colors, selectedCollege) {
   });
 
   showRoomDetails(rooms.find((room) => room.id === state.selectedRoomId));
+  applyCanvasMode();
 }
 
 function makeMiniSvg(rooms, colors) {
@@ -561,6 +572,17 @@ function downloadCsv() {
   downloadFile("floorplan-data.csv", `\uFEFF${csv}`, "text/csv;charset=utf-8");
 }
 
+function downloadTemplate() {
+  const rows = [
+    EDIT_COLUMNS.map(([, label]) => label),
+    ["示例楼", "1", "主走廊", "东西", "0", "0", "0", "北侧示例实验室", "北", "101", "101", "东到西递增", "8", "6", "示例学院", "基础实验室", "40", "单门示例"],
+    ["示例楼", "1", "主走廊", "东西", "0", "0", "8.7", "南侧示例实验室", "南", "102", "104", "东到西递增", "10", "6", "示例学院", "专业实验室", "48", "双门示例"],
+    ["示例楼", "1", "东翼", "南北", "18", "0", "0", "端头示例房间", "南端", "106", "106", "东到西递增", "6", "5", "示例学院", "辅助房间", "12", "L/T 型可用分段X、分段Y定位走廊段"],
+  ];
+  const csv = rows.map((row) => row.map(csvCell).join(",")).join("\n");
+  downloadFile("floorplan-template.csv", `\uFEFF${csv}`, "text/csv;charset=utf-8");
+}
+
 function downloadFile(filename, content, type) {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
@@ -569,6 +591,33 @@ function downloadFile(filename, content, type) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function setCanvasMode(mode) {
+  els.floorplan.classList.toggle("is-fit", mode === "fit");
+  els.floorplan.classList.toggle("is-actual", mode === "actual");
+  els.canvasModeText.textContent = mode === "fit" ? "适配显示" : "原始大小";
+  applyCanvasMode();
+}
+
+function applyCanvasMode() {
+  const svg = els.floorplan.querySelector("svg");
+  if (!svg) return;
+  const layoutWidth = Number(svg.dataset.layoutWidth || 0);
+  const layoutHeight = Number(svg.dataset.layoutHeight || 0);
+
+  if (els.floorplan.classList.contains("is-actual")) {
+    svg.style.width = `${layoutWidth}px`;
+    svg.style.height = `${layoutHeight}px`;
+    return;
+  }
+
+  const box = els.floorplan.getBoundingClientRect();
+  const availableWidth = Math.max(320, box.width - 24);
+  const availableHeight = Math.max(260, box.height - 24);
+  const scale = Math.min(1, availableWidth / layoutWidth, availableHeight / layoutHeight);
+  svg.style.width = `${Math.max(1, Math.floor(layoutWidth * scale))}px`;
+  svg.style.height = `${Math.max(1, Math.floor(layoutHeight * scale))}px`;
 }
 
 function normalizeSide(value) {

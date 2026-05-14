@@ -22,6 +22,7 @@
             <input id="fileInput" type="file" accept=".csv,.xlsx,.xls" />
           </label>
           <button id="loadSampleBtn" type="button">载入测试数据</button>
+          <button id="downloadTemplateBtn" type="button">下载模板</button>
           <button id="downloadJsonBtn" type="button">导出 JSON</button>
           <button id="downloadCsvBtn" type="button">导出 CSV</button>
         </div>
@@ -53,7 +54,16 @@
           <div id="floorThumbs" class="floor-thumbs"></div>
         </aside>
 
-        <div id="floorplan" class="floorplan" aria-label="SVG 分布图"></div>
+        <div class="canvas-panel">
+          <div class="canvas-toolbar" aria-label="画布显示控制">
+            <span id="canvasModeText">适配显示</span>
+            <div>
+              <button id="fitCanvasBtn" type="button">适配</button>
+              <button id="actualCanvasBtn" type="button">原始大小</button>
+            </div>
+          </div>
+          <div id="floorplan" class="floorplan is-fit" aria-label="SVG 分布图"></div>
+        </div>
 
         <aside class="details">
           <h2>房间信息</h2>
