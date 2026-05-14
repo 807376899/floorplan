@@ -13,7 +13,7 @@
       <section class="topbar" aria-label="数据导入和筛选">
         <div class="brand">
           <h1>实验室分布图生成器</h1>
-          <p>CSV/Excel 转 JSON，并按教学楼、楼层、南北侧和东西门牌规则生成 2D SVG 分布图。</p>
+          <p>CSV/Excel 转 JSON，并按走廊分段、南北侧、端头房间和学院颜色生成 2D SVG 分布图。</p>
         </div>
 
         <div class="controls">
@@ -47,7 +47,13 @@
       </section>
 
       <section class="workspace">
+        <aside class="floor-switcher" aria-label="楼层缩略图">
+          <h2>楼层缩略图</h2>
+          <div id="floorThumbs" class="floor-thumbs"></div>
+        </aside>
+
         <div id="floorplan" class="floorplan" aria-label="SVG 分布图"></div>
+
         <aside class="details">
           <h2>房间信息</h2>
           <div id="roomDetails" class="room-details">点击图中的房间查看详情。</div>

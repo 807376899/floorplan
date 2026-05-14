@@ -25,6 +25,12 @@ const COLOR_PALETTE = [
 ];
 
 const sampleCsvPath = "./sample-labs.csv";
+const CORRIDOR_WIDTH_M = 2.4;
+const ROOM_GAP_M = 0.7;
+const SEGMENT_GAP_M = 4;
+const DETAIL_SCALE = 30;
+const THUMB_SCALE = 7;
+
 const state = {
   rooms: [],
   selectedRoomId: null,
@@ -39,6 +45,7 @@ const els = {
   collegeSelect: document.querySelector("#collegeSelect"),
   statusText: document.querySelector("#statusText"),
   legend: document.querySelector("#legend"),
+  floorThumbs: document.querySelector("#floorThumbs"),
   floorplan: document.querySelector("#floorplan"),
   roomDetails: document.querySelector("#roomDetails"),
   jsonPreview: document.querySelector("#jsonPreview"),
@@ -49,9 +56,13 @@ els.loadSampleBtn.addEventListener("click", loadSampleData);
 els.downloadJsonBtn.addEventListener("click", downloadJson);
 els.buildingSelect.addEventListener("change", () => {
   populateFloorOptions();
+  state.selectedRoomId = null;
   render();
 });
-els.floorSelect.addEventListener("change", render);
+els.floorSelect.addEventListener("change", () => {
+  state.selectedRoomId = null;
+  render();
+});
 els.collegeSelect.addEventListener("change", render);
 
 loadSampleData();
@@ -127,8 +138,9 @@ function parseCsv(text) {
   if (row.some((cell) => cell.trim() !== "")) rows.push(row);
   if (rows.length < 2) return [];
 
-  const headers = rows[0].map((header) => header.trim());
-  return normalizeRows(rows.slice(1).map((cells) => Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]))));
+  const headers = rows[0].map((header) => header.trim().replace(/^\uFEFF/, ""));
+  const body = rows.slice(1).map((cells) => Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""])));
+  return normalizeRows(body);
 }
 
 function normalizeRows(rows) {
@@ -136,7 +148,7 @@ function normalizeRows(rows) {
     building: ["building", "教学楼", "楼栋"],
     floor: ["floor", "楼层"],
     room_name: ["room_name", "实验室名称", "教室名称", "房间名称"],
-    side: ["side", "南北", "南北侧", "教室南北", "所在侧"],
+    side: ["side", "南北侧", "南北", "房间位置", "教室南北", "所在侧"],
     front_door: ["front_door", "前门牌", "前门门牌", "门牌号"],
     rear_door: ["rear_door", "后门牌", "后门门牌"],
     east_to_west_order: ["east_to_west_order", "东到西门牌分布", "从东到西门牌大小", "东西方向"],
@@ -146,6 +158,11 @@ function normalizeRows(rows) {
     lab_type: ["lab_type", "实验室类型", "类型"],
     capacity: ["capacity", "容量", "人数"],
     notes: ["notes", "备注"],
+    corridor_segment: ["corridor_segment", "走廊段", "分段", "布局分段"],
+    corridor_axis: ["corridor_axis", "走廊方向", "分段方向"],
+    corridor_offset_m: ["corridor_offset_m", "沿走廊位置", "位置", "排序位置"],
+    segment_x_m: ["segment_x_m", "分段X", "走廊段X", "段起点X"],
+    segment_y_m: ["segment_y_m", "分段Y", "走廊段Y", "段起点Y"],
   };
 
   const normalized = rows.map((row, index) => {
@@ -155,7 +172,6 @@ function normalizeRows(rows) {
       item[key] = found ? String(row[found]).trim() : "";
     }
 
-    item.id = `${item.building}-${item.floor}-${item.front_door}-${item.rear_door}-${index}`;
     item.floor = String(item.floor).trim();
     item.side = normalizeSide(item.side);
     item.front_door = String(item.front_door || item.rear_door).trim();
@@ -163,8 +179,14 @@ function normalizeRows(rows) {
     item.length_m = toNumber(item.length_m, 8);
     item.width_m = toNumber(item.width_m, 6);
     item.capacity = toNumber(item.capacity, 0);
+    item.corridor_segment = item.corridor_segment || "主走廊";
+    item.corridor_axis = normalizeAxis(item.corridor_axis || "东西");
+    item.corridor_offset_m = item.corridor_offset_m ? toNumber(item.corridor_offset_m, index * 10) : null;
+    item.segment_x_m = item.segment_x_m ? toNumber(item.segment_x_m, 0) : null;
+    item.segment_y_m = item.segment_y_m ? toNumber(item.segment_y_m, 0) : null;
     item.room_name = item.room_name || `${item.front_door} 实验室`;
     item.east_to_west_order = item.east_to_west_order || "东到西递增";
+    item.id = `${item.building}-${item.floor}-${item.corridor_segment}-${item.front_door}-${item.rear_door}-${index}`;
     return item;
   });
 
@@ -173,13 +195,49 @@ function normalizeRows(rows) {
     throw new Error(`缺少必要字段或存在空值：${missing.join(", ")}`);
   }
 
-  return normalized;
+  return assignOffsets(normalized);
+}
+
+function assignOffsets(rooms) {
+  const groups = new Map();
+  for (const room of rooms) {
+    const key = `${room.building}|${room.floor}|${room.corridor_segment}|${room.corridor_axis}|${room.side}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(room);
+  }
+
+  for (const group of groups.values()) {
+    const needsOffset = group.some((room) => room.corridor_offset_m === null);
+    if (!needsOffset) continue;
+    const ordered = orderRooms(group);
+    let cursor = 0;
+    for (const room of ordered) {
+      const along = room.corridor_axis === "东西" ? room.length_m : room.width_m;
+      if (room.corridor_offset_m === null) room.corridor_offset_m = cursor;
+      cursor += along + ROOM_GAP_M;
+    }
+  }
+
+  return rooms;
 }
 
 function normalizeSide(value) {
-  if (String(value).includes("南")) return "南";
-  if (String(value).includes("北")) return "北";
-  return String(value).trim();
+  const text = String(value).trim();
+  if (text.includes("东端")) return "东端";
+  if (text.includes("西端")) return "西端";
+  if (text.includes("北端")) return "北端";
+  if (text.includes("南端")) return "南端";
+  if (text.includes("北")) return "北";
+  if (text.includes("南")) return "南";
+  if (text.includes("东")) return "东";
+  if (text.includes("西")) return "西";
+  return text || "北";
+}
+
+function normalizeAxis(value) {
+  const text = String(value).trim();
+  if (text.includes("南北") || text.toLowerCase().includes("vertical")) return "南北";
+  return "东西";
 }
 
 function toNumber(value, fallback) {
@@ -198,8 +256,7 @@ function setRooms(rooms, message) {
 }
 
 function populateBuildingOptions() {
-  const buildings = unique(state.rooms.map((room) => room.building));
-  fillSelect(els.buildingSelect, buildings);
+  fillSelect(els.buildingSelect, unique(state.rooms.map((room) => room.building)));
 }
 
 function populateFloorOptions() {
@@ -209,8 +266,7 @@ function populateFloorOptions() {
 }
 
 function populateCollegeOptions() {
-  const colleges = unique(state.rooms.map((room) => room.college));
-  fillSelect(els.collegeSelect, ["全部学院", ...colleges]);
+  fillSelect(els.collegeSelect, ["全部学院", ...unique(state.rooms.map((room) => room.college))]);
 }
 
 function fillSelect(select, values) {
@@ -223,10 +279,12 @@ function render() {
   const building = els.buildingSelect.value;
   const floor = els.floorSelect.value;
   const selectedCollege = els.collegeSelect.value;
-  const rooms = state.rooms.filter((room) => room.building === building && room.floor === floor);
+  const buildingRooms = state.rooms.filter((room) => room.building === building);
+  const rooms = buildingRooms.filter((room) => room.floor === floor);
   const colors = makeCollegeColors(state.rooms);
 
   renderLegend(colors);
+  renderFloorThumbs(buildingRooms, colors);
   renderJsonPreview(rooms);
   renderFloorplan(rooms, colors, selectedCollege);
 }
@@ -235,6 +293,30 @@ function renderLegend(colors) {
   els.legend.innerHTML = Object.entries(colors)
     .map(([college, color]) => `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${escapeHtml(college)}</span>`)
     .join("");
+}
+
+function renderFloorThumbs(buildingRooms, colors) {
+  const floors = unique(buildingRooms.map((room) => room.floor)).sort(compareDoor);
+  els.floorThumbs.innerHTML = floors
+    .map((floor) => {
+      const rooms = buildingRooms.filter((room) => room.floor === floor);
+      const selected = floor === els.floorSelect.value;
+      return `
+        <button class="floor-thumb ${selected ? "is-active" : ""}" type="button" data-floor="${escapeHtml(floor)}">
+          <span>${escapeHtml(floor)}层</span>
+          ${makeMiniSvg(rooms, colors)}
+        </button>
+      `;
+    })
+    .join("");
+
+  els.floorThumbs.querySelectorAll(".floor-thumb").forEach((button) => {
+    button.addEventListener("click", () => {
+      els.floorSelect.value = button.dataset.floor;
+      state.selectedRoomId = null;
+      render();
+    });
+  });
 }
 
 function renderJsonPreview(rooms) {
@@ -247,40 +329,26 @@ function renderFloorplan(rooms, colors, selectedCollege) {
     return;
   }
 
-  const northRooms = orderRooms(rooms.filter((room) => room.side === "北"));
-  const southRooms = orderRooms(rooms.filter((room) => room.side === "南"));
-  const maxWidth = Math.max(totalFrontage(northRooms), totalFrontage(southRooms), 36);
-  const scale = Math.min(38, Math.max(20, 980 / maxWidth));
-  const svgWidth = Math.max(1080, maxWidth * scale + 180);
-  const margin = 72;
-  const originX = margin + 28;
-  const northY = 120;
-  const corridorY = 310;
-  const southY = 390;
-  const svgHeight = 620;
-
-  const roomMarkup = [
-    ...roomsToSvg(northRooms, colors, originX, northY, scale, true, selectedCollege),
-    ...roomsToSvg(southRooms, colors, originX, southY, scale, false, selectedCollege),
-  ].join("");
+  const layout = buildLayout(rooms, DETAIL_SCALE);
+  const selectedFloor = `${escapeSvg(els.buildingSelect.value)} ${escapeSvg(els.floorSelect.value)}层`;
+  const corridorMarkup = layout.corridors
+    .map((corridor) => `<rect x="${corridor.x}" y="${corridor.y}" width="${corridor.width}" height="${corridor.height}" rx="3" fill="#e8edf3" stroke="#cbd5e1"/>`)
+    .join("");
+  const roomMarkup = layout.rooms.map((roomBox) => roomToSvg(roomBox, colors, selectedCollege, false)).join("");
 
   els.floorplan.innerHTML = `
-    <svg viewBox="0 0 ${svgWidth} ${svgHeight}" width="${svgWidth}" height="${svgHeight}" role="img" aria-label="实验室 SVG 分布图">
+    <svg viewBox="0 0 ${layout.width} ${layout.height}" width="${layout.width}" height="${layout.height}" role="img" aria-label="实验室 SVG 分布图">
       <defs>
         <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
           <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#e8edf3" stroke-width="1"/>
         </pattern>
       </defs>
-      <rect x="0" y="0" width="${svgWidth}" height="${svgHeight}" fill="url(#grid)"/>
-      <text x="${margin}" y="42" font-size="24" font-weight="700" fill="#18212f">${escapeSvg(els.buildingSelect.value)} ${escapeSvg(els.floorSelect.value)}层</text>
-      <text x="${margin}" y="72" font-size="13" fill="#667085">左侧为西，右侧为东；房间按“东到西门牌分布”字段确定东西顺序。</text>
-      <text x="${margin}" y="104" font-size="16" font-weight="700" fill="#344054">西</text>
-      <text x="${svgWidth - margin}" y="104" text-anchor="end" font-size="16" font-weight="700" fill="#344054">东</text>
-      <line x1="${originX}" y1="98" x2="${svgWidth - margin}" y2="98" stroke="#98a2b3" stroke-width="2"/>
-      <text x="${margin}" y="${northY + 72}" font-size="15" font-weight="700" fill="#344054">北侧</text>
-      <rect x="${originX}" y="${corridorY}" width="${svgWidth - margin - originX}" height="48" rx="4" fill="var(--corridor)" stroke="#cbd5e1"/>
-      <text x="${svgWidth / 2}" y="${corridorY + 31}" text-anchor="middle" font-size="15" font-weight="700" fill="#667085">走廊</text>
-      <text x="${margin}" y="${southY + 72}" font-size="15" font-weight="700" fill="#344054">南侧</text>
+      <rect x="0" y="0" width="${layout.width}" height="${layout.height}" fill="url(#grid)"/>
+      <text x="34" y="42" font-size="24" font-weight="700" fill="#18212f">${selectedFloor}</text>
+      <text x="34" y="70" font-size="13" fill="#667085">矩形按长宽等比绘制；房间到对应走廊边缘的间距统一为 ${ROOM_GAP_M}m；端头房间由“房间位置”字段标记。</text>
+      <text x="34" y="104" font-size="15" font-weight="700" fill="#344054">西</text>
+      <text x="${layout.width - 34}" y="104" text-anchor="end" font-size="15" font-weight="700" fill="#344054">东</text>
+      ${corridorMarkup}
       ${roomMarkup}
     </svg>
   `;
@@ -293,33 +361,148 @@ function renderFloorplan(rooms, colors, selectedCollege) {
     });
   });
 
-  const selected = rooms.find((room) => room.id === state.selectedRoomId);
-  showRoomDetails(selected);
+  showRoomDetails(rooms.find((room) => room.id === state.selectedRoomId));
 }
 
-function roomsToSvg(rooms, colors, startX, y, scale, northSide, selectedCollege) {
-  let x = startX;
-  return rooms.map((room) => {
-    const width = Math.max(90, room.length_m * scale);
-    const height = Math.max(68, room.width_m * 9);
-    const selected = room.id === state.selectedRoomId;
-    const muted = selectedCollege !== "全部学院" && room.college !== selectedCollege;
-    const doorText = room.front_door === room.rear_door ? `门牌 ${room.front_door}` : `前 ${room.front_door} / 后 ${room.rear_door}`;
-    const doorY = northSide ? y + height + 19 : y - 10;
-    const doorLineY = northSide ? y + height : y;
-    const markup = `
-      <g class="room ${selected ? "is-selected" : ""} ${muted ? "is-muted" : ""}" data-id="${escapeHtml(room.id)}">
-        <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="6" fill="${colors[room.college]}" stroke="#ffffff" stroke-width="1.5"/>
-        <text x="${x + 12}" y="${y + 24}" font-size="15" font-weight="700" fill="#ffffff">${escapeSvg(room.front_door)}${room.front_door !== room.rear_door ? `-${escapeSvg(room.rear_door)}` : ""}</text>
-        <text x="${x + 12}" y="${y + 47}" font-size="12" fill="#ffffff">${truncateSvg(room.room_name, 12)}</text>
-        <text x="${x + 12}" y="${y + 65}" font-size="12" fill="#ffffff">${truncateSvg(room.college, 12)}</text>
-        <line x1="${x + width / 2}" y1="${doorLineY}" x2="${x + width / 2}" y2="${northSide ? doorLineY + 12 : doorLineY - 12}" stroke="#344054" stroke-width="1.5"/>
-        <text x="${x + width / 2}" y="${doorY}" text-anchor="middle" font-size="11" fill="#344054">${escapeSvg(doorText)}</text>
-      </g>
-    `;
-    x += width + 12;
-    return markup;
+function makeMiniSvg(rooms, colors) {
+  const layout = buildLayout(rooms, THUMB_SCALE, { margin: 8, titleHeight: 0 });
+  const corridors = layout.corridors
+    .map((corridor) => `<rect x="${corridor.x}" y="${corridor.y}" width="${corridor.width}" height="${corridor.height}" rx="1.5" fill="#e8edf3"/>`)
+    .join("");
+  const blocks = layout.rooms.map((roomBox) => roomToSvg(roomBox, colors, "全部学院", true)).join("");
+  return `<svg viewBox="0 0 ${layout.width} ${layout.height}" aria-hidden="true">${corridors}${blocks}</svg>`;
+}
+
+function buildLayout(rooms, scale, options = {}) {
+  const margin = options.margin ?? 34;
+  const titleHeight = options.titleHeight ?? 96;
+  const segmentRooms = groupBy(rooms, (room) => room.corridor_segment);
+  const segmentLayouts = [];
+  const hasExplicitSegmentPosition = rooms.some((room) => room.segment_x_m !== null || room.segment_y_m !== null);
+  let segmentCursorY = titleHeight + margin;
+
+  for (const [segmentName, segment] of segmentRooms.entries()) {
+    const axis = segment[0]?.corridor_axis || "东西";
+    const first = segment[0];
+    const segmentX = hasExplicitSegmentPosition ? margin + (first.segment_x_m ?? 0) * scale : margin;
+    const segmentY = hasExplicitSegmentPosition ? titleHeight + margin + (first.segment_y_m ?? 0) * scale : segmentCursorY;
+    const boxes = makeSegmentBoxes(segment, axis, segmentX, segmentY, scale);
+    segmentLayouts.push({ segmentName, axis, ...boxes });
+    if (!hasExplicitSegmentPosition) segmentCursorY += boxes.height + SEGMENT_GAP_M * scale;
+  }
+
+  const minX = Math.min(...segmentLayouts.flatMap((layout) => [layout.corridor.x, ...layout.rooms.map((room) => room.x)]));
+  const minY = Math.min(...segmentLayouts.flatMap((layout) => [layout.corridor.y, ...layout.rooms.map((room) => room.y)]));
+  if (minX < margin || minY < titleHeight + 8) {
+    const shift = margin - minX;
+    const shiftY = titleHeight + 8 - minY;
+    for (const layout of segmentLayouts) {
+      if (minX < margin) {
+        layout.corridor.x += shift;
+        layout.rooms.forEach((room) => (room.x += shift));
+      }
+      if (minY < titleHeight + 8) {
+        layout.corridor.y += shiftY;
+        layout.rooms.forEach((room) => (room.y += shiftY));
+      }
+    }
+  }
+
+  const allRooms = segmentLayouts.flatMap((layout) => layout.rooms);
+  const allCorridors = segmentLayouts.map((layout) => layout.corridor);
+  const width = Math.max(620, Math.ceil(Math.max(...allRooms.map((room) => room.x + room.width + margin), ...allCorridors.map((corridor) => corridor.x + corridor.width + margin))));
+  const height = Math.max(260, Math.ceil(Math.max(...allRooms.map((room) => room.y + room.height + margin), ...allCorridors.map((corridor) => corridor.y + corridor.height + margin))));
+
+  return { width, height, rooms: allRooms, corridors: allCorridors };
+}
+
+function makeSegmentBoxes(segment, axis, startX, startY, scale) {
+  const alongKey = axis === "东西" ? "length_m" : "width_m";
+  const acrossKey = axis === "东西" ? "width_m" : "length_m";
+  const corridorLengthM = getCorridorLength(segment, alongKey);
+  const corridorWidth = axis === "东西" ? corridorLengthM * scale : CORRIDOR_WIDTH_M * scale;
+  const corridorHeight = axis === "东西" ? CORRIDOR_WIDTH_M * scale : corridorLengthM * scale;
+  const corridor = { x: startX + 90, y: startY + 90, width: corridorWidth, height: corridorHeight };
+
+  const rooms = segment.map((room) => {
+    const roomWidth = (axis === "东西" ? room.length_m : room.width_m) * scale;
+    const roomHeight = (axis === "东西" ? room.width_m : room.length_m) * scale;
+    const along = (room.corridor_offset_m ?? 0) * scale;
+    let x = corridor.x + along;
+    let y = corridor.y;
+
+    if (axis === "东西") {
+      if (room.side === "北") y = corridor.y - ROOM_GAP_M * scale - roomHeight;
+      else if (room.side === "南") y = corridor.y + corridor.height + ROOM_GAP_M * scale;
+      else if (room.side === "西端") {
+        x = corridor.x - ROOM_GAP_M * scale - roomWidth;
+        y = corridor.y + (corridor.height - roomHeight) / 2;
+      } else if (room.side === "东端") {
+        x = corridor.x + corridor.width + ROOM_GAP_M * scale;
+        y = corridor.y + (corridor.height - roomHeight) / 2;
+      }
+      else y = corridor.y + corridor.height + ROOM_GAP_M * scale;
+    } else {
+      if (room.side === "西") x = corridor.x - ROOM_GAP_M * scale - roomWidth;
+      else if (room.side === "东") x = corridor.x + corridor.width + ROOM_GAP_M * scale;
+      else if (room.side === "北端") {
+        x = corridor.x + (corridor.width - roomWidth) / 2;
+        y = corridor.y - ROOM_GAP_M * scale - roomHeight;
+      } else if (room.side === "南端") {
+        x = corridor.x + (corridor.width - roomWidth) / 2;
+        y = corridor.y + corridor.height + ROOM_GAP_M * scale;
+      }
+      else x = corridor.x + corridor.width + ROOM_GAP_M * scale;
+      if (room.side === "西" || room.side === "东") y = corridor.y + along;
+    }
+
+    return { room, x, y, width: roomWidth, height: roomHeight, axis };
   });
+
+  const minX = Math.min(corridor.x, ...rooms.map((room) => room.x));
+  const maxX = Math.max(corridor.x + corridor.width, ...rooms.map((room) => room.x + room.width));
+  const minY = Math.min(corridor.y, ...rooms.map((room) => room.y));
+  const maxY = Math.max(corridor.y + corridor.height, ...rooms.map((room) => room.y + room.height));
+  return {
+    corridor,
+    rooms,
+    minX,
+    maxX,
+    width: maxX - minX,
+    height: maxY - minY + 16,
+  };
+}
+
+function roomToSvg(roomBox, colors, selectedCollege, compact) {
+  const { room, x, y, width, height } = roomBox;
+  const selected = room.id === state.selectedRoomId;
+  const muted = selectedCollege !== "全部学院" && room.college !== selectedCollege;
+  const doorText = room.front_door === room.rear_door ? `门牌 ${room.front_door}` : `前 ${room.front_door} / 后 ${room.rear_door}`;
+  const label = room.front_door === room.rear_door ? room.front_door : `${room.front_door}-${room.rear_door}`;
+
+  if (compact) {
+    return `<rect x="${x}" y="${y}" width="${width}" height="${height}" rx="1.5" fill="${colors[room.college]}" opacity="0.92"/>`;
+  }
+
+  return `
+    <g class="room ${selected ? "is-selected" : ""} ${muted ? "is-muted" : ""}" data-id="${escapeHtml(room.id)}">
+      <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="5" fill="${colors[room.college]}" stroke="#ffffff" stroke-width="1.5"/>
+      <text x="${x + 8}" y="${y + 20}" font-size="14" font-weight="700" fill="#ffffff">${escapeSvg(label)}</text>
+      ${width >= 110 && height >= 54 ? `<text x="${x + 8}" y="${y + 40}" font-size="12" fill="#ffffff">${truncateSvg(room.room_name, Math.floor(width / 11))}</text>` : ""}
+      ${width >= 130 && height >= 74 ? `<text x="${x + 8}" y="${y + 58}" font-size="12" fill="#ffffff">${truncateSvg(room.college, Math.floor(width / 11))}</text>` : ""}
+      <title>${escapeSvg(`${room.room_name}｜${room.college}｜${doorText}｜${room.length_m}m x ${room.width_m}m`)}</title>
+    </g>
+  `;
+}
+
+function getCorridorLength(segment, alongKey) {
+  return Math.max(
+    18,
+    ...segment.map((room) => {
+      const offset = room.corridor_offset_m ?? 0;
+      return offset + room[alongKey] + ROOM_GAP_M;
+    })
+  );
 }
 
 function orderRooms(rooms) {
@@ -332,10 +515,6 @@ function orderRooms(rooms) {
   });
 }
 
-function totalFrontage(rooms) {
-  return rooms.reduce((sum, room) => sum + Math.max(room.length_m, 4), 0) + Math.max(0, rooms.length - 1) * 0.5;
-}
-
 function showRoomDetails(room) {
   if (!room) {
     els.roomDetails.textContent = "点击图中的房间查看详情。";
@@ -345,10 +524,12 @@ function showRoomDetails(room) {
   els.roomDetails.innerHTML = `
     <strong>${escapeHtml(room.room_name)}</strong><br>
     教学楼：${escapeHtml(room.building)} ${escapeHtml(room.floor)}层<br>
-    南北侧：${escapeHtml(room.side)}侧<br>
+    走廊段：${escapeHtml(room.corridor_segment)}（${escapeHtml(room.corridor_axis)}）<br>
+    房间位置：${escapeHtml(room.side)}<br>
+    沿走廊位置：${room.corridor_offset_m}m<br>
     门牌：${escapeHtml(room.front_door === room.rear_door ? room.front_door : `${room.front_door} / ${room.rear_door}`)}<br>
     东西规则：${escapeHtml(room.east_to_west_order)}<br>
-    尺寸：${room.length_m}m × ${room.width_m}m<br>
+    尺寸：${room.length_m}m x ${room.width_m}m<br>
     学院：${escapeHtml(room.college)}<br>
     类型：${escapeHtml(room.lab_type || "未填写")}<br>
     容量：${room.capacity || "未填写"}<br>
@@ -382,6 +563,16 @@ function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function groupBy(values, getKey) {
+  const groups = new Map();
+  for (const value of values) {
+    const key = getKey(value);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(value);
+  }
+  return groups;
+}
+
 function updateStatus(message) {
   els.statusText.textContent = message;
 }
@@ -392,7 +583,7 @@ function showError(message) {
 
 function truncateSvg(text, maxLength) {
   const value = String(text);
-  return escapeSvg(value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value);
+  return escapeSvg(value.length > maxLength ? `${value.slice(0, Math.max(1, maxLength - 1))}…` : value);
 }
 
 function escapeHtml(value) {
