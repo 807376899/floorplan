@@ -226,6 +226,18 @@ button:hover,
   justify-content: flex-end;
 }
 
+.editor-tabs {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.editor-tabs button.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(31, 122, 140, 0.12);
+}
+
 .data-editor {
   max-height: 440px;
   overflow: auto;
