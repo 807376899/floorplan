@@ -1,11 +1,12 @@
 const ROOM_COLUMNS = [
   ["building", "教学楼"], ["floor", "楼层"], ["segment_id", "走廊段ID"], ["offset_m", "沿段位置"],
   ["side", "段侧"], ["room_name", "实验室名称"], ["front_door", "前门牌"], ["rear_door", "后门牌"],
-  ["length_m", "长"], ["width_m", "宽"], ["college", "所属学院"], ["lab_type", "实验室类型"], ["capacity", "容量"], ["notes", "备注"],
+  ["length_m", "长"], ["width_m", "宽"], ["college", "所属学院"], ["lab_type", "实验室类型"], ["capacity", "容量"],
+  ["renovation_year", "改建年份"], ["director", "实验室主任"], ["major", "所属专业"], ["seat_count", "学生座位数"], ["computer_count", "电脑数"], ["notes", "备注"],
 ];
 const FLOOR_COLUMNS = [
   ["building", "教学楼"], ["floor", "楼层"], ["segment_id", "走廊段ID"], ["start_x_m", "起点X"], ["start_y_m", "起点Y"],
-  ["end_x_m", "终点X"], ["end_y_m", "终点Y"], ["width_m", "走廊宽"], ["notes", "备注"],
+  ["end_x_m", "终点X"], ["end_y_m", "终点Y"], ["width_m", "宽度"], ["element_type", "类型"], ["notes", "备注"],
 ];
 const ALL_COLLEGES = "全部学院";
 const ROOM_GAP_M = 0.7;
@@ -89,6 +90,11 @@ function normalizeRooms(rows) {
     college: read(row, ["college", "所属学院"]),
     lab_type: read(row, ["lab_type", "实验室类型"]),
     capacity: number(read(row, ["capacity", "容量"]), 0),
+    renovation_year: read(row, ["renovation_year", "改建年份"]),
+    director: read(row, ["director", "实验室主任"]),
+    major: read(row, ["major", "所属专业"]),
+    seat_count: optionalNumber(read(row, ["seat_count", "学生座位数"])),
+    computer_count: optionalNumber(read(row, ["computer_count", "电脑数"])),
     notes: read(row, ["notes", "备注"]),
     id: `room-${index}-${read(row, ["front_door", "前门牌"])}`,
   })).filter((row) => row.building && row.floor && row.segment_id && row.room_name && row.college);
@@ -103,7 +109,8 @@ function normalizeFloors(rows) {
     start_y_m: number(read(row, ["start_y_m", "起点Y"]), 0),
     end_x_m: number(read(row, ["end_x_m", "终点X"]), 0),
     end_y_m: number(read(row, ["end_y_m", "终点Y"]), 0),
-    width_m: number(read(row, ["width_m", "走廊宽"]), 2.4),
+    width_m: number(read(row, ["width_m", "宽度", "走廊宽"]), 2.4),
+    element_type: read(row, ["element_type", "类型"]) || "走廊",
     notes: read(row, ["notes", "备注"]),
   })).filter((row) => row.building && row.floor && row.segment_id);
 }
@@ -120,7 +127,6 @@ function render() {
   const colors = colorMap();
   renderLegend(colors);
   renderThumbs(building, colors);
-  renderJson({ floorSegments, rooms });
   renderFloorplan(floorSegments, rooms, colors);
 }
 
@@ -173,7 +179,7 @@ function placeRoom(room, segment, scale) {
 function renderFloorplan(segments, rooms, colors) {
   if (!segments.length) { els.floorplan.innerHTML = `<div class="empty">当前楼层没有布局数据。</div>`; return; }
   const layout = buildLayout(segments, rooms, DETAIL_SCALE);
-  const corridorMarkup = layout.corridors.map((c) => `<line x1="${c.x1}" y1="${c.y1}" x2="${c.x2}" y2="${c.y2}" stroke="#e8edf3" stroke-width="${c.width}" stroke-linecap="square"/>`).join("");
+  const corridorMarkup = layout.corridors.map((c) => structureSvg(c, false)).join("");
   const roomMarkup = layout.rooms.map((r) => roomSvg(r, colors, false)).join("");
   els.floorplan.innerHTML = `<svg viewBox="0 0 ${layout.width} ${layout.height}" data-layout-width="${layout.width}" data-layout-height="${layout.height}">
     <rect width="${layout.width}" height="${layout.height}" fill="#fbfcfe"/>
@@ -195,7 +201,7 @@ function renderThumbs(building, colors) {
     const rooms = state.rooms.filter((row) => row.building === building && row.floor === floor);
     const layout = buildLayout(segments, rooms, THUMB_SCALE, 0, 4);
     return `<button class="floor-thumb ${floor === els.floorSelect.value ? "is-active" : ""}" data-floor="${floor}"><span>${floor}层</span>
-      <svg viewBox="0 0 ${layout.width} ${layout.height}">${layout.corridors.map((c) => `<line x1="${c.x1}" y1="${c.y1}" x2="${c.x2}" y2="${c.y2}" stroke="#e8edf3" stroke-width="${c.width}"/>`).join("")}${layout.rooms.map((r) => roomSvg(r, colors, true)).join("")}</svg></button>`;
+      <svg viewBox="0 0 ${layout.width} ${layout.height}">${layout.corridors.map((c) => structureSvg(c, true)).join("")}${layout.rooms.map((r) => roomSvg(r, colors, true)).join("")}</svg></button>`;
   }).join("");
   els.floorThumbs.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => { els.floorSelect.value = button.dataset.floor; render(); }));
 }
@@ -212,6 +218,24 @@ function roomSvg(box, colors, compact) {
     <text x="${box.x + 8}" y="${box.y + 53}" fill="#fff" font-size="12">${escapeHtml(box.room.college)}</text>
     <text x="${box.x + 8}" y="${box.y + 70}" fill="#fff" font-size="12">${area} m²</text>
   </g>`;
+}
+
+function structureSvg(item, compact) {
+  const base = `<line x1="${item.x1}" y1="${item.y1}" x2="${item.x2}" y2="${item.y2}" stroke="#e8edf3" stroke-width="${item.width}" stroke-linecap="square"/>`;
+  if (item.element_type !== "楼梯") return base;
+  const horizontal = item.y1 === item.y2;
+  const count = compact ? 4 : 7;
+  const steps = [];
+  for (let i = 1; i < count; i += 1) {
+    const t = i / count;
+    const x = item.x1 + (item.x2 - item.x1) * t;
+    const y = item.y1 + (item.y2 - item.y1) * t;
+    steps.push(horizontal
+      ? `<line x1="${x}" y1="${y - item.width / 2}" x2="${x}" y2="${y + item.width / 2}" stroke="#94a3b8" stroke-width="${compact ? 0.8 : 1.5}"/>`
+      : `<line x1="${x - item.width / 2}" y1="${y}" x2="${x + item.width / 2}" y2="${y}" stroke="#94a3b8" stroke-width="${compact ? 0.8 : 1.5}"/>`);
+  }
+  const label = compact ? "" : `<text x="${(item.x1 + item.x2) / 2}" y="${(item.y1 + item.y2) / 2 + 4}" text-anchor="middle" font-size="12" fill="#475467">楼梯</text>`;
+  return `${base}${steps.join("")}${label}`;
 }
 
 function setEditorMode(mode) { state.editorMode = mode; els.showRoomsBtn.classList.toggle("is-active", mode === "rooms"); els.showFloorsBtn.classList.toggle("is-active", mode === "floors"); renderEditor(); }
@@ -245,12 +269,30 @@ function applyEditorRows() {
 }
 
 function renderLegend(colors) { els.legend.innerHTML = Object.entries(colors).map(([k, v]) => `<span class="legend-item"><span class="legend-swatch" style="background:${v}"></span>${k}</span>`).join(""); }
-function renderJson(data) { els.jsonPreview.textContent = JSON.stringify(data, null, 2); }
-function showDetails(room) { els.roomDetails.innerHTML = room ? `<strong>${room.room_name}</strong><br>走廊段：${room.segment_id}<br>段侧：${room.side}<br>门牌：${room.front_door === room.rear_door ? room.front_door : `${room.front_door}/${room.rear_door}`}<br>尺寸：${room.length_m}m x ${room.width_m}m<br>面积：${(room.length_m * room.width_m).toFixed(1)} m²<br>学院：${room.college}` : "点击图中的房间查看详情。"; }
+function showDetails(room) {
+  if (!room) {
+    els.roomDetails.innerHTML = "点击图中的房间查看详情。";
+    return;
+  }
+  const rows = [
+    ["门牌", room.front_door === room.rear_door ? room.front_door : `${room.front_door}/${room.rear_door}`],
+    ["尺寸", `${room.length_m}m x ${room.width_m}m`],
+    ["面积", `${(room.length_m * room.width_m).toFixed(1)} m²`],
+    ["学院", room.college],
+    ["实验室类型", room.lab_type],
+    ["容量", room.capacity || ""],
+    ["改建年份", room.renovation_year],
+    ["实验室主任", room.director],
+    ["所属专业", room.major],
+    ["学生座位数", room.seat_count],
+    ["电脑数", room.computer_count],
+  ].filter(([, value]) => value !== "" && value !== null && value !== undefined);
+  els.roomDetails.innerHTML = `<strong>${room.room_name}</strong><br>${rows.map(([label, value]) => `${label}：${value}`).join("<br>")}`;
+}
 function colorMap() { return Object.fromEntries(unique(state.rooms.map((r) => r.college)).map((v, i) => [v, COLORS[i % COLORS.length]])); }
 
-function downloadRoomTemplate() { exportCsv("room-template.csv", ROOM_COLUMNS, [["示例楼","1","main","0","北","示例实验室","101","101","8","6","示例学院","实验室","40",""]]); }
-function downloadFloorTemplate() { exportCsv("floor-template.csv", FLOOR_COLUMNS, [["示例楼","1","main","0","0","30","0","2.4","主走廊"],["示例楼","1","branch","15","0","15","18","2.4","支走廊"]]); }
+function downloadRoomTemplate() { exportCsv("room-template.csv", ROOM_COLUMNS, [["示例楼","1","main","0","北","示例实验室","101","101","8","6","示例学院","实验室","40","2022","张老师","计算机科学","40","40",""]]); }
+function downloadFloorTemplate() { exportCsv("floor-template.csv", FLOOR_COLUMNS, [["示例楼","1","main","0","0","30","0","2.4","走廊","主走廊"],["示例楼","1","stairs-east","30","4","30","10","4","楼梯","东侧楼梯"]]); }
 function downloadCurrentCsv() { exportCsv(state.editorMode === "rooms" ? "rooms.csv" : "floors.csv", editorColumns(), editorRows().map((row) => editorColumns().map(([key]) => row[key] ?? ""))); }
 function exportCsv(name, columns, rows) { download(name, `\uFEFF${[columns.map(([, label]) => label), ...rows].map((row) => row.map(csv).join(",")).join("\n")}`, "text/csv;charset=utf-8"); }
 function download(name, text, type) { const a = document.createElement("a"), url = URL.createObjectURL(new Blob([text], { type })); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url); }
@@ -261,6 +303,7 @@ function parseCsv(text) { const [header, ...rows] = text.trim().split(/\r?\n/).m
 function read(row, keys) { return keys.find((key) => row[key] !== undefined) ? String(row[keys.find((key) => row[key] !== undefined)]).trim() : ""; }
 function normalizeSide(v) { return ["北","南","东","西"].includes(v) ? v : ["左"].includes(v) ? "北" : ["右"].includes(v) ? "南" : "南"; }
 function number(v, fallback) { const n = parseFloat(v); return Number.isFinite(n) ? n : fallback; }
+function optionalNumber(v) { if (v === "" || v === null || v === undefined) return ""; const n = parseFloat(v); return Number.isFinite(n) ? n : ""; }
 function unique(v) { return [...new Set(v.filter(Boolean))]; }
 function compare(a, b) { return String(a).localeCompare(String(b), "zh-CN", { numeric: true }); }
 function csv(v) { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s; }

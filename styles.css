@@ -298,18 +298,6 @@ button:hover,
   color: var(--ink);
 }
 
-#jsonPreview {
-  max-height: 386px;
-  overflow: auto;
-  margin: 0;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #111827;
-  color: #d0d5dd;
-  font-size: 12px;
-  line-height: 1.5;
-  padding: 11px;
-}
 
 .room {
   cursor: pointer;
