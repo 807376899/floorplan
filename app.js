@@ -1,55 +1,126 @@
-const ROOM_COLUMNS = [
-  ["building", "教学楼"], ["floor", "楼层"], ["segment_id", "走廊段ID"], ["offset_m", "沿段位置"],
-  ["side", "段侧"], ["room_name", "实验室名称"], ["front_door", "前门牌"], ["rear_door", "后门牌"],
-  ["length_m", "长"], ["width_m", "宽"], ["college", "所属学院"], ["lab_type", "实验室类型"], ["capacity", "容量"],
-  ["renovation_year", "改建年份"], ["director", "实验室主任"], ["major", "所属专业"], ["seat_count", "学生座位数"], ["computer_count", "电脑数"], ["notes", "备注"],
-];
-const FLOOR_COLUMNS = [
-  ["building", "教学楼"], ["floor", "楼层"], ["segment_id", "走廊段ID"], ["start_x_m", "起点X"], ["start_y_m", "起点Y"],
-  ["end_x_m", "终点X"], ["end_y_m", "终点Y"], ["width_m", "宽度"], ["element_type", "类型"], ["notes", "备注"],
-];
-const ALL_COLLEGES = "全部学院";
-const ROOM_GAP_M = 0.7;
-const DETAIL_SCALE = 28;
-const THUMB_SCALE = 6;
-const COLORS = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#0891b2", "#be123c", "#4d7c0f"];
-const state = { rooms: [], floors: [], selectedRoomId: null, editorMode: "rooms", zoom: 1 };
+const {
+  STORAGE_KEY,
+  ALL_COLLEGES,
+  DATASETS,
+  csv,
+  pick,
+  compare,
+  compareBuildings,
+  normalizeDataset,
+  normalizeBuilding,
+  normalizeSegment,
+  normalizeSpace,
+  normalizeLab,
+  normalizePlan,
+  normalizeAssignment,
+  relationMaps,
+  templateInstructions,
+  templateRows,
+  sampleDataset,
+  defaultComparePlans,
+  emptyDataset,
+  unique,
+  escapeHtml,
+  isoNow,
+} = window.FloorplanDomain;
+const { colorMap, renderLegend, renderThumbList, renderFloorplan } = window.FloorplanRender;
+
+const state = {
+  data: emptyDataset(),
+  selectedSpaceId: null,
+  editorKey: "spaces",
+  activePlanId: null,
+  displayMode: "compare",
+  zoom: 1,
+};
+
 const els = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
 
-els.roomFileInput.addEventListener("change", (event) => handleImport(event, "rooms"));
-els.floorFileInput.addEventListener("change", (event) => handleImport(event, "floors"));
-els.loadSampleBtn.addEventListener("click", loadSampleData);
-els.downloadRoomTemplateBtn.addEventListener("click", downloadRoomTemplate);
-els.downloadFloorTemplateBtn.addEventListener("click", downloadFloorTemplate);
-els.fitCanvasBtn.addEventListener("click", resetCanvasZoom);
-els.zoomOutBtn.addEventListener("click", () => changeCanvasZoom(-0.15));
-els.zoomInBtn.addEventListener("click", () => changeCanvasZoom(0.15));
-els.showRoomsBtn.addEventListener("click", () => setEditorMode("rooms"));
-els.showFloorsBtn.addEventListener("click", () => setEditorMode("floors"));
-els.addRowBtn.addEventListener("click", addEditorRow);
-els.applyTableBtn.addEventListener("click", applyEditorRows);
-els.downloadCsvBtn.addEventListener("click", downloadCurrentCsv);
-els.buildingSelect.addEventListener("change", () => { populateFloorOptions(); state.zoom = 1; render(); });
-els.floorSelect.addEventListener("change", () => { state.zoom = 1; render(); });
-els.collegeSelect.addEventListener("change", render);
-window.addEventListener("resize", () => els.floorplan.classList.contains("is-fit") && applyCanvasMode());
-loadSampleData();
+bindEvents();
+renderEditorTabs();
+bootstrap();
 
-async function loadSampleData() {
-  const [roomCsv, floorCsv] = await Promise.all([fetch("./sample-rooms.csv").then((r) => r.text()), fetch("./sample-floors.csv").then((r) => r.text())]);
-  state.rooms = normalizeRooms(parseCsv(roomCsv));
-  state.floors = normalizeFloors(parseCsv(floorCsv));
-  hydrate("已载入测试数据");
+function bindEvents() {
+  els.packageFileInput.addEventListener("change", handleImportPackage);
+  els.loadSampleBtn.addEventListener("click", loadSampleData);
+  els.downloadTemplateBtn.addEventListener("click", downloadTemplateWorkbook);
+  els.exportWorkbookBtn.addEventListener("click", exportWorkbook);
+  els.fitCanvasBtn.addEventListener("click", resetCanvasZoom);
+  els.zoomOutBtn.addEventListener("click", () => changeCanvasZoom(-0.15));
+  els.zoomInBtn.addEventListener("click", () => changeCanvasZoom(0.15));
+  els.addRowBtn.addEventListener("click", addEditorRow);
+  els.applyTableBtn.addEventListener("click", applyEditorRows);
+  els.downloadSheetBtn.addEventListener("click", downloadCurrentSheet);
+  els.displayModeSelect.addEventListener("change", () => {
+    state.displayMode = els.displayModeSelect.value;
+    ensureActivePlan();
+    renderComparePlanNames();
+    renderEditor();
+    renderApp();
+  });
+  els.buildingSelect.addEventListener("change", () => {
+    populateFloorOptions();
+    syncSelectedSpace();
+    state.zoom = 1;
+    renderEditor();
+    renderApp();
+  });
+  els.floorSelect.addEventListener("change", () => {
+    syncSelectedSpace();
+    state.zoom = 1;
+    renderEditor();
+    renderApp();
+  });
+  els.collegeSelect.addEventListener("change", () => {
+    renderEditor();
+    renderApp();
+  });
+  els.beforePlanSelect.addEventListener("change", onPlanSelectorChange);
+  els.afterPlanSelect.addEventListener("change", onPlanSelectorChange);
+  window.addEventListener("resize", () => els.floorplan.classList.contains("is-fit") && applyCanvasMode());
 }
 
-async function handleImport(event, kind) {
+function bootstrap() {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored) {
+    try {
+      state.data = normalizeDataset(JSON.parse(stored));
+      hydrate("已恢复上次保存的数据包");
+      return;
+    } catch (error) {
+      console.warn("restore failed", error);
+    }
+  }
+  loadSampleData();
+}
+
+function onPlanSelectorChange() {
+  ensureActivePlan();
+  renderComparePlanNames();
+  renderEditor();
+  renderApp();
+}
+
+function loadSampleData() {
+  state.data = normalizeDataset(sampleDataset());
+  hydrate("已加载示例数据");
+}
+
+async function handleImportPackage(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    const rows = await readTabularFile(file);
-    if (kind === "rooms") state.rooms = normalizeRooms(rows);
-    else state.floors = normalizeFloors(rows);
-    hydrate(`已导入${kind === "rooms" ? "房间表" : "楼层表"} ${file.name}`);
+    let raw;
+    const name = file.name.toLowerCase();
+    if (name.endsWith(".json")) {
+      raw = JSON.parse(await file.text());
+    } else if ((name.endsWith(".xlsx") || name.endsWith(".xls")) && workbookAvailable()) {
+      raw = readWorkbookDataset(await file.arrayBuffer());
+    } else {
+      throw new Error("请导入单个 Excel 数据包，或在无 Excel 依赖时导入 JSON 数据包。");
+    }
+    state.data = normalizeDataset(raw);
+    hydrate(`已导入数据包 ${file.name}`);
   } catch (error) {
     updateStatus(`导入失败：${error.message}`);
   } finally {
@@ -57,276 +128,410 @@ async function handleImport(event, kind) {
   }
 }
 
-async function readTabularFile(file) {
-  const name = file.name.toLowerCase();
-  if (name.endsWith(".csv")) return parseCsv(await file.text());
-  if ((name.endsWith(".xlsx") || name.endsWith(".xls")) && window.XLSX) {
-    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
-    return XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { defval: "" });
+function workbookAvailable() {
+  return Boolean(window.XLSX?.utils?.book_new);
+}
+
+function readWorkbookDataset(arrayBuffer) {
+  const workbook = XLSX.read(arrayBuffer, { type: "array" });
+  const data = emptyDataset();
+  for (const definition of DATASETS) {
+    const sheet = workbook.Sheets[definition.sheet] || workbook.Sheets[definition.label];
+    data[definition.key] = sheet ? XLSX.utils.sheet_to_json(sheet, { defval: "" }) : [];
   }
-  throw new Error("请导入 CSV、XLSX 或 XLS 文件。");
+  const filesSheet = workbook.Sheets.file_assets;
+  const importsSheet = workbook.Sheets.imports;
+  data.file_assets = filesSheet ? XLSX.utils.sheet_to_json(filesSheet, { defval: "" }) : [];
+  data.imports = importsSheet ? XLSX.utils.sheet_to_json(importsSheet, { defval: "" }) : [];
+  return data;
 }
 
 function hydrate(message) {
+  stampMetadata(message);
+  persistDataset();
   populateBuildingOptions();
   populateFloorOptions();
   populateCollegeOptions();
+  populatePlanOptions();
+  ensureActivePlan();
+  renderComparePlanNames();
+  renderEditorTabs();
   renderEditor();
-  render();
-  updateStatus(`${message}：${state.rooms.length} 间房，${state.floors.length} 条走廊段。`);
+  renderApp();
+  const assignedCount = state.data.plan_assignments.filter((row) => row.space_id).length;
+  updateStatus(`${message}：${state.data.buildings.length} 栋楼，${state.data.spaces.length} 个空间，${state.data.labs.length} 个实验室，${assignedCount} 条已落位分配。`);
 }
 
-function normalizeRooms(rows) {
-  return rows.map((row, index) => ({
-    building: read(row, ["building", "教学楼"]),
-    floor: read(row, ["floor", "楼层"]),
-    segment_id: read(row, ["segment_id", "走廊段ID"]),
-    offset_m: number(read(row, ["offset_m", "沿段位置"]), 0),
-    side: normalizeSide(read(row, ["side", "段侧", "房间位置"])),
-    room_name: read(row, ["room_name", "实验室名称"]),
-    front_door: read(row, ["front_door", "前门牌"]),
-    rear_door: read(row, ["rear_door", "后门牌"]) || read(row, ["front_door", "前门牌"]),
-    length_m: number(read(row, ["length_m", "长"]), 8),
-    width_m: number(read(row, ["width_m", "宽"]), 6),
-    college: read(row, ["college", "所属学院"]),
-    lab_type: read(row, ["lab_type", "实验室类型"]),
-    capacity: number(read(row, ["capacity", "容量"]), 0),
-    renovation_year: read(row, ["renovation_year", "改建年份"]),
-    director: read(row, ["director", "实验室主任"]),
-    major: read(row, ["major", "所属专业"]),
-    seat_count: optionalNumber(read(row, ["seat_count", "学生座位数"])),
-    computer_count: optionalNumber(read(row, ["computer_count", "电脑数"])),
-    notes: read(row, ["notes", "备注"]),
-    id: `room-${index}-${read(row, ["front_door", "前门牌"])}`,
-  })).filter((row) => row.building && row.floor && row.segment_id && row.room_name && row.college);
+function stampMetadata(message) {
+  const now = isoNow();
+  const fileId = `file-${Date.now()}`;
+  const importId = `import-${Date.now()}`;
+  state.data.file_assets = [
+    ...state.data.file_assets,
+    {
+      id: fileId,
+      file_name: message,
+      file_ext: "local",
+      mime_type: "application/json",
+      storage_path: "browser-local-storage",
+      file_size: JSON.stringify(state.data).length,
+      sha256: "",
+      uploaded_by: "local-user",
+      uploaded_at: now,
+      notes: "由前端本地持久化记录",
+    },
+  ].slice(-10);
+  state.data.imports = [
+    ...state.data.imports,
+    {
+      id: importId,
+      file_asset_id: fileId,
+      import_type: "package",
+      target_plan_id: "",
+      import_status: "success",
+      row_count: state.data.spaces.length + state.data.floor_segments.length + state.data.labs.length,
+      success_count: state.data.spaces.length + state.data.floor_segments.length + state.data.labs.length,
+      error_count: 0,
+      error_summary: "",
+      started_at: now,
+      finished_at: now,
+    },
+  ].slice(-10);
 }
 
-function normalizeFloors(rows) {
-  return rows.map((row) => ({
-    building: read(row, ["building", "教学楼"]),
-    floor: read(row, ["floor", "楼层"]),
-    segment_id: read(row, ["segment_id", "走廊段ID"]),
-    start_x_m: number(read(row, ["start_x_m", "起点X"]), 0),
-    start_y_m: number(read(row, ["start_y_m", "起点Y"]), 0),
-    end_x_m: number(read(row, ["end_x_m", "终点X"]), 0),
-    end_y_m: number(read(row, ["end_y_m", "终点Y"]), 0),
-    width_m: number(read(row, ["width_m", "宽度", "走廊宽"]), 2.4),
-    element_type: read(row, ["element_type", "类型"]) || "走廊",
-    notes: read(row, ["notes", "备注"]),
-  })).filter((row) => row.building && row.floor && row.segment_id);
+function persistDataset() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data));
 }
 
-function populateBuildingOptions() { fillSelect(els.buildingSelect, unique(state.floors.map((row) => row.building))); }
-function populateFloorOptions() { fillSelect(els.floorSelect, unique(state.floors.filter((row) => row.building === els.buildingSelect.value).map((row) => row.floor)).sort(compare)); }
-function populateCollegeOptions() { fillSelect(els.collegeSelect, [ALL_COLLEGES, ...unique(state.rooms.map((row) => row.college))]); }
-function fillSelect(select, values) { const previous = select.value; select.innerHTML = values.map((v) => `<option>${escapeHtml(v)}</option>`).join(""); if (values.includes(previous)) select.value = previous; }
-
-function render() {
-  const building = els.buildingSelect.value, floor = els.floorSelect.value;
-  const floorSegments = state.floors.filter((row) => row.building === building && row.floor === floor);
-  const rooms = state.rooms.filter((row) => row.building === building && row.floor === floor);
-  const colors = colorMap();
-  renderLegend(colors);
-  renderThumbs(building, colors);
-  renderFloorplan(floorSegments, rooms, colors);
+function populateBuildingOptions() {
+  const items = state.data.buildings.slice().sort(compareBuildings).map((row) => ({ value: row.building_code, label: row.building_name || row.building_code }));
+  fillSelect(els.buildingSelect, items);
 }
 
-function buildLayout(segments, rooms, scale, titleHeight = 96, margin = 34) {
-  const segmentMap = new Map(segments.map((segment) => [segment.segment_id, makeSegment(segment, scale, margin, titleHeight)]));
-  const corridors = [...segmentMap.values()];
-  const roomBoxes = rooms.map((room) => placeRoom(room, segmentMap.get(room.segment_id), scale)).filter(Boolean);
-  const xs = [...corridors.flatMap((c) => [c.x1, c.x2]), ...roomBoxes.flatMap((r) => [r.x, r.x + r.width])];
-  const ys = [...corridors.flatMap((c) => [c.y1, c.y2]), ...roomBoxes.flatMap((r) => [r.y, r.y + r.height])];
-  const minX = Math.min(...xs), minY = Math.min(...ys), maxX = Math.max(...xs), maxY = Math.max(...ys);
-  const shiftX = margin - minX, shiftY = titleHeight + 8 - minY;
-  corridors.forEach((c) => { c.x1 += shiftX; c.x2 += shiftX; c.y1 += shiftY; c.y2 += shiftY; });
-  roomBoxes.forEach((r) => { r.x += shiftX; r.y += shiftY; });
-  return { corridors, rooms: roomBoxes, width: Math.max(titleHeight ? 620 : 1, maxX - minX + margin * 2), height: Math.max(titleHeight ? 260 : 1, maxY - minY + titleHeight + margin) };
+function populateFloorOptions() {
+  const buildingCode = els.buildingSelect.value;
+  const items = unique(state.data.floor_segments.filter((row) => row.building_code === buildingCode).map((row) => row.floor_code))
+    .sort(compare)
+    .map((row) => ({ value: row, label: row }));
+  fillSelect(els.floorSelect, items);
 }
 
-function makeSegment(segment, scale, margin, titleHeight) {
-  return { ...segment, x1: margin + segment.start_x_m * scale, y1: titleHeight + segment.start_y_m * scale, x2: margin + segment.end_x_m * scale, y2: titleHeight + segment.end_y_m * scale, width: segment.width_m * scale };
+function populateCollegeOptions() {
+  const items = [{ value: ALL_COLLEGES, label: ALL_COLLEGES }, ...unique(state.data.labs.map((row) => row.college)).map((row) => ({ value: row, label: row }))];
+  fillSelect(els.collegeSelect, items);
 }
 
-function placeRoom(room, segment, scale) {
-  if (!segment) return null;
-  const horizontal = segment.y1 === segment.y2;
-  const vertical = segment.x1 === segment.x2;
-  if (!horizontal && !vertical) return null;
-  const width = room.length_m * scale, height = room.width_m * scale;
-  const gap = ROOM_GAP_M * scale;
-  const left = Math.min(segment.x1, segment.x2);
-  const right = Math.max(segment.x1, segment.x2);
-  const top = Math.min(segment.y1, segment.y2);
-  const bottom = Math.max(segment.y1, segment.y2);
-  const along = room.offset_m * scale;
+function populatePlanOptions() {
+  const items = state.data.plans.slice().sort((a, b) => compare(a.plan_name, b.plan_name)).map((plan) => ({ value: plan.id, label: plan.plan_name }));
+  fillSelect(els.beforePlanSelect, items);
+  fillSelect(els.afterPlanSelect, items);
+  const defaults = defaultComparePlans(state.data.plans);
+  if (!els.beforePlanSelect.value && defaults.before) els.beforePlanSelect.value = defaults.before.id;
+  if (!els.afterPlanSelect.value && defaults.after) els.afterPlanSelect.value = defaults.after.id;
+}
 
-  if (horizontal) {
-    if (room.side === "北") return { room, x: left + along, y: segment.y1 - segment.width / 2 - gap - height, width, height };
-    if (room.side === "南") return { room, x: left + along, y: segment.y1 + segment.width / 2 + gap, width, height };
-    if (room.side === "西") return { room, x: left - gap - width, y: segment.y1 - height / 2, width, height };
-    if (room.side === "东") return { room, x: right + gap, y: segment.y1 - height / 2, width, height };
+function fillSelect(select, items) {
+  const previous = select.value;
+  select.innerHTML = items.map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join("");
+  if (items.some((item) => item.value === previous)) select.value = previous;
+  else if (items[0]) select.value = items[0].value;
+}
+
+function ensureActivePlan() {
+  const before = planById(els.beforePlanSelect.value);
+  const after = planById(els.afterPlanSelect.value);
+  if (state.displayMode === "before") {
+    state.activePlanId = before?.id || null;
+    return;
   }
-
-  if (vertical) {
-    if (room.side === "西") return { room, x: segment.x1 - segment.width / 2 - gap - width, y: top + along, width, height };
-    if (room.side === "东") return { room, x: segment.x1 + segment.width / 2 + gap, y: top + along, width, height };
-    if (room.side === "北") return { room, x: segment.x1 - width / 2, y: top - gap - height, width, height };
-    if (room.side === "南") return { room, x: segment.x1 - width / 2, y: bottom + gap, width, height };
+  if (state.displayMode === "after") {
+    state.activePlanId = after?.id || null;
+    return;
   }
-  return null;
+  if (!state.activePlanId || !planById(state.activePlanId)) state.activePlanId = before?.id || after?.id || state.data.plans[0]?.id || null;
+  if (state.activePlanId !== before?.id && state.activePlanId !== after?.id) state.activePlanId = before?.id || after?.id || null;
 }
 
-function renderFloorplan(segments, rooms, colors) {
-  if (!segments.length) { els.floorplan.innerHTML = `<div class="empty">当前楼层没有布局数据。</div>`; return; }
-  const layout = buildLayout(segments, rooms, DETAIL_SCALE);
-  const corridorMarkup = layout.corridors.map((c) => structureSvg(c, false)).join("");
-  const roomMarkup = layout.rooms.map((r) => roomSvg(r, colors, false)).join("");
-  els.floorplan.innerHTML = `<div class="floorplan-overlay">
-      <strong>${escapeHtml(els.buildingSelect.value)} ${escapeHtml(els.floorSelect.value)}层</strong>
-      <span class="north-mark">北</span>
-    </div>
-    <svg viewBox="0 0 ${layout.width} ${layout.height}" data-layout-width="${layout.width}" data-layout-height="${layout.height}">
-    <rect width="${layout.width}" height="${layout.height}" fill="#fbfcfe"/>
-    ${corridorMarkup}${roomMarkup}</svg>`;
-  els.floorplan.querySelectorAll(".room").forEach((node) => node.addEventListener("click", () => { state.selectedRoomId = node.dataset.id; render(); }));
-  showDetails(rooms.find((room) => room.id === state.selectedRoomId));
+function renderComparePlanNames() {
+  els.beforePlanName.textContent = planById(els.beforePlanSelect.value)?.plan_name || "";
+  els.afterPlanName.textContent = planById(els.afterPlanSelect.value)?.plan_name || "";
+}
+
+function renderEditorTabs() {
+  els.editorTabs.innerHTML = DATASETS.map(({ key, label }) => `<button type="button" data-key="${key}" class="${state.editorKey === key ? "is-active" : ""}">${escapeHtml(label)}</button>`).join("");
+  els.editorTabs.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => {
+    state.editorKey = button.dataset.key;
+    renderEditorTabs();
+    renderEditor();
+  }));
+}
+
+function renderApp() {
+  const building = buildingByCode(els.buildingSelect.value);
+  const beforePlan = planById(els.beforePlanSelect.value);
+  const afterPlan = planById(els.afterPlanSelect.value);
+  const activePlan = planById(state.activePlanId);
+  const colors = colorMap(state.data.labs);
+  const showAfter = state.displayMode === "compare" || state.displayMode === "after";
+  const showBefore = state.displayMode === "compare" || state.displayMode === "before";
+
+  els.beforeThumbs.parentElement.classList.toggle("is-hidden", !showBefore);
+  els.afterColumn.classList.toggle("is-hidden", !showAfter);
+  els.beforeThumbs.parentElement.parentElement.classList.toggle("is-single", state.displayMode !== "compare");
+
+  renderLegend(els.legend, state.data, colors, activePlan?.id);
+  if (showBefore) {
+    renderThumbList(els.beforeThumbs, {
+      data: state.data,
+      buildingCode: building?.building_code,
+      plan: beforePlan,
+      activePlanId: state.activePlanId,
+      currentFloorCode: els.floorSelect.value,
+      colors,
+      onSelect: handleThumbSelect,
+    });
+  } else {
+    els.beforeThumbs.innerHTML = "";
+  }
+  if (showAfter) {
+    renderThumbList(els.afterThumbs, {
+      data: state.data,
+      buildingCode: building?.building_code,
+      plan: afterPlan,
+      activePlanId: state.activePlanId,
+      currentFloorCode: els.floorSelect.value,
+      colors,
+      onSelect: handleThumbSelect,
+    });
+  } else {
+    els.afterThumbs.innerHTML = "";
+  }
+  renderFloorplan({
+    floorplanEl: els.floorplan,
+    activePlanBadgeEl: els.activePlanBadge,
+    detailsEl: els.roomDetails,
+    data: state.data,
+    building,
+    floorCode: els.floorSelect.value,
+    activePlan,
+    colors,
+    selectedSpaceId: state.selectedSpaceId,
+    collegeFilter: els.collegeSelect.value,
+    onSelectSpace: handleSpaceSelect,
+  });
   applyCanvasMode();
 }
 
-function renderThumbs(building, colors) {
-  const floors = unique(state.floors.filter((row) => row.building === building).map((row) => row.floor)).sort(compare);
-  els.floorThumbs.innerHTML = floors.map((floor) => {
-    const segments = state.floors.filter((row) => row.building === building && row.floor === floor);
-    const rooms = state.rooms.filter((row) => row.building === building && row.floor === floor);
-    const layout = buildLayout(segments, rooms, THUMB_SCALE, 0, 4);
-    return `<button class="floor-thumb ${floor === els.floorSelect.value ? "is-active" : ""}" data-floor="${floor}"><span>${floor}层</span>
-      <svg viewBox="0 0 ${layout.width} ${layout.height}">${layout.corridors.map((c) => structureSvg(c, true)).join("")}${layout.rooms.map((r) => roomSvg(r, colors, true)).join("")}</svg></button>`;
-  }).join("");
-  els.floorThumbs.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => { els.floorSelect.value = button.dataset.floor; render(); }));
-}
-
-function roomSvg(box, colors, compact) {
-  const fill = roomFill(box.room, colors);
-  const labelFill = isClassroom(box.room) ? "#344054" : "#fff";
-  if (compact) return `<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="${fill}" />`;
-  const muted = els.collegeSelect.value !== ALL_COLLEGES && els.collegeSelect.value !== box.room.college;
-  const doors = box.room.front_door === box.room.rear_door ? box.room.front_door : `${box.room.front_door}/${box.room.rear_door}`;
-  const area = (box.room.length_m * box.room.width_m).toFixed(1);
-  return `<g class="room ${muted ? "is-muted" : ""}" data-id="${box.room.id}">
-    <rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="4" fill="${fill}" />
-    <text x="${box.x + 8}" y="${box.y + 18}" fill="${labelFill}" font-size="13" font-weight="700">${escapeHtml(doors)}</text>
-    <text x="${box.x + 8}" y="${box.y + 36}" fill="${labelFill}" font-size="12">${escapeHtml(box.room.room_name)}</text>
-    <text x="${box.x + 8}" y="${box.y + 53}" fill="${labelFill}" font-size="12">${escapeHtml(box.room.college)}</text>
-    <text x="${box.x + 8}" y="${box.y + 70}" fill="${labelFill}" font-size="12">${area} m²</text>
-  </g>`;
-}
-
-function structureSvg(item, compact) {
-  const base = `<line x1="${item.x1}" y1="${item.y1}" x2="${item.x2}" y2="${item.y2}" stroke="#e8edf3" stroke-width="${item.width}" stroke-linecap="square"/>`;
-  if (item.element_type !== "楼梯") return base;
-  const horizontal = item.y1 === item.y2;
-  const count = compact ? 4 : 7;
-  const steps = [];
-  for (let i = 1; i < count; i += 1) {
-    const t = i / count;
-    const x = item.x1 + (item.x2 - item.x1) * t;
-    const y = item.y1 + (item.y2 - item.y1) * t;
-    steps.push(horizontal
-      ? `<line x1="${x}" y1="${y - item.width / 2}" x2="${x}" y2="${y + item.width / 2}" stroke="#94a3b8" stroke-width="${compact ? 0.8 : 1.5}"/>`
-      : `<line x1="${x - item.width / 2}" y1="${y}" x2="${x + item.width / 2}" y2="${y}" stroke="#94a3b8" stroke-width="${compact ? 0.8 : 1.5}"/>`);
-  }
-  const label = compact ? "" : `<text x="${(item.x1 + item.x2) / 2}" y="${(item.y1 + item.y2) / 2 + 4}" text-anchor="middle" font-size="12" fill="#475467">楼梯</text>`;
-  return `${base}${steps.join("")}${label}`;
-}
-
-function setEditorMode(mode) { state.editorMode = mode; els.showRoomsBtn.classList.toggle("is-active", mode === "rooms"); els.showFloorsBtn.classList.toggle("is-active", mode === "floors"); renderEditor(); }
-function editorColumns() { return state.editorMode === "rooms" ? ROOM_COLUMNS : FLOOR_COLUMNS; }
-function editorRows() {
-  const building = els.buildingSelect.value;
-  const floor = els.floorSelect.value;
-  const rows = state.editorMode === "rooms" ? state.rooms : state.floors;
-  return rows.filter((row) => row.building === building && row.floor === floor);
-}
-function renderEditor() {
-  const columns = editorColumns(), rows = editorRows();
-  els.dataEditor.innerHTML = `<table><thead><tr>${columns.map(([, label]) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${rows.map((row, i) => `<tr>${columns.map(([key]) => `<td data-key="${key}"><input data-row="${i}" data-key="${key}" value="${escapeHtml(row[key] ?? "")}"></td>`).join("")}</tr>`).join("")}</tbody></table>`;
-}
-function addEditorRow() {
-  if (state.editorMode === "rooms") state.rooms.push(normalizeRooms([{ 教学楼: els.buildingSelect.value, 楼层: els.floorSelect.value, 走廊段ID: "main", 沿段位置: 0, 段侧: "右", 实验室名称: "新增实验室", 前门牌: "000", 后门牌: "000", 长: 8, 宽: 6, 所属学院: "未设置学院" }])[0]);
-  else state.floors.push(normalizeFloors([{ 教学楼: els.buildingSelect.value, 楼层: els.floorSelect.value, 走廊段ID: "new-segment", 起点X: 0, 起点Y: 0, 终点X: 10, 终点Y: 0, 走廊宽: 2.4 }])[0]);
+function handleThumbSelect(planId, floorCode) {
+  state.activePlanId = planId;
+  els.floorSelect.value = floorCode;
+  syncSelectedSpace();
+  state.zoom = 1;
   renderEditor();
+  renderApp();
 }
-function applyEditorRows() {
-  const columns = editorColumns(), data = editorRows().map(() => ({}));
-  els.dataEditor.querySelectorAll("input").forEach((input) => data[+input.dataset.row][input.dataset.key] = input.value);
-  const building = els.buildingSelect.value;
-  const floor = els.floorSelect.value;
-  if (state.editorMode === "rooms") {
-    state.rooms = [...state.rooms.filter((row) => row.building !== building || row.floor !== floor), ...normalizeRooms(data)];
-  } else {
-    state.floors = [...state.floors.filter((row) => row.building !== building || row.floor !== floor), ...normalizeFloors(data)];
+
+function handleSpaceSelect(spaceId) {
+  state.selectedSpaceId = spaceId;
+  renderApp();
+}
+
+function renderEditor() {
+  const definition = DATASETS.find((item) => item.key === state.editorKey);
+  const rows = editorRows();
+  if (!rows.length) {
+    els.dataEditor.innerHTML = `<div class="empty">当前筛选下暂无数据，可点击“新增行”开始录入。</div>`;
+    return;
   }
+  els.dataEditor.innerHTML = `<table><thead><tr>${definition.columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${rows.map((row, rowIndex) => `<tr>${definition.columns.map(([key]) => `<td data-key="${key}"><input data-row="${rowIndex}" data-key="${key}" value="${escapeHtml(row[key] ?? "")}"></td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+
+function editorRows() {
+  const buildingCode = els.buildingSelect.value;
+  const floorCode = els.floorSelect.value;
+  if (state.editorKey === "floor_segments") return state.data.floor_segments.filter((row) => row.building_code === buildingCode && row.floor_code === floorCode);
+  if (state.editorKey === "spaces") return state.data.spaces.filter((row) => row.building_code === buildingCode && row.floor_code === floorCode);
+  if (state.editorKey === "plan_assignments") return state.data.plan_assignments.filter((row) => row.plan_id === state.activePlanId);
+  return state.data[state.editorKey];
+}
+
+function syncSelectedSpace() {
+  if (!state.selectedSpaceId) return;
+  const activePlan = planById(state.activePlanId);
+  const stillVisible = state.data.spaces.some((row) =>
+    row.id === state.selectedSpaceId &&
+    row.building_code === els.buildingSelect.value &&
+    row.floor_code === els.floorSelect.value
+  );
+  if (!stillVisible) {
+    state.selectedSpaceId = null;
+    return;
+  }
+  if (!activePlan) {
+    state.selectedSpaceId = null;
+    return;
+  }
+  const assignedHere = state.data.plan_assignments.some((row) => row.plan_id === activePlan.id && row.space_id === state.selectedSpaceId);
+  if (!assignedHere) state.selectedSpaceId = null;
+}
+
+function addEditorRow() {
+  const now = isoNow();
+  const buildingCode = els.buildingSelect.value || "B01";
+  const floorCode = els.floorSelect.value || "1";
+  if (state.editorKey === "buildings") {
+    state.data.buildings.push(normalizeBuilding({ building_code: `B${String(state.data.buildings.length + 1).padStart(2, "0")}`, building_name: "新增教学楼", campus_zone: "本部", building_number: state.data.buildings.length + 1, notes: "", created_at: now }));
+  } else if (state.editorKey === "floor_segments") {
+    state.data.floor_segments.push(normalizeSegment({ building_code: buildingCode, floor_code: floorCode, segment_code: `segment-${Date.now()}`, start_x_m: 0, start_y_m: 0, end_x_m: 18, end_y_m: 0, width_m: 2.4, element_type: "corridor", notes: "", created_at: now }));
+  } else if (state.editorKey === "spaces") {
+    state.data.spaces.push(normalizeSpace({ space_code: `S-${Date.now()}`, building_code: buildingCode, floor_code: floorCode, segment_code: state.data.floor_segments.find((row) => row.building_code === buildingCode && row.floor_code === floorCode)?.segment_code || "main", offset_m: 0, side: "north", front_door: "000", rear_door: "", space_name: "新增空间", length_m: 8, width_m: 6, network_segment: "", current_status: "active", created_at: now }));
+  } else if (state.editorKey === "labs") {
+    state.data.labs.push(normalizeLab({ lab_code: `LAB-${Date.now()}`, lab_name: "新增实验室", college: "未设置学院", major: "", lab_type: "教学实验室", director: "", seat_count: 0, computer_count: 0, status: "planning", created_at: now }));
+  } else if (state.editorKey === "plans") {
+    state.data.plans.push(normalizePlan({ plan_code: `plan-${Date.now()}`, plan_name: "新增方案", plan_type: "draft", source_plan_code: "", description: "", is_locked: false, is_default_compare_before: false, is_default_compare_after: false, created_at: now }));
+  } else if (state.editorKey === "plan_assignments") {
+    state.data.plan_assignments.push(normalizeAssignment({ plan_code: planById(state.activePlanId)?.plan_code || state.data.plans[0]?.plan_code || "baseline", lab_code: state.data.labs[0]?.lab_code || "", space_code: state.data.spaces.find((row) => row.building_code === buildingCode && row.floor_code === floorCode)?.space_code || "", previous_space_code: "", assignment_status: "assigned", move_note: "", effective_from: "", created_at: now }, relationMaps(state.data)));
+  }
+  hydrate("已新增一行");
+}
+
+function applyEditorRows() {
+  const rows = editorRows().map(() => ({}));
+  els.dataEditor.querySelectorAll("input").forEach((input) => {
+    rows[Number(input.dataset.row)][input.dataset.key] = input.value;
+  });
+  if (state.editorKey === "buildings") state.data.buildings = rows.map((row) => normalizeBuilding(row));
+  if (state.editorKey === "labs") state.data.labs = rows.map((row) => normalizeLab(row));
+  if (state.editorKey === "plans") state.data.plans = rows.map((row) => normalizePlan(row));
+  if (state.editorKey === "floor_segments") replaceFilteredRows("floor_segments", rows.map((row) => normalizeSegment(row)));
+  if (state.editorKey === "spaces") replaceFilteredRows("spaces", rows.map((row) => normalizeSpace(row)));
+  if (state.editorKey === "plan_assignments") replaceFilteredAssignments(rows.map((row) => normalizeAssignment(row, relationMaps(state.data))));
+  state.data = normalizeDataset(state.data);
   hydrate("已应用修改");
 }
 
-function renderLegend(colors) {
-  const colleges = Object.entries(colors).map(([k, v]) => `<span class="legend-item"><span class="legend-swatch" style="background:${v}"></span>${k}</span>`);
-  const classrooms = state.rooms.some(isClassroom) ? [`<span class="legend-item"><span class="legend-swatch" style="background:#cbd5e1"></span>公共教室</span>`] : [];
-  els.legend.innerHTML = [...colleges, ...classrooms].join("");
+function replaceFilteredRows(key, replacement) {
+  const buildingCode = els.buildingSelect.value;
+  const floorCode = els.floorSelect.value;
+  state.data[key] = [
+    ...state.data[key].filter((row) => row.building_code !== buildingCode || row.floor_code !== floorCode),
+    ...replacement,
+  ];
 }
-function showDetails(room) {
-  if (!room) {
-    els.roomDetails.innerHTML = "点击图中的房间查看详情。";
-    return;
-  }
-  const rows = [
-    ["门牌", room.front_door === room.rear_door ? room.front_door : `${room.front_door}/${room.rear_door}`],
-    ["尺寸", `${room.length_m}m x ${room.width_m}m`],
-    ["面积", `${(room.length_m * room.width_m).toFixed(1)} m²`],
-    ["学院", room.college],
-    ["实验室类型", room.lab_type],
-    ["容量", room.capacity || ""],
-    ["改建年份", room.renovation_year],
-    ["实验室主任", room.director],
-    ["所属专业", room.major],
-    ["学生座位数", room.seat_count],
-    ["电脑数", room.computer_count],
-  ].filter(([, value]) => value !== "" && value !== null && value !== undefined);
-  els.roomDetails.innerHTML = `<strong>${room.room_name}</strong><br>${rows.map(([label, value]) => `${label}：${value}`).join("<br>")}`;
-}
-function colorMap() { return Object.fromEntries(unique(state.rooms.map((r) => r.college)).map((v, i) => [v, COLORS[i % COLORS.length]])); }
-function isClassroom(room) { return String(room.lab_type || "").includes("教室"); }
-function roomFill(room, colors) { return isClassroom(room) ? "#cbd5e1" : colors[room.college]; }
 
-function downloadRoomTemplate() { exportCsv("room-template.csv", ROOM_COLUMNS, [["示例楼","1","main","0","北","示例实验室","101","101","8","6","示例学院","实验室","40","2022","张老师","计算机科学","40","40",""]]); }
-function downloadFloorTemplate() { exportCsv("floor-template.csv", FLOOR_COLUMNS, [["示例楼","1","main","0","0","30","0","2.4","走廊","主走廊"],["示例楼","1","stairs-east","30","4","30","10","4","楼梯","东侧楼梯"]]); }
-function downloadCurrentCsv() { exportCsv(state.editorMode === "rooms" ? "rooms.csv" : "floors.csv", editorColumns(), editorRows().map((row) => editorColumns().map(([key]) => row[key] ?? ""))); }
-function exportCsv(name, columns, rows) { download(name, `\uFEFF${[columns.map(([, label]) => label), ...rows].map((row) => row.map(csv).join(",")).join("\n")}`, "text/csv;charset=utf-8"); }
-function download(name, text, type) { const a = document.createElement("a"), url = URL.createObjectURL(new Blob([text], { type })); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url); }
-function resetCanvasZoom() { state.zoom = 1; applyCanvasMode(); }
-function changeCanvasZoom(delta) { state.zoom = Math.min(2.5, Math.max(0.4, Number((state.zoom + delta).toFixed(2)))); applyCanvasMode(); }
+function replaceFilteredAssignments(replacement) {
+  state.data.plan_assignments = [
+    ...state.data.plan_assignments.filter((row) => row.plan_id !== state.activePlanId),
+    ...replacement,
+  ];
+}
+
+function downloadCurrentSheet() {
+  const definition = DATASETS.find((item) => item.key === state.editorKey);
+  const rows = editorRows().map((row) => Object.fromEntries(definition.columns.map(([key]) => [key, row[key] ?? ""])));
+  exportCsv(`${definition.sheet}.csv`, definition.columns, rows);
+}
+
+function downloadTemplateWorkbook() {
+  try {
+    if (!workbookAvailable()) {
+      downloadJson("实验室搬迁规划模板.json", buildTemplatePackage());
+      updateStatus("当前环境未加载 Excel 组件，已降级下载 JSON 模板。");
+      return;
+    }
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(templateInstructions()), "说明");
+    for (const definition of DATASETS) XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(templateRows(definition.key)), definition.sheet);
+    XLSX.writeFile(workbook, "实验室搬迁规划模板.xlsx");
+    updateStatus("模板已开始下载。");
+  } catch (error) {
+    downloadJson("实验室搬迁规划模板.json", buildTemplatePackage());
+    updateStatus(`Excel 模板生成失败，已降级下载 JSON 模板：${error.message}`);
+  }
+}
+
+function exportWorkbook() {
+  try {
+    if (!workbookAvailable()) {
+      downloadJson("实验室搬迁规划数据包.json", state.data);
+      updateStatus("当前环境未加载 Excel 组件，已降级下载 JSON 数据包。");
+      return;
+    }
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(templateInstructions()), "说明");
+    for (const definition of DATASETS) {
+      const rows = state.data[definition.key].map((row) => exportRow(definition.key, row));
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), definition.sheet);
+    }
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(state.data.file_assets), "file_assets");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(state.data.imports), "imports");
+    XLSX.writeFile(workbook, "实验室搬迁规划数据包.xlsx");
+    updateStatus("数据包已开始下载。");
+  } catch (error) {
+    downloadJson("实验室搬迁规划数据包.json", state.data);
+    updateStatus(`Excel 数据包导出失败，已降级下载 JSON 数据包：${error.message}`);
+  }
+}
+
+function buildTemplatePackage() {
+  return Object.fromEntries(DATASETS.map((definition) => [definition.key, templateRows(definition.key)]));
+}
+
+function exportRow(key, row) {
+  const fields = DATASETS.find((item) => item.key === key).columns.map(([field]) => field);
+  return pick(row, fields);
+}
+
+function exportCsv(name, columns, rows) {
+  const table = [columns.map(([, label]) => label), ...rows.map((row) => columns.map(([key]) => row[key] ?? ""))];
+  download(name, `\uFEFF${table.map((row) => row.map(csv).join(",")).join("\n")}`, "text/csv;charset=utf-8");
+}
+
+function downloadJson(name, data) {
+  download(name, JSON.stringify(data, null, 2), "application/json;charset=utf-8");
+}
+
+function download(name, text, type) {
+  const anchor = document.createElement("a");
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  anchor.href = url;
+  anchor.download = name;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildingByCode(buildingCode) {
+  return state.data.buildings.find((row) => row.building_code === buildingCode) || null;
+}
+
+function planById(id) {
+  return state.data.plans.find((row) => row.id === id) || null;
+}
+
+function changeCanvasZoom(delta) {
+  state.zoom = Math.min(2.5, Math.max(0.4, Number((state.zoom + delta).toFixed(2))));
+  applyCanvasMode();
+}
+
+function resetCanvasZoom() {
+  state.zoom = 1;
+  applyCanvasMode();
+}
+
 function applyCanvasMode() {
   const svg = els.floorplan.querySelector("svg");
   if (!svg) return;
-  const w = +svg.dataset.layoutWidth;
-  const h = +svg.dataset.layoutHeight;
-  const b = els.floorplan.getBoundingClientRect();
-  const fit = Math.min(1, (b.width - 24) / w, (b.height - 24) / h);
+  const width = Number(svg.dataset.layoutWidth);
+  const height = Number(svg.dataset.layoutHeight);
+  const bounds = els.floorplan.getBoundingClientRect();
+  const fit = Math.min(1, (bounds.width - 24) / width, (bounds.height - 24) / height);
   const scale = fit * state.zoom;
   els.floorplan.classList.toggle("is-zoomed", state.zoom > 1);
   els.canvasModeText.textContent = state.zoom === 1 ? "适配显示" : `缩放 ${Math.round(state.zoom * 100)}%`;
-  svg.style.width = `${w * scale}px`;
-  svg.style.height = `${h * scale}px`;
+  svg.style.width = `${width * scale}px`;
+  svg.style.height = `${height * scale}px`;
 }
 
-function parseCsv(text) { const [header, ...rows] = text.trim().split(/\r?\n/).map((line) => line.split(",")); return rows.map((cells) => Object.fromEntries(header.map((h, i) => [h.replace(/^\uFEFF/, ""), cells[i] ?? ""]))); }
-function read(row, keys) { return keys.find((key) => row[key] !== undefined) ? String(row[keys.find((key) => row[key] !== undefined)]).trim() : ""; }
-function normalizeSide(v) { return ["北","南","东","西"].includes(v) ? v : ["左"].includes(v) ? "北" : ["右"].includes(v) ? "南" : "南"; }
-function number(v, fallback) { const n = parseFloat(v); return Number.isFinite(n) ? n : fallback; }
-function optionalNumber(v) { if (v === "" || v === null || v === undefined) return ""; const n = parseFloat(v); return Number.isFinite(n) ? n : ""; }
-function unique(v) { return [...new Set(v.filter(Boolean))]; }
-function compare(a, b) { return String(a).localeCompare(String(b), "zh-CN", { numeric: true }); }
-function csv(v) { const s = String(v ?? ""); return /[",\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s; }
-function escapeHtml(v) { return String(v).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;"); }
-function updateStatus(text) { els.statusText.textContent = text; }
+function updateStatus(text) {
+  els.statusText.textContent = text;
+}

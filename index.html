@@ -3,30 +3,28 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>实验室分布图生成器</title>
+    <title>实验室搬迁规划系统</title>
     <link rel="stylesheet" href="./styles.css" />
     <script defer src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <script defer src="./js/domain.js"></script>
+    <script defer src="./js/render.js"></script>
     <script defer src="./app.js"></script>
   </head>
   <body>
     <main class="shell">
       <section class="topbar">
         <div class="brand">
-          <h1>实验室分布图生成器</h1>
-          <p>房间数据与楼层布局分开维护，走廊段可自由组合成任意楼层形状。</p>
+          <h1>实验室搬迁规划系统</h1>
+          <p>用单个 Excel 数据包维护教学楼、楼层骨架、物理空间、实验室与搬迁方案。</p>
         </div>
         <div class="controls">
           <label class="file-control">
-            <span>导入房间表</span>
-            <input id="roomFileInput" type="file" accept=".csv,.xlsx,.xls" />
+            <span>导入数据包</span>
+            <input id="packageFileInput" type="file" accept=".xlsx,.xls,.json" />
           </label>
-          <label class="file-control">
-            <span>导入楼层表</span>
-            <input id="floorFileInput" type="file" accept=".csv,.xlsx,.xls" />
-          </label>
-          <button id="loadSampleBtn" type="button">载入测试数据</button>
-          <button id="downloadRoomTemplateBtn" type="button">下载房间模板</button>
-          <button id="downloadFloorTemplateBtn" type="button">下载楼层模板</button>
+          <button id="loadSampleBtn" type="button">加载示例数据</button>
+          <button id="downloadTemplateBtn" type="button">下载模板</button>
+          <button id="exportWorkbookBtn" type="button">导出当前数据包</button>
         </div>
       </section>
 
@@ -34,21 +32,50 @@
         <label>教学楼<select id="buildingSelect"></select></label>
         <label>楼层<select id="floorSelect"></select></label>
         <label>学院高亮<select id="collegeSelect"></select></label>
+        <label>显示模式<select id="displayModeSelect">
+          <option value="compare">前后对比</option>
+          <option value="before">只看搬迁前</option>
+          <option value="after">只看搬迁后</option>
+        </select></label>
+        <label>搬迁前方案<select id="beforePlanSelect"></select></label>
+        <label>搬迁后方案<select id="afterPlanSelect"></select></label>
       </section>
 
       <section class="status-row">
-        <div id="statusText">正在载入测试数据...</div>
+        <div id="statusText">正在加载示例数据...</div>
         <div id="legend" class="legend"></div>
       </section>
 
       <section class="workspace">
-        <aside class="floor-switcher">
-          <h2>楼层缩略图</h2>
-          <div id="floorThumbs" class="floor-thumbs"></div>
+        <aside class="compare-panel">
+          <div class="compare-heading">
+            <h2>方案缩略图</h2>
+            <p>点击任一缩略图，在中间查看对应方案与楼层。</p>
+          </div>
+          <div class="compare-columns">
+            <section class="compare-column">
+              <div class="compare-title compare-title-before">
+                <strong>搬迁前</strong>
+                <span id="beforePlanName"></span>
+              </div>
+              <div id="beforeThumbs" class="floor-thumbs"></div>
+            </section>
+            <section id="afterColumn" class="compare-column">
+              <div class="compare-title compare-title-after">
+                <strong>搬迁后</strong>
+                <span id="afterPlanName"></span>
+              </div>
+              <div id="afterThumbs" class="floor-thumbs"></div>
+            </section>
+          </div>
         </aside>
+
         <div class="canvas-panel">
           <div class="canvas-toolbar">
-            <span id="canvasModeText">适配显示</span>
+            <div class="canvas-meta">
+              <strong id="activePlanBadge">当前主图</strong>
+              <span id="canvasModeText">适配显示</span>
+            </div>
             <div>
               <button id="fitCanvasBtn" type="button">适配</button>
               <button id="zoomOutBtn" type="button" title="缩小">-</button>
@@ -57,9 +84,10 @@
           </div>
           <div id="floorplan" class="floorplan is-fit"></div>
         </div>
+
         <aside class="details">
-          <h2>房间信息</h2>
-          <div id="roomDetails" class="room-details">点击图中的房间查看详情。</div>
+          <h2>详细信息</h2>
+          <div id="roomDetails" class="room-details">点击主图中的空间查看当前方案下的实验室与房间信息。</div>
         </aside>
       </section>
 
@@ -67,16 +95,13 @@
         <div class="panel-heading">
           <div>
             <h2>数据编辑</h2>
-            <p>楼层表描述走廊骨架，房间表只引用走廊段。任意复杂形状都可由多条线段组合。</p>
+            <p>界面内部按数据模型维护，但用户始终只需导入或导出一个 Excel 数据包。</p>
           </div>
-          <div class="editor-tabs">
-            <button id="showRoomsBtn" class="is-active" type="button">房间表</button>
-            <button id="showFloorsBtn" type="button">楼层表</button>
-          </div>
+          <div id="editorTabs" class="editor-tabs"></div>
           <div class="editor-actions">
             <button id="addRowBtn" type="button">新增行</button>
             <button id="applyTableBtn" type="button">应用修改</button>
-            <button id="downloadCsvBtn" type="button">导出当前表</button>
+            <button id="downloadSheetBtn" type="button">导出当前表</button>
           </div>
         </div>
         <div id="dataEditor" class="data-editor"></div>

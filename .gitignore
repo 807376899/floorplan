@@ -1,2 +1,7 @@
 server.log
 server.err.log
+floor.csv
+room.csv
+baseline-upload-package.json
+floor-room-baseline-upload-package.json
+floor-room-baseline-upload-package.xlsx
