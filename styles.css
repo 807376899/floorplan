@@ -254,6 +254,7 @@ button:hover,
 }
 
 .floorplan {
+  position: relative;
   min-height: 670px;
   display: flex;
   align-items: center;
@@ -267,21 +268,68 @@ button:hover,
   padding: 12px;
 }
 
-.floorplan svg {
-  display: block;
-  max-width: 100%;
-  max-height: 100%;
-}
-
-.floorplan.is-actual {
+.floorplan.is-zoomed {
   align-items: flex-start;
   justify-content: flex-start;
   overflow: auto;
 }
 
-.floorplan.is-actual svg {
+.floorplan.is-zoomed svg {
   max-width: none;
   max-height: none;
+}
+
+.floorplan-overlay {
+  position: absolute;
+  z-index: 1;
+  top: 16px;
+  left: 18px;
+  display: grid;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.floorplan-overlay strong {
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.north-mark {
+  position: relative;
+  width: 26px;
+  padding-top: 24px;
+  text-align: center;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.north-mark::before {
+  position: absolute;
+  top: 0;
+  left: 12px;
+  width: 2px;
+  height: 20px;
+  background: #344054;
+  content: "";
+}
+
+.north-mark::after {
+  position: absolute;
+  top: 0;
+  left: 8px;
+  width: 8px;
+  height: 8px;
+  border-top: 2px solid #344054;
+  border-left: 2px solid #344054;
+  content: "";
+  transform: rotate(45deg);
+}
+
+.floorplan svg {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 .room-details {
@@ -391,12 +439,32 @@ button:hover,
 }
 
 .data-editor input {
-  width: 122px;
+  width: 72px;
   border: 1px solid transparent;
   border-radius: 4px;
   background: #fff;
   color: var(--ink);
   padding: 6px 7px;
+}
+
+.data-editor td[data-key="room_name"] input {
+  width: 180px;
+}
+
+.data-editor td[data-key="college"] input {
+  width: 132px;
+}
+
+.data-editor td[data-key="lab_type"] input,
+.data-editor td[data-key="director"] input,
+.data-editor td[data-key="major"] input,
+.data-editor td[data-key="notes"] input {
+  width: 116px;
+}
+
+.data-editor td[data-key="building"] input,
+.data-editor td[data-key="segment_id"] input {
+  width: 92px;
 }
 
 .data-editor input:focus {

@@ -13,7 +13,7 @@ const ROOM_GAP_M = 0.7;
 const DETAIL_SCALE = 28;
 const THUMB_SCALE = 6;
 const COLORS = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#0891b2", "#be123c", "#4d7c0f"];
-const state = { rooms: [], floors: [], selectedRoomId: null, editorMode: "rooms" };
+const state = { rooms: [], floors: [], selectedRoomId: null, editorMode: "rooms", zoom: 1 };
 const els = Object.fromEntries([...document.querySelectorAll("[id]")].map((node) => [node.id, node]));
 
 els.roomFileInput.addEventListener("change", (event) => handleImport(event, "rooms"));
@@ -21,15 +21,16 @@ els.floorFileInput.addEventListener("change", (event) => handleImport(event, "fl
 els.loadSampleBtn.addEventListener("click", loadSampleData);
 els.downloadRoomTemplateBtn.addEventListener("click", downloadRoomTemplate);
 els.downloadFloorTemplateBtn.addEventListener("click", downloadFloorTemplate);
-els.fitCanvasBtn.addEventListener("click", () => setCanvasMode("fit"));
-els.actualCanvasBtn.addEventListener("click", () => setCanvasMode("actual"));
+els.fitCanvasBtn.addEventListener("click", resetCanvasZoom);
+els.zoomOutBtn.addEventListener("click", () => changeCanvasZoom(-0.15));
+els.zoomInBtn.addEventListener("click", () => changeCanvasZoom(0.15));
 els.showRoomsBtn.addEventListener("click", () => setEditorMode("rooms"));
 els.showFloorsBtn.addEventListener("click", () => setEditorMode("floors"));
 els.addRowBtn.addEventListener("click", addEditorRow);
 els.applyTableBtn.addEventListener("click", applyEditorRows);
 els.downloadCsvBtn.addEventListener("click", downloadCurrentCsv);
-els.buildingSelect.addEventListener("change", () => { populateFloorOptions(); render(); });
-els.floorSelect.addEventListener("change", render);
+els.buildingSelect.addEventListener("change", () => { populateFloorOptions(); state.zoom = 1; render(); });
+els.floorSelect.addEventListener("change", () => { state.zoom = 1; render(); });
 els.collegeSelect.addEventListener("change", render);
 window.addEventListener("resize", () => els.floorplan.classList.contains("is-fit") && applyCanvasMode());
 loadSampleData();
@@ -181,13 +182,12 @@ function renderFloorplan(segments, rooms, colors) {
   const layout = buildLayout(segments, rooms, DETAIL_SCALE);
   const corridorMarkup = layout.corridors.map((c) => structureSvg(c, false)).join("");
   const roomMarkup = layout.rooms.map((r) => roomSvg(r, colors, false)).join("");
-  els.floorplan.innerHTML = `<svg viewBox="0 0 ${layout.width} ${layout.height}" data-layout-width="${layout.width}" data-layout-height="${layout.height}">
+  els.floorplan.innerHTML = `<div class="floorplan-overlay">
+      <strong>${escapeHtml(els.buildingSelect.value)} ${escapeHtml(els.floorSelect.value)}层</strong>
+      <span class="north-mark">北</span>
+    </div>
+    <svg viewBox="0 0 ${layout.width} ${layout.height}" data-layout-width="${layout.width}" data-layout-height="${layout.height}">
     <rect width="${layout.width}" height="${layout.height}" fill="#fbfcfe"/>
-    <text x="34" y="42" font-size="24" font-weight="700">${escapeHtml(els.buildingSelect.value)} ${escapeHtml(els.floorSelect.value)}层</text>
-    <g transform="translate(36 76)">
-      <path d="M0 20 L0 0 L-5 8 M0 0 L5 8" stroke="#344054" stroke-width="2" fill="none"/>
-      <text x="0" y="-7" text-anchor="middle" font-size="13" font-weight="700" fill="#344054">北</text>
-    </g>
     ${corridorMarkup}${roomMarkup}</svg>`;
   els.floorplan.querySelectorAll(".room").forEach((node) => node.addEventListener("click", () => { state.selectedRoomId = node.dataset.id; render(); }));
   showDetails(rooms.find((room) => room.id === state.selectedRoomId));
@@ -207,16 +207,18 @@ function renderThumbs(building, colors) {
 }
 
 function roomSvg(box, colors, compact) {
-  if (compact) return `<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="${colors[box.room.college]}" />`;
+  const fill = roomFill(box.room, colors);
+  const labelFill = isClassroom(box.room) ? "#344054" : "#fff";
+  if (compact) return `<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="${fill}" />`;
   const muted = els.collegeSelect.value !== ALL_COLLEGES && els.collegeSelect.value !== box.room.college;
   const doors = box.room.front_door === box.room.rear_door ? box.room.front_door : `${box.room.front_door}/${box.room.rear_door}`;
   const area = (box.room.length_m * box.room.width_m).toFixed(1);
   return `<g class="room ${muted ? "is-muted" : ""}" data-id="${box.room.id}">
-    <rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="4" fill="${colors[box.room.college]}" />
-    <text x="${box.x + 8}" y="${box.y + 18}" fill="#fff" font-size="13" font-weight="700">${escapeHtml(doors)}</text>
-    <text x="${box.x + 8}" y="${box.y + 36}" fill="#fff" font-size="12">${escapeHtml(box.room.room_name)}</text>
-    <text x="${box.x + 8}" y="${box.y + 53}" fill="#fff" font-size="12">${escapeHtml(box.room.college)}</text>
-    <text x="${box.x + 8}" y="${box.y + 70}" fill="#fff" font-size="12">${area} m²</text>
+    <rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="4" fill="${fill}" />
+    <text x="${box.x + 8}" y="${box.y + 18}" fill="${labelFill}" font-size="13" font-weight="700">${escapeHtml(doors)}</text>
+    <text x="${box.x + 8}" y="${box.y + 36}" fill="${labelFill}" font-size="12">${escapeHtml(box.room.room_name)}</text>
+    <text x="${box.x + 8}" y="${box.y + 53}" fill="${labelFill}" font-size="12">${escapeHtml(box.room.college)}</text>
+    <text x="${box.x + 8}" y="${box.y + 70}" fill="${labelFill}" font-size="12">${area} m²</text>
   </g>`;
 }
 
@@ -248,7 +250,7 @@ function editorRows() {
 }
 function renderEditor() {
   const columns = editorColumns(), rows = editorRows();
-  els.dataEditor.innerHTML = `<table><thead><tr>${columns.map(([, label]) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${rows.map((row, i) => `<tr>${columns.map(([key]) => `<td><input data-row="${i}" data-key="${key}" value="${escapeHtml(row[key] ?? "")}"></td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  els.dataEditor.innerHTML = `<table><thead><tr>${columns.map(([, label]) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${rows.map((row, i) => `<tr>${columns.map(([key]) => `<td data-key="${key}"><input data-row="${i}" data-key="${key}" value="${escapeHtml(row[key] ?? "")}"></td>`).join("")}</tr>`).join("")}</tbody></table>`;
 }
 function addEditorRow() {
   if (state.editorMode === "rooms") state.rooms.push(normalizeRooms([{ 教学楼: els.buildingSelect.value, 楼层: els.floorSelect.value, 走廊段ID: "main", 沿段位置: 0, 段侧: "右", 实验室名称: "新增实验室", 前门牌: "000", 后门牌: "000", 长: 8, 宽: 6, 所属学院: "未设置学院" }])[0]);
@@ -268,7 +270,11 @@ function applyEditorRows() {
   hydrate("已应用修改");
 }
 
-function renderLegend(colors) { els.legend.innerHTML = Object.entries(colors).map(([k, v]) => `<span class="legend-item"><span class="legend-swatch" style="background:${v}"></span>${k}</span>`).join(""); }
+function renderLegend(colors) {
+  const colleges = Object.entries(colors).map(([k, v]) => `<span class="legend-item"><span class="legend-swatch" style="background:${v}"></span>${k}</span>`);
+  const classrooms = state.rooms.some(isClassroom) ? [`<span class="legend-item"><span class="legend-swatch" style="background:#cbd5e1"></span>公共教室</span>`] : [];
+  els.legend.innerHTML = [...colleges, ...classrooms].join("");
+}
 function showDetails(room) {
   if (!room) {
     els.roomDetails.innerHTML = "点击图中的房间查看详情。";
@@ -290,14 +296,29 @@ function showDetails(room) {
   els.roomDetails.innerHTML = `<strong>${room.room_name}</strong><br>${rows.map(([label, value]) => `${label}：${value}`).join("<br>")}`;
 }
 function colorMap() { return Object.fromEntries(unique(state.rooms.map((r) => r.college)).map((v, i) => [v, COLORS[i % COLORS.length]])); }
+function isClassroom(room) { return String(room.lab_type || "").includes("教室"); }
+function roomFill(room, colors) { return isClassroom(room) ? "#cbd5e1" : colors[room.college]; }
 
 function downloadRoomTemplate() { exportCsv("room-template.csv", ROOM_COLUMNS, [["示例楼","1","main","0","北","示例实验室","101","101","8","6","示例学院","实验室","40","2022","张老师","计算机科学","40","40",""]]); }
 function downloadFloorTemplate() { exportCsv("floor-template.csv", FLOOR_COLUMNS, [["示例楼","1","main","0","0","30","0","2.4","走廊","主走廊"],["示例楼","1","stairs-east","30","4","30","10","4","楼梯","东侧楼梯"]]); }
 function downloadCurrentCsv() { exportCsv(state.editorMode === "rooms" ? "rooms.csv" : "floors.csv", editorColumns(), editorRows().map((row) => editorColumns().map(([key]) => row[key] ?? ""))); }
 function exportCsv(name, columns, rows) { download(name, `\uFEFF${[columns.map(([, label]) => label), ...rows].map((row) => row.map(csv).join(",")).join("\n")}`, "text/csv;charset=utf-8"); }
 function download(name, text, type) { const a = document.createElement("a"), url = URL.createObjectURL(new Blob([text], { type })); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url); }
-function setCanvasMode(mode) { els.floorplan.classList.toggle("is-fit", mode === "fit"); els.floorplan.classList.toggle("is-actual", mode === "actual"); els.canvasModeText.textContent = mode === "fit" ? "适配显示" : "原始大小"; applyCanvasMode(); }
-function applyCanvasMode() { const svg = els.floorplan.querySelector("svg"); if (!svg) return; const w = +svg.dataset.layoutWidth, h = +svg.dataset.layoutHeight; if (els.floorplan.classList.contains("is-actual")) { svg.style.width = `${w}px`; svg.style.height = `${h}px`; } else { const b = els.floorplan.getBoundingClientRect(), s = Math.min(1, (b.width - 24) / w, (b.height - 24) / h); svg.style.width = `${w * s}px`; svg.style.height = `${h * s}px`; } }
+function resetCanvasZoom() { state.zoom = 1; applyCanvasMode(); }
+function changeCanvasZoom(delta) { state.zoom = Math.min(2.5, Math.max(0.4, Number((state.zoom + delta).toFixed(2)))); applyCanvasMode(); }
+function applyCanvasMode() {
+  const svg = els.floorplan.querySelector("svg");
+  if (!svg) return;
+  const w = +svg.dataset.layoutWidth;
+  const h = +svg.dataset.layoutHeight;
+  const b = els.floorplan.getBoundingClientRect();
+  const fit = Math.min(1, (b.width - 24) / w, (b.height - 24) / h);
+  const scale = fit * state.zoom;
+  els.floorplan.classList.toggle("is-zoomed", state.zoom > 1);
+  els.canvasModeText.textContent = state.zoom === 1 ? "适配显示" : `缩放 ${Math.round(state.zoom * 100)}%`;
+  svg.style.width = `${w * scale}px`;
+  svg.style.height = `${h * scale}px`;
+}
 
 function parseCsv(text) { const [header, ...rows] = text.trim().split(/\r?\n/).map((line) => line.split(",")); return rows.map((cells) => Object.fromEntries(header.map((h, i) => [h.replace(/^\uFEFF/, ""), cells[i] ?? ""]))); }
 function read(row, keys) { return keys.find((key) => row[key] !== undefined) ? String(row[keys.find((key) => row[key] !== undefined)]).trim() : ""; }
