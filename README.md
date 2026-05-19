@@ -34,7 +34,19 @@
 ## 运行
 
 ```powershell
-python -m http.server 5173
+node server.js
 ```
 
 然后访问 [http://localhost:5173](http://localhost:5173)。
+
+也可以继续使用：
+
+```powershell
+python -m http.server 5173
+```
+
+## 注意
+
+- 页面主体可离线运行。
+- `.xlsx` 的导入、Excel 模板下载、Excel 数据包导出依赖 `index.html` 中的 SheetJS CDN 脚本。
+- 如果当前环境无法访问外网 CDN，页面仍可正常浏览，并且可以导入 / 导出 `.json` 数据包，但 `.xlsx` 相关功能会不可用，状态栏会显示提示。

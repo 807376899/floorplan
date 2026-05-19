@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>实验室搬迁规划系统</title>
+    <title>实验室布局维护系统</title>
     <link rel="stylesheet" href="./styles.css" />
     <script defer src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
     <script defer src="./js/domain.js"></script>
@@ -14,8 +14,8 @@
     <main class="shell">
       <section class="topbar">
         <div class="brand">
-          <h1>实验室搬迁规划系统</h1>
-          <p>用单个 Excel 数据包维护教学楼、楼层骨架、物理空间、实验室与搬迁方案。</p>
+          <h1>实验室布局维护系统</h1>
+          <p>围绕当前楼层与空间直接查看、维护实验室分布，需要时再切换到方案对比。</p>
         </div>
         <div class="controls">
           <label class="file-control">
@@ -32,13 +32,10 @@
         <label>教学楼<select id="buildingSelect"></select></label>
         <label>楼层<select id="floorSelect"></select></label>
         <label>学院高亮<select id="collegeSelect"></select></label>
-        <label>显示模式<select id="displayModeSelect">
-          <option value="compare">前后对比</option>
-          <option value="before">只看搬迁前</option>
-          <option value="after">只看搬迁后</option>
-        </select></label>
-        <label>搬迁前方案<select id="beforePlanSelect"></select></label>
-        <label>搬迁后方案<select id="afterPlanSelect"></select></label>
+        <div id="planCompareFilters" class="plan-filter-group">
+          <label>对比前方案<select id="beforePlanSelect"></select></label>
+          <label>对比后方案<select id="afterPlanSelect"></select></label>
+        </div>
       </section>
 
       <section class="status-row">
@@ -47,55 +44,61 @@
       </section>
 
       <section class="workspace">
-        <aside class="compare-panel">
-          <div class="compare-heading">
-            <h2>方案缩略图</h2>
-            <p>点击任一缩略图，在中间查看对应方案与楼层。</p>
-          </div>
-          <div class="compare-columns">
-            <section class="compare-column">
-              <div class="compare-title compare-title-before">
-                <strong>搬迁前</strong>
-                <span id="beforePlanName"></span>
+        <div class="visual-stage">
+          <aside class="compare-panel">
+            <div class="compare-heading">
+              <div>
+                <span id="planModeBadge" class="mode-badge">单方案维护</span>
+                <h2 id="comparePanelTitle">缩略图</h2>
+                <p id="comparePanelHint"></p>
               </div>
-              <div id="beforeThumbs" class="floor-thumbs"></div>
-            </section>
-            <section id="afterColumn" class="compare-column">
-              <div class="compare-title compare-title-after">
-                <strong>搬迁后</strong>
-                <span id="afterPlanName"></span>
+              <div class="compare-heading-actions">
+                <button id="newPlanBtn" type="button">新增方案</button>
+                <button id="deletePlanBtn" type="button">删除方案</button>
               </div>
-              <div id="afterThumbs" class="floor-thumbs"></div>
-            </section>
-          </div>
-        </aside>
+            </div>
+            <div id="compareColumns" class="compare-columns is-single">
+              <section id="beforeColumn" class="compare-column">
+                <div class="compare-title compare-title-before">
+                  <span id="beforePlanName"></span>
+                </div>
+                <div id="beforeThumbs" class="floor-thumbs"></div>
+              </section>
+              <section id="afterColumn" class="compare-column is-hidden">
+                <div class="compare-title compare-title-after">
+                  <span id="afterPlanName"></span>
+                </div>
+                <div id="afterThumbs" class="floor-thumbs"></div>
+              </section>
+            </div>
+          </aside>
 
-        <div class="canvas-panel">
-          <div class="canvas-toolbar">
-            <div class="canvas-meta">
-              <strong id="activePlanBadge">当前主图</strong>
-              <span id="canvasModeText">适配显示</span>
+          <div class="canvas-panel">
+            <div class="canvas-toolbar">
+              <div class="canvas-meta">
+                <strong id="activePlanBadge">当前主图</strong>
+                <span id="canvasModeText">适配显示</span>
+              </div>
+              <div>
+                <button id="fitCanvasBtn" type="button">适配</button>
+                <button id="zoomOutBtn" type="button" title="缩小">-</button>
+                <button id="zoomInBtn" type="button" title="放大">+</button>
+              </div>
             </div>
-            <div>
-              <button id="fitCanvasBtn" type="button">适配</button>
-              <button id="zoomOutBtn" type="button" title="缩小">-</button>
-              <button id="zoomInBtn" type="button" title="放大">+</button>
-            </div>
+            <div id="floorplan" class="floorplan is-fit"></div>
           </div>
-          <div id="floorplan" class="floorplan is-fit"></div>
         </div>
 
         <aside class="details">
-          <h2>详细信息</h2>
-          <div id="roomDetails" class="room-details">点击主图中的空间查看当前方案下的实验室与房间信息。</div>
+          <div id="roomDetails" class="room-details">点击主图中的空间，在这里查看当前方案下的空间、实验室和分配信息。</div>
         </aside>
       </section>
 
       <section class="data-panel">
         <div class="panel-heading">
           <div>
-            <h2>数据编辑</h2>
-            <p>界面内部按数据模型维护，但用户始终只需导入或导出一个 Excel 数据包。</p>
+            <h2>高级数据编辑</h2>
+            <p>右侧适合高频查看当前选中对象；底部表格保留为批量修正和结构性调整入口。</p>
           </div>
           <div id="editorTabs" class="editor-tabs"></div>
           <div class="editor-actions">
@@ -107,5 +110,28 @@
         <div id="dataEditor" class="data-editor"></div>
       </section>
     </main>
+
+    <div id="unsavedModal" class="modal-backdrop is-hidden" aria-hidden="true">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="unsavedModalTitle">
+        <h3 id="unsavedModalTitle">有未保存的搬迁内容</h3>
+        <p id="unsavedModalText">右侧搬迁表单里还有未保存内容。继续前请选择保存、放弃，或返回继续编辑。</p>
+        <div class="modal-actions">
+          <button id="unsavedSaveContinueBtn" type="button">保存并继续</button>
+          <button id="unsavedDiscardContinueBtn" type="button">放弃修改并继续</button>
+          <button id="unsavedStayBtn" type="button">返回编辑</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="deletePlanModal" class="modal-backdrop is-hidden" aria-hidden="true">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="deletePlanModalTitle">
+        <h3 id="deletePlanModalTitle">删除当前方案</h3>
+        <p id="deletePlanModalText">删除后，这个方案下的全部分配关系也会一并删除。</p>
+        <div class="modal-actions">
+          <button id="confirmDeletePlanBtn" type="button" class="primary-button">确认删除</button>
+          <button id="cancelDeletePlanBtn" type="button">取消</button>
+        </div>
+      </div>
+    </div>
   </body>
 </html>
