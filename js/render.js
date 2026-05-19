@@ -197,11 +197,14 @@
         <strong>${escapeHtml(building?.building_name || building?.building_code || "")} ${escapeHtml(floorCode)}</strong>
         <span class="north-mark">北</span>
       </div>
-      <svg viewBox="0 0 ${layout.width} ${layout.height}" data-layout-width="${layout.width}" data-layout-height="${layout.height}">
-        <rect width="${layout.width}" height="${layout.height}" fill="#fbfcfe"></rect>
-        ${layout.corridors.map((item) => structureSvg(item, false)).join("")}
-        ${layout.rooms.map((item) => roomSvg(item, colors, false, selectedSpaceId, collegeFilter)).join("")}
-      </svg>`;
+      <div class="floorplan-stage" data-layout-width="${layout.width}" data-layout-height="${layout.height}">
+        <svg viewBox="0 0 ${layout.width} ${layout.height}">
+          <rect width="${layout.width}" height="${layout.height}" fill="#fbfcfe"></rect>
+          ${layout.corridors.map((item) => structureSvg(item, false)).join("")}
+          ${layout.rooms.map((item) => roomSvg(item, colors, false, selectedSpaceId, collegeFilter)).join("")}
+        </svg>
+      </div>`;
+
     floorplanEl.querySelectorAll(".room").forEach((node) => node.addEventListener("click", () => onSelectSpace(node.dataset.spaceId)));
   }
 
@@ -237,34 +240,30 @@
   }
 
   function renderReadonlyDetails(detailsEl, context, onFocusRow, onOpenMove) {
-    const { activePlan, building, space, lab, assignment } = context;
+    const { building, space, lab, assignment } = context;
     const pageTitle = lab?.lab_name || space.space_name || space.space_code;
     const canMove = Boolean(assignment && lab);
-    const detailRows = [
-      detailLine("当前方案", activePlan?.plan_name || "当前方案"),
-      detailLine("空间编码", space.space_code),
-      detailLine("空间名称", space.space_name || "未填写"),
-      detailLine("门牌", space.front_door || "未填写"),
-      detailLine("房间尺寸", `${space.length_m}m × ${space.width_m}m`),
-      detailLine("面积", `${space.area_m2.toFixed(1)} m²`),
-      detailLine("网段信息", space.network_segment || "未填写"),
-      detailLine("空间状态", space.current_status || "active"),
-    ];
+    const detailRows = [detailLine("门牌", space.front_door || "未填写")];
 
     if (lab) {
       detailRows.push(
-        detailLine("实验室名称", lab.lab_name),
         detailLine("所属学院", lab.college),
         detailLine("所属专业", lab.major || "未填写"),
-        detailLine("实验室类型", lab.lab_type || "未填写"),
-        detailLine("负责人", lab.director || "未填写"),
-        detailLine("座位数", String(lab.seat_count)),
-        detailLine("电脑数", String(lab.computer_count)),
+        detailLine("负责人", lab.director || "未填写")
       );
     }
 
-    if (assignment) {
-      detailRows.push(detailLine("分配状态", assignment.assignment_status || "未填写"));
+    detailRows.push(
+      detailLine("房间尺寸", `${space.length_m}m × ${space.width_m}m`),
+      detailLine("面积", `${space.area_m2.toFixed(1)} m²`),
+      detailLine("网段", space.network_segment || "未填写")
+    );
+
+    if (lab) {
+      detailRows.push(
+        detailLine("座位数", String(lab.seat_count)),
+        detailLine("电脑数", String(lab.computer_count))
+      );
     }
 
     detailsEl.innerHTML = `<div class="details-panel is-readonly">
@@ -354,22 +353,8 @@
     detailsEl.querySelector('[data-action="cancel-move"]')?.addEventListener("click", onCancelMove);
   }
 
-  function sideLabel(side) {
-    const labels = { north: "北侧", south: "南侧", east: "东侧", west: "西侧" };
-    return labels[side] || side || "未填写";
-  }
-
   function detailLine(label, value) {
     return `<p><strong>${escapeHtml(label)}：</strong>${escapeHtml(value || "未填写")}</p>`;
-  }
-
-  function renderSummaryChips(space, lab, assignment) {
-    return `<div class="details-chip-row">
-      <span class="details-chip">${escapeHtml(space.front_door || space.space_code)}</span>
-      <span class="details-chip">${escapeHtml(space.current_status || "active")}</span>
-      <span class="details-chip">${escapeHtml(lab?.college || "未分配实验室")}</span>
-      <span class="details-chip">${escapeHtml(assignment?.assignment_status || "待分配")}</span>
-    </div>`;
   }
 
   function readonlyField(label, value) {

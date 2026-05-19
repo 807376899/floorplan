@@ -338,7 +338,7 @@ function renderCompareChrome() {
   els.compareColumns.classList.toggle("is-single", !isCompare);
   els.afterColumn.classList.toggle("is-hidden", !isCompare);
 
-  els.planModeBadge.textContent = isCompare ? `对比模式 · ${state.data.plans.length} 套方案` : "单方案维护";
+  els.planModeBadge.textContent = isCompare ? `对比模式 · ${state.data.plans.length} 套` : "单方案维护";
   els.comparePanelTitle.textContent = "缩略图";
   els.comparePanelHint.textContent = "";
   els.beforePlanName.textContent = beforePlan?.plan_name || activePlan?.plan_name || "";
@@ -945,20 +945,34 @@ function resetCanvasZoom() {
 }
 
 function applyCanvasMode() {
-  const svg = els.floorplan.querySelector("svg");
-  if (!svg) return;
-  const width = Number(svg.dataset.layoutWidth);
-  const height = Number(svg.dataset.layoutHeight);
+  const stage = els.floorplan.querySelector(".floorplan-stage");
+  const svg = stage?.querySelector("svg");
+  if (!stage || !svg) return;
+  const width = Number(stage.dataset.layoutWidth);
+  const height = Number(stage.dataset.layoutHeight);
   const bounds = els.floorplan.getBoundingClientRect();
   const paddingAllowance = 24;
   const fit = Math.max(0.1, Math.min(1, (bounds.width - paddingAllowance) / width, (bounds.height - paddingAllowance) / height));
   const scale = fit * state.zoom;
+  const scaledWidth = width * scale;
+  const scaledHeight = height * scale;
+  const stageWidth = state.zoom > 1 ? scaledWidth : Math.max(scaledWidth, bounds.width - paddingAllowance);
+  const stageHeight = state.zoom > 1 ? scaledHeight : Math.max(scaledHeight, bounds.height - paddingAllowance);
+
   els.floorplan.classList.toggle("is-zoomed", state.zoom > 1);
   els.canvasModeText.textContent = state.zoom === 1 ? "适配显示" : `缩放 ${Math.round(state.zoom * 100)}%`;
-  svg.style.transform = "";
-  svg.style.transformOrigin = "";
-  svg.style.width = `${width * scale}px`;
-  svg.style.height = `${height * scale}px`;
+  stage.style.width = `${stageWidth}px`;
+  stage.style.height = `${stageHeight}px`;
+  svg.style.width = `${scaledWidth}px`;
+  svg.style.height = `${scaledHeight}px`;
+
+  if (state.zoom > 1) {
+    els.floorplan.scrollLeft = Math.max(0, (stageWidth - bounds.width) / 2);
+    els.floorplan.scrollTop = Math.max(0, (stageHeight - bounds.height) / 2);
+  } else {
+    els.floorplan.scrollLeft = 0;
+    els.floorplan.scrollTop = 0;
+  }
 }
 
 function updateDatasetSummary(text) {
