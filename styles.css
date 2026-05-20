@@ -624,6 +624,7 @@ button:disabled {
   display: grid;
   gap: 10px;
   pointer-events: none;
+  
 }
 
 .floorplan-overlay strong {
@@ -682,6 +683,8 @@ button:disabled {
   justify-content: center;
   min-width: 0;
   min-height: 0;
+  padding: 26px;
+  box-sizing: border-box;
   border-radius: 18px;
   background: #fbfcfe;
   
@@ -725,10 +728,11 @@ button:disabled {
 }
 
 .details-panel {
-  display: grid;
+  display: flex;
   gap: 12px;
   height: 100%;
   min-height: 0;
+  flex-direction: column;
 }
 
 .details-header {
@@ -1058,7 +1062,6 @@ button:disabled {
 }
 
 .data-editor td[data-key="building_name"] input,
-.data-editor td[data-key="space_name"] input,
 .data-editor td[data-key="lab_name"] input,
 .data-editor td[data-key="notes"] input,
 .data-editor td[data-key="description"] input,
@@ -1141,16 +1144,28 @@ button:disabled {
 @media (max-width: 1360px) {
   .workspace {
     grid-template-columns: minmax(0, 1fr) 360px;
+    align-items: start;
   }
 
   .visual-stage {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr);
+    display: contents;
   }
 
   .compare-panel {
+    grid-column: 1 / -1;
+    grid-row: 1;
     border-right: 0;
     border-bottom: 1px solid var(--line);
+  }
+
+  .canvas-panel {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .details {
+    grid-column: 2;
+    grid-row: 2;
   }
 
   .compare-columns {
@@ -1187,6 +1202,19 @@ button:disabled {
 @media (max-width: 1120px) {
   .workspace {
     grid-template-columns: 1fr;
+  }
+
+  .visual-stage {
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .compare-panel,
+  .canvas-panel,
+  .details {
+    grid-column: auto;
+    grid-row: auto;
   }
 
   .details {

@@ -119,7 +119,7 @@
 
     const muted = collegeFilter !== ALL_COLLEGES && box.space.lab?.college !== collegeFilter;
     const selected = selectedSpaceId === box.space.id;
-    const label = box.space.lab?.lab_name || box.space.space_name || box.space.front_door || box.space.space_code;
+    const label = box.space.lab?.lab_name || box.space.front_door || box.space.space_code;
     const subLabel = box.space.lab?.college || box.space.network_segment || box.space.current_status;
     return `<g class="room ${muted && box.space.lab ? "is-muted" : ""} ${selected ? "is-selected" : ""}" data-space-id="${box.space.id}">
       <rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="4" fill="${fill}"></rect>
@@ -241,7 +241,7 @@
 
   function renderReadonlyDetails(detailsEl, context, onFocusRow, onOpenMove) {
     const { building, space, lab, assignment } = context;
-    const pageTitle = lab?.lab_name || space.space_name || space.space_code;
+    const pageTitle = lab?.lab_name || space.front_door || space.space_code;
     const canMove = Boolean(assignment && lab);
     const detailRows = [detailLine("门牌", space.front_door || "未填写")];
 

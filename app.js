@@ -740,7 +740,7 @@ function addEditorRow() {
   } else if (state.editorKey === "floor_segments") {
     state.data.floor_segments.push(normalizeSegment({ building_code: buildingCode, floor_code: floorCode, segment_code: `segment-${Date.now()}`, start_x_m: 0, start_y_m: 0, end_x_m: 18, end_y_m: 0, width_m: 2.4, element_type: "corridor", notes: "", created_at: now }));
   } else if (state.editorKey === "spaces") {
-    state.data.spaces.push(normalizeSpace({ space_code: `S-${Date.now()}`, building_code: buildingCode, floor_code: floorCode, segment_code: state.data.floor_segments.find((row) => row.building_code === buildingCode && row.floor_code === floorCode)?.segment_code || "main", offset_m: 0, side: "north", front_door: "000", rear_door: "", space_name: "新增空间", length_m: 8, width_m: 6, network_segment: "", current_status: "active", created_at: now }));
+    state.data.spaces.push(normalizeSpace({ space_code: `S-${Date.now()}`, building_code: buildingCode, floor_code: floorCode, segment_code: state.data.floor_segments.find((row) => row.building_code === buildingCode && row.floor_code === floorCode)?.segment_code || "main", offset_m: 0, side: "north", front_door: "000", rear_door: "", length_m: 8, width_m: 6, network_segment: "", current_status: "active", created_at: now }));
   } else if (state.editorKey === "labs") {
     state.data.labs.push(normalizeLab({ lab_code: `LAB-${Date.now()}`, lab_name: "新增实验室", college: "未设置学院", major: "", lab_type: "教学实验室", director: "", seat_count: 0, computer_count: 0, status: "planning", notes: "", created_at: now }));
   } else if (state.editorKey === "plans") {
@@ -951,7 +951,7 @@ function applyCanvasMode() {
   const width = Number(stage.dataset.layoutWidth);
   const height = Number(stage.dataset.layoutHeight);
   const bounds = els.floorplan.getBoundingClientRect();
-  const paddingAllowance = 24;
+  const paddingAllowance = 72;
   const fit = Math.max(0.1, Math.min(1, (bounds.width - paddingAllowance) / width, (bounds.height - paddingAllowance) / height));
   const scale = fit * state.zoom;
   const scaledWidth = width * scale;
