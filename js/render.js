@@ -216,6 +216,7 @@
       moveDraft,
       moveErrors,
       moveDirty,
+      canEdit,
       onFocusRow,
       onOpenMove,
       onMoveFieldChange,
@@ -236,13 +237,13 @@
       return;
     }
 
-    renderReadonlyDetails(detailsEl, context, onFocusRow, onOpenMove);
+    renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove);
   }
 
-  function renderReadonlyDetails(detailsEl, context, onFocusRow, onOpenMove) {
+  function renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove) {
     const { building, space, lab, assignment } = context;
     const pageTitle = lab?.lab_name || space.front_door || space.space_code;
-    const canMove = Boolean(assignment && lab);
+    const canMove = Boolean(canEdit && assignment && lab);
     const detailRows = [detailLine("门牌", space.front_door || "未填写")];
 
     if (lab) {

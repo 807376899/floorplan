@@ -1,5 +1,6 @@
 server.log
 server.err.log
+data/
 floor.csv
 room.csv
 baseline-upload-package.json

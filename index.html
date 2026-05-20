@@ -18,13 +18,20 @@
           <p>围绕当前楼层与空间直接查看、维护实验室分布，需要时再切换到方案对比。</p>
         </div>
         <div class="controls">
-          <label class="file-control">
-            <span>导入数据包</span>
+          <label id="importPackageLabel" class="file-control">
+            <span>上传数据包</span>
             <input id="packageFileInput" type="file" accept=".xlsx,.xls,.json" />
           </label>
           <button id="loadSampleBtn" type="button">加载示例数据</button>
           <button id="downloadTemplateBtn" type="button">下载模板</button>
           <button id="exportWorkbookBtn" type="button">导出当前数据包</button>
+          <button id="manageImportsBtn" type="button">管理导入草稿</button>
+          <button id="manageSnapshotsBtn" type="button">恢复快照</button>
+          <div class="auth-box">
+            <span id="authStatus" class="auth-status">访客只读</span>
+            <button id="loginBtn" type="button">登录</button>
+            <button id="logoutBtn" type="button">退出</button>
+          </div>
         </div>
       </section>
 
@@ -39,7 +46,7 @@
       </section>
 
       <section class="status-row">
-        <div id="statusText">正在加载示例数据...</div>
+        <div id="statusText">正在加载服务器数据...</div>
         <div id="legend" class="legend"></div>
       </section>
 

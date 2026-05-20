@@ -1,22 +1,16 @@
 # floorplan
 
-实验室搬迁规划前端原型。
+实验室布局维护系统，支持匿名浏览、登录写入、服务端持久化、管理员导入草稿发布与快照恢复。
 
 ## 当前能力
 
-- 采用新的数据模型：
-  - `buildings`
-  - `floor_segments`
-  - `spaces`
-  - `labs`
-  - `plans`
-  - `plan_assignments`
-- 上传入口简化为一个 Excel 数据包，工作簿内通过多个 sheet 管理数据。
-- 左侧并列展示“搬迁前 / 搬迁后”两套缩略图。
-- 中间只展示一套主楼层图，点击任一缩略图切换当前方案与楼层。
-- 右侧详情区跟随当前主图，展示空间、实验室和方案分配信息。
-- 支持在页面内编辑当前数据，并导出整个 Excel 数据包。
-- 使用 `localStorage` 做本地持久化，刷新页面后会恢复上次数据。
+- 服务端使用 Node 内置 `node:sqlite` 持久化正式数据。
+- 匿名用户可直接查看当前正式布局。
+- `editor` 和 `admin` 登录后可在线修改当前数据；保存后刷新页面即可看到最新结果。
+- `editor` 和 `admin` 都可以新增方案；只有 `admin` 可以删除非锁定方案。
+- `admin` 上传 `.xlsx` / `.json` 数据包时，先生成导入草稿，再决定发布或丢弃。
+- 每次发布导入草稿前会自动生成“发布前快照”；系统首次启动会建立“初始基线快照”。
+- `admin` 可从快照恢复当前正式数据。
 
 ## 数据包说明
 
@@ -29,24 +23,47 @@
 - `plans`
 - `plan_assignments`
 
-用户只需要上传这一个 Excel 文件，不需要分别上传多张表。
+部署版仍按“单个完整数据包”导入，不做局部 merge。
 
 ## 运行
+
+```powershell
+npm start
+```
+
+或：
 
 ```powershell
 node server.js
 ```
 
-然后访问 [http://localhost:5173](http://localhost:5173)。
+访问 [http://localhost:5173](http://localhost:5173)。
 
-也可以继续使用：
+## 默认账号
 
-```powershell
-python -m http.server 5173
-```
+首次启动会自动创建两个账号，可通过环境变量覆盖：
+
+- `admin / admin123456`
+- `editor / editor123456`
+
+可选环境变量：
+
+- `FLOORPLAN_ADMIN_USER`
+- `FLOORPLAN_ADMIN_PASSWORD`
+- `FLOORPLAN_EDITOR_USER`
+- `FLOORPLAN_EDITOR_PASSWORD`
+
+## 运行时数据目录
+
+服务端会在仓库下创建 `data/`：
+
+- `data/app.db`：SQLite 数据库
+- `data/uploads/`：导入草稿归档
+- `data/backups/`：数据库备份文件
+
+这些内容已加入 `.gitignore`，不要提交到 Git。
 
 ## 注意
 
-- 页面主体可离线运行。
 - `.xlsx` 的导入、Excel 模板下载、Excel 数据包导出依赖 `index.html` 中的 SheetJS CDN 脚本。
-- 如果当前环境无法访问外网 CDN，页面仍可正常浏览，并且可以导入 / 导出 `.json` 数据包，但 `.xlsx` 相关功能会不可用，状态栏会显示提示。
+- 如果环境无法访问外网 CDN，页面仍可正常浏览，并且可以导入 / 导出 `.json` 数据包，但 `.xlsx` 相关功能会不可用。

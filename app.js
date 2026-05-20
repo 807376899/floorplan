@@ -27,6 +27,10 @@ const { colorMap, renderLegend, renderThumbList, renderFloorplan, renderDetailsP
 
 const state = {
   data: emptyDataset(),
+  serverRevision: 0,
+  user: null,
+  permissions: { role: "viewer", canEdit: false, canAdmin: false },
+  serverMode: false,
   selectedSpaceId: null,
   editorKey: "spaces",
   editorHighlight: null,
@@ -54,18 +58,22 @@ function bindEvents() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    runWithUnsavedGuard(() => importPackageFile(file));
+    runWithUnsavedGuard(() => { void importPackageFile(file); });
   });
   els.loadSampleBtn.addEventListener("click", () => runWithUnsavedGuard(loadSampleData));
   els.downloadTemplateBtn.addEventListener("click", downloadTemplateWorkbook);
   els.exportWorkbookBtn.addEventListener("click", () => runWithUnsavedGuard(exportWorkbook));
+  els.manageImportsBtn.addEventListener("click", () => void manageImportDrafts());
+  els.manageSnapshotsBtn.addEventListener("click", () => void manageSnapshots());
+  els.loginBtn.addEventListener("click", () => void loginFlow());
+  els.logoutBtn.addEventListener("click", () => void logoutFlow());
   els.fitCanvasBtn.addEventListener("click", resetCanvasZoom);
   els.zoomOutBtn.addEventListener("click", () => changeCanvasZoom(-0.15));
   els.zoomInBtn.addEventListener("click", () => changeCanvasZoom(0.15));
   els.addRowBtn.addEventListener("click", () => runWithUnsavedGuard(addEditorRow));
-  els.applyTableBtn.addEventListener("click", () => runWithUnsavedGuard(applyEditorRows));
+  els.applyTableBtn.addEventListener("click", () => runWithUnsavedGuard(() => { void applyEditorRows(); }));
   els.downloadSheetBtn.addEventListener("click", () => runWithUnsavedGuard(downloadCurrentSheet));
-  els.newPlanBtn.addEventListener("click", () => runWithUnsavedGuard(createPlanFromActive));
+  els.newPlanBtn.addEventListener("click", () => runWithUnsavedGuard(() => { void createPlanFromActiveAction(); }));
   els.deletePlanBtn.addEventListener("click", () => runWithUnsavedGuard(openDeletePlanModal));
 
   els.buildingSelect.addEventListener("change", (event) => handleSelectChange(event, () => {
@@ -91,13 +99,118 @@ function bindEvents() {
   els.unsavedDiscardContinueBtn.addEventListener("click", discardAndContinuePendingAction);
   els.unsavedStayBtn.addEventListener("click", closeUnsavedModal);
 
-  els.confirmDeletePlanBtn.addEventListener("click", confirmDeletePlan);
+  els.confirmDeletePlanBtn.addEventListener("click", () => void confirmDeletePlanAction());
   els.cancelDeletePlanBtn.addEventListener("click", closeDeletePlanModal);
 
   window.addEventListener("resize", () => els.floorplan.classList.contains("is-fit") && applyCanvasMode());
 }
 
-function bootstrap() {
+async function bootstrap() {
+  try {
+    const payload = await fetchJson("/api/bootstrap");
+    state.serverMode = true;
+    state.user = payload.user;
+    state.permissions = payload.permissions;
+    state.serverRevision = payload.revision;
+    state.data = normalizeDataset(payload.dataset);
+    resetContextState();
+    refreshStateAndRender("已加载服务器当前数据", { stamp: false, forceMoveReset: true });
+    return;
+  } catch (error) {
+    console.warn("bootstrap from server failed", error);
+  }
+  bootstrapLocal();
+}
+
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(payload.message || payload.error || "请求失败");
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
+}
+
+function cloneDataset(dataset) {
+  return JSON.parse(JSON.stringify(dataset));
+}
+
+function applyAuthUi() {
+  const role = state.permissions.role || "viewer";
+  els.authStatus.textContent = state.user ? `${state.user.username} · ${role}` : "访客只读";
+  els.authStatus.classList.toggle("is-viewer", role === "viewer");
+  els.authStatus.classList.toggle("is-admin", role === "admin");
+  els.loginBtn.hidden = Boolean(state.user);
+  els.logoutBtn.hidden = !state.user;
+  els.importPackageLabel.hidden = !state.permissions.canAdmin;
+  els.manageImportsBtn.hidden = !state.permissions.canAdmin;
+  els.manageSnapshotsBtn.hidden = !state.permissions.canAdmin;
+  els.loadSampleBtn.hidden = state.serverMode;
+  els.addRowBtn.disabled = !state.permissions.canEdit;
+  els.applyTableBtn.disabled = !state.permissions.canEdit;
+  els.newPlanBtn.disabled = !state.permissions.canEdit;
+}
+
+async function loginFlow() {
+  const username = window.prompt("请输入账号");
+  if (!username) return;
+  const password = window.prompt("请输入密码");
+  if (!password) return;
+  try {
+    const payload = await fetchJson("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+    state.user = payload.user;
+    state.permissions = payload.permissions;
+    applyAuthUi();
+    renderApp();
+    updateStatus(`已登录为 ${payload.user.username}`);
+  } catch (error) {
+    updateStatus(`登录失败：${error.message}`);
+  }
+}
+
+async function logoutFlow() {
+  try {
+    await fetchJson("/api/auth/logout", { method: "POST", body: JSON.stringify({}) });
+    state.user = null;
+    state.permissions = { role: "viewer", canEdit: false, canAdmin: false };
+    applyAuthUi();
+    renderApp();
+    updateStatus("已退出登录");
+  } catch (error) {
+    updateStatus(`退出失败：${error.message}`);
+  }
+}
+
+async function saveDatasetToServer(changeNote) {
+  if (!state.serverMode) return true;
+  const payload = await fetchJson("/api/dataset/active", {
+    method: "PUT",
+    body: JSON.stringify({
+      dataset: state.data,
+      expectedRevision: state.serverRevision,
+      changeNote,
+    }),
+  });
+  state.serverRevision = payload.revision;
+  state.data = normalizeDataset(payload.dataset);
+  persistDataset();
+  return true;
+}
+
+function bootstrapLocal() {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored) {
     try {
@@ -139,19 +252,96 @@ function loadSampleData() {
 }
 
 async function importPackageFile(file) {
+  if (!state.permissions.canAdmin) {
+    updateStatus("只有管理员可以上传新的数据包草稿。");
+    return;
+  }
   try {
     let raw;
     const name = file.name.toLowerCase();
     if (name.endsWith(".json")) raw = JSON.parse(await file.text());
     else if ((name.endsWith(".xlsx") || name.endsWith(".xls")) && workbookAvailable()) raw = readWorkbookDataset(await file.arrayBuffer());
     else throw new Error("请导入单个 Excel 数据包，或在无法读取 Excel 时导入 JSON 数据包。");
-
-    state.data = normalizeDataset(raw);
-    resetContextState();
-    refreshStateAndRender(`已导入数据包 ${file.name}`, { stamp: true, forceMoveReset: true });
+    const normalized = normalizeDataset(raw);
+    const payload = await fetchJson("/api/imports", {
+      method: "POST",
+      body: JSON.stringify({
+        fileName: file.name,
+        sourceType: name.endsWith(".json") ? "json" : "xlsx",
+        dataset: normalized,
+      }),
+    });
+    updateStatus(`已创建导入草稿 #${payload.draftId}，请在“管理导入草稿”中发布或丢弃。`);
   } catch (error) {
     updateStatus(`导入失败：${error.message}`);
   }
+}
+
+async function manageImportDrafts() {
+  if (!state.permissions.canAdmin) {
+    updateStatus("只有管理员可以管理导入草稿。");
+    return;
+  }
+  try {
+    const payload = await fetchJson("/api/imports");
+    if (!payload.drafts.length) {
+      updateStatus("当前没有待处理的导入草稿。");
+      return;
+    }
+    const summary = payload.drafts
+      .map((draft) => `#${draft.id} ${draft.file_name} [${draft.status}] Δ空间${draft.summary.delta.spaces}, Δ实验室${draft.summary.delta.labs}, Δ方案${draft.summary.delta.plans}`)
+      .join("\n");
+    const command = window.prompt(`导入草稿列表：\n${summary}\n\n输入“P 空格 ID”发布，输入“D 空格 ID”丢弃。`);
+    if (!command) return;
+    const [action, rawId] = command.trim().split(/\s+/);
+    const draftId = Number(rawId);
+    if (!draftId) return;
+    if (String(action).toUpperCase() === "P") {
+      await fetchJson(`/api/imports/${draftId}/publish`, { method: "POST", body: JSON.stringify({}) });
+      await reloadDatasetFromServer("已发布导入草稿并替换当前正式数据");
+      return;
+    }
+    if (String(action).toUpperCase() === "D") {
+      await fetchJson(`/api/imports/${draftId}`, { method: "DELETE" });
+      updateStatus(`已丢弃导入草稿 #${draftId}`);
+    }
+  } catch (error) {
+    updateStatus(`草稿管理失败：${error.message}`);
+  }
+}
+
+async function manageSnapshots() {
+  if (!state.permissions.canAdmin) {
+    updateStatus("只有管理员可以恢复快照。");
+    return;
+  }
+  try {
+    const payload = await fetchJson("/api/snapshots");
+    if (!payload.snapshots.length) {
+      updateStatus("当前没有可恢复的快照。");
+      return;
+    }
+    const summary = payload.snapshots
+      .map((snapshot) => `#${snapshot.id} ${snapshot.kind} rev:${snapshot.source_revision} ${snapshot.label}`)
+      .join("\n");
+    const command = window.prompt(`快照列表：\n${summary}\n\n输入“R 空格 ID”恢复对应快照。`);
+    if (!command) return;
+    const [action, rawId] = command.trim().split(/\s+/);
+    const snapshotId = Number(rawId);
+    if (String(action).toUpperCase() !== "R" || !snapshotId) return;
+    await fetchJson(`/api/snapshots/${snapshotId}/restore`, { method: "POST", body: JSON.stringify({}) });
+    await reloadDatasetFromServer(`已从快照 #${snapshotId} 恢复当前正式数据`);
+  } catch (error) {
+    updateStatus(`快照恢复失败：${error.message}`);
+  }
+}
+
+async function reloadDatasetFromServer(message) {
+  const payload = await fetchJson("/api/dataset/active");
+  state.serverRevision = payload.revision;
+  state.data = normalizeDataset(payload.dataset);
+  resetContextState();
+  refreshStateAndRender(message, { stamp: false, forceMoveReset: true });
 }
 
 function resetContextState() {
@@ -195,6 +385,7 @@ function refreshStateAndRender(message, options = {}) {
   ensureActivePlan();
   syncSelectedSpace();
   syncMoveDraft(forceMoveReset);
+  applyAuthUi();
   renderEditorTabs();
   renderEditor();
   renderApp();
@@ -330,7 +521,7 @@ function renderCompareChrome() {
   const afterPlan = planById(els.afterPlanSelect.value);
   const activePlan = planById(state.activePlanId);
   const deletePlan = activePlan;
-  const canDeletePlan = Boolean(deletePlan && !deletePlan.is_locked && state.data.plans.length > 1);
+  const canDeletePlan = Boolean(state.permissions.canAdmin && deletePlan && !deletePlan.is_locked && state.data.plans.length > 1);
 
   els.planCompareFilters.classList.toggle("is-hidden", !isCompare);
   els.beforePlanSelect.disabled = !isCompare;
@@ -344,6 +535,7 @@ function renderCompareChrome() {
   els.beforePlanName.textContent = beforePlan?.plan_name || activePlan?.plan_name || "";
   els.afterPlanName.textContent = isCompare ? afterPlan?.plan_name || "" : "";
 
+  els.newPlanBtn.disabled = !state.permissions.canEdit;
   els.deletePlanBtn.disabled = !canDeletePlan;
   els.deletePlanBtn.title = canDeletePlan ? "" : (deletePlan?.is_locked ? "锁定方案不可删除" : "至少保留一套方案");
 }
@@ -417,10 +609,11 @@ function renderApp() {
     moveDraft: state.moveDraft,
     moveErrors: state.moveErrors,
     moveDirty: state.moveDirty,
+    canEdit: state.permissions.canEdit,
     onFocusRow: focusRowFromDetails,
     onOpenMove: openMoveMode,
     onMoveFieldChange: updateMoveField,
-    onConfirmMove: confirmMoveAssignment,
+    onConfirmMove: confirmMoveAssignmentAction,
     onCancelMove: cancelMoveMode,
   });
 
@@ -503,6 +696,10 @@ function handleSpaceSelect(spaceId) {
 }
 
 function openMoveMode() {
+  if (!state.permissions.canEdit) {
+    updateStatus("请先以 editor 或 admin 身份登录后再执行搬迁。");
+    return;
+  }
   const context = getSelectedContext();
   if (!context.assignment || !context.lab) {
     updateStatus("当前空间在此方案下没有已绑定实验室，无法直接搬迁。");
@@ -605,6 +802,27 @@ function confirmMoveAssignment() {
   return true;
 }
 
+async function confirmMoveAssignmentAction() {
+  if (!state.permissions.canEdit) {
+    updateStatus("当前账号没有搬迁权限。");
+    return false;
+  }
+  const previousData = cloneDataset(state.data);
+  const previousRevision = state.serverRevision;
+  const ok = confirmMoveAssignment();
+  if (!ok) return false;
+  try {
+    await saveDatasetToServer("搬迁实验室");
+    refreshStateAndRender("已保存实验室搬迁。", { stamp: false, forceMoveReset: true });
+    return true;
+  } catch (error) {
+    state.data = normalizeDataset(previousData);
+    state.serverRevision = previousRevision;
+    refreshStateAndRender(`搬迁保存失败：${error.message}`, { stamp: false, forceMoveReset: true });
+    return false;
+  }
+}
+
 function focusRowFromDetails(key, rowId) {
   runWithUnsavedGuard(() => {
     state.detailsMode = "view";
@@ -640,10 +858,10 @@ function closeUnsavedModal() {
   els.unsavedModal.setAttribute("aria-hidden", "true");
 }
 
-function saveAndContinuePendingAction() {
+async function saveAndContinuePendingAction() {
   const pending = state.pendingNavigation;
   if (!pending) return;
-  if (!confirmMoveAssignment()) return;
+  if (!(await confirmMoveAssignmentAction())) return;
   closeUnsavedModal();
   pending();
 }
@@ -661,6 +879,10 @@ function discardAndContinuePendingAction() {
 }
 
 function openDeletePlanModal() {
+  if (!state.permissions.canAdmin) {
+    updateStatus("只有管理员可以删除方案。");
+    return;
+  }
   const plan = planById(state.activePlanId);
   if (!plan) return;
   if (plan.is_locked) {
@@ -701,6 +923,26 @@ function confirmDeletePlan() {
   refreshStateAndRender(`已删除方案 ${plan.plan_name}`, { stamp: false, forceMoveReset: true });
 }
 
+async function confirmDeletePlanAction() {
+  if (!state.permissions.canAdmin) {
+    updateStatus("只有管理员可以删除方案。");
+    return;
+  }
+  const previousData = cloneDataset(state.data);
+  const previousRevision = state.serverRevision;
+  confirmDeletePlan();
+  if (JSON.stringify(previousData) === JSON.stringify(state.data)) return;
+  try {
+    await saveDatasetToServer("删除方案");
+    refreshStateAndRender("已删除当前方案。", { stamp: false, forceMoveReset: true });
+  } catch (error) {
+    state.data = normalizeDataset(previousData);
+    state.serverRevision = previousRevision;
+    closeDeletePlanModal();
+    refreshStateAndRender(`删除方案失败：${error.message}`, { stamp: false, forceMoveReset: true });
+  }
+}
+
 function renderEditor() {
   const definition = DATASETS.find((item) => item.key === state.editorKey);
   const rows = editorRows();
@@ -714,7 +956,8 @@ function renderEditor() {
     return;
   }
 
-  els.dataEditor.innerHTML = `<table><thead><tr>${definition.columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${rows.map((row, rowIndex) => `<tr data-row-id="${escapeHtml(row.id || "")}" class="${highlightRowId && row.id === highlightRowId ? "is-highlight" : ""}">${definition.columns.map(([key]) => `<td data-key="${key}"><input data-row="${rowIndex}" data-key="${key}" value="${escapeHtml(row[key] ?? "")}"></td>`).join("")}</tr>`).join("")}</tbody></table>`;
+  const inputDisabled = state.permissions.canEdit ? "" : "disabled";
+  els.dataEditor.innerHTML = `<table><thead><tr>${definition.columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${rows.map((row, rowIndex) => `<tr data-row-id="${escapeHtml(row.id || "")}" class="${highlightRowId && row.id === highlightRowId ? "is-highlight" : ""}">${definition.columns.map(([key]) => `<td data-key="${key}"><input data-row="${rowIndex}" data-key="${key}" value="${escapeHtml(row[key] ?? "")}" ${inputDisabled}></td>`).join("")}</tr>`).join("")}</tbody></table>`;
 
   if (highlightRowId) {
     const highlightedRow = [...els.dataEditor.querySelectorAll("tr")].find((row) => row.dataset.rowId === highlightRowId);
@@ -732,6 +975,10 @@ function editorRows() {
 }
 
 function addEditorRow() {
+  if (!state.permissions.canEdit) {
+    updateStatus("当前账号没有编辑权限。");
+    return;
+  }
   const now = isoNow();
   const buildingCode = els.buildingSelect.value || "B01";
   const floorCode = els.floorSelect.value || "1";
@@ -762,7 +1009,13 @@ function addEditorRow() {
   refreshStateAndRender("已新增一行。", { stamp: false, forceMoveReset: true });
 }
 
-function applyEditorRows() {
+async function applyEditorRows() {
+  if (!state.permissions.canEdit) {
+    updateStatus("当前账号没有编辑权限。");
+    return;
+  }
+  const previousData = cloneDataset(state.data);
+  const previousRevision = state.serverRevision;
   const rows = editorRows().map(() => ({}));
   els.dataEditor.querySelectorAll("input").forEach((input) => {
     rows[Number(input.dataset.row)][input.dataset.key] = input.value;
@@ -776,7 +1029,14 @@ function applyEditorRows() {
   if (state.editorKey === "plan_assignments") replaceFilteredAssignments(rows.map((row) => normalizeAssignment(row, relationMaps(state.data))));
 
   state.data = normalizeDataset(state.data);
-  refreshStateAndRender("已应用表格修改。", { stamp: false, forceMoveReset: true });
+  try {
+    await saveDatasetToServer(`编辑 ${state.editorKey}`);
+    refreshStateAndRender("已应用表格修改。", { stamp: false, forceMoveReset: true });
+  } catch (error) {
+    state.data = normalizeDataset(previousData);
+    state.serverRevision = previousRevision;
+    refreshStateAndRender(`表格保存失败：${error.message}`, { stamp: false, forceMoveReset: true });
+  }
 }
 
 function replaceFilteredRows(key, replacement) {
@@ -795,7 +1055,13 @@ function replaceFilteredAssignments(replacement) {
   ];
 }
 
-function createPlanFromActive() {
+async function createPlanFromActive() {
+  if (!state.permissions.canEdit) {
+    updateStatus("当前账号没有新增方案权限。");
+    return;
+  }
+  const previousData = cloneDataset(state.data);
+  const previousRevision = state.serverRevision;
   const activePlan = planById(state.activePlanId) || state.data.plans[0];
   if (!activePlan) {
     updateStatus("当前没有可复制的方案。");
@@ -842,6 +1108,21 @@ function createPlanFromActive() {
   state.detailsMode = "view";
 
   refreshStateAndRender(`已基于 ${activePlan.plan_name} 新增方案 ${planName}。`, { stamp: false, forceMoveReset: true });
+}
+
+async function createPlanFromActiveAction() {
+  const previousData = cloneDataset(state.data);
+  const previousRevision = state.serverRevision;
+  await createPlanFromActive();
+  if (JSON.stringify(previousData) === JSON.stringify(state.data)) return;
+  try {
+    await saveDatasetToServer("新增方案");
+    refreshStateAndRender("已保存新增方案。", { stamp: false, forceMoveReset: true });
+  } catch (error) {
+    state.data = normalizeDataset(previousData);
+    state.serverRevision = previousRevision;
+    refreshStateAndRender(`新增方案失败：${error.message}`, { stamp: false, forceMoveReset: true });
+  }
 }
 
 function uniquePlanName(baseName) {
