@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>实验室布局维护系统</title>
+    <title>实验室布局</title>
     <link rel="stylesheet" href="./styles.css" />
     <script defer src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
     <script defer src="./js/domain.js"></script>
@@ -14,8 +14,7 @@
     <main class="shell">
       <section class="topbar">
         <div class="brand">
-          <h1>实验室布局维护系统</h1>
-          <p>围绕当前楼层与空间直接查看、维护实验室分布，需要时再切换到方案对比。</p>
+          <h1>实验室布局</h1>
         </div>
         <div class="controls">
           <label id="importPackageLabel" class="file-control">
@@ -49,8 +48,8 @@
         </div>
         <label id="singlePlanFilter">当前方案<select id="currentPlanSelect"></select></label>
         <div id="planCompareFilters" class="plan-filter-group">
-          <label>对比前方案<select id="beforePlanSelect"></select></label>
-          <label>对比后方案<select id="afterPlanSelect"></select></label>
+          <label>左侧方案<select id="beforePlanSelect"></select></label>
+          <label>右侧方案<select id="afterPlanSelect"></select></label>
         </div>
       </section>
 
@@ -64,7 +63,6 @@
           <aside class="compare-panel">
             <div class="compare-heading">
               <div>
-                <span id="planModeBadge" class="mode-badge">单方案维护</span>
                 <h2 id="comparePanelTitle">缩略图</h2>
                 <p id="comparePanelHint"></p>
               </div>

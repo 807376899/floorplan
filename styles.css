@@ -434,19 +434,6 @@ button:disabled {
   display: none;
 }
 
-.mode-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  border-radius: 999px;
-  border: 1px solid rgba(29, 78, 216, 0.16);
-  background: rgba(230, 239, 255, 0.88);
-  color: var(--before);
-  font-size: 12px;
-  font-weight: 700;
-  padding: 0 10px;
-}
-
 .compare-heading-actions {
   display: flex;
   align-items: center;
@@ -661,8 +648,8 @@ button:disabled {
 }
 
 .floorplan.is-zoomed {
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
+  justify-content: flex-start;
   overflow: auto;
   cursor: grab;
 }
@@ -756,6 +743,7 @@ button:disabled {
 
 .floorplan-stage {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   min-width: 0;
@@ -765,6 +753,11 @@ button:disabled {
   border-radius: 18px;
   background: #fbfcfe;
   
+}
+
+.floorplan.is-zoomed .floorplan-stage {
+  margin-top: 44px;
+  margin-bottom: 18px;
 }
 
 .room {

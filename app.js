@@ -658,7 +658,6 @@ function renderCompareChrome() {
   els.compareColumns.classList.toggle("is-single", !isCompare);
   els.afterColumn.classList.toggle("is-hidden", !isCompare);
 
-  els.planModeBadge.textContent = isCompare ? `对比模式 · ${state.data.plans.length} 套` : "单方案维护";
   els.comparePanelTitle.textContent = "缩略图";
   els.comparePanelHint.textContent = isCompare ? "点击左右缩略图，切换主图中的对比方案。" : "当前按单方案维护，可随时切换到对比模式。";
   els.beforePlanName.textContent = isCompare
@@ -1406,8 +1405,9 @@ function applyCanvasMode() {
   const scale = fit * state.zoom;
   const scaledWidth = width * scale;
   const scaledHeight = height * scale;
-  const stageWidth = state.zoom > 1 ? scaledWidth : Math.max(scaledWidth, bounds.width - paddingAllowance);
-  const stageHeight = state.zoom > 1 ? scaledHeight : Math.max(scaledHeight, bounds.height - paddingAllowance);
+  const stagePadding = 52;
+  const stageWidth = Math.max(scaledWidth + stagePadding, bounds.width - paddingAllowance);
+  const stageHeight = Math.max(scaledHeight + stagePadding, bounds.height - paddingAllowance);
 
   els.floorplan.classList.toggle("is-zoomed", state.zoom > 1);
   els.canvasModeText.textContent = state.zoom === 1 ? "适配显示" : `缩放 ${Math.round(state.zoom * 100)}%`;
