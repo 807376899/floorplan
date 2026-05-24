@@ -27,6 +27,7 @@
           <button id="exportWorkbookBtn" type="button">导出当前数据包</button>
           <button id="manageImportsBtn" type="button">管理导入草稿</button>
           <button id="manageSnapshotsBtn" type="button">恢复快照</button>
+          <button id="repairTextBtn" type="button" hidden>修复中文显示</button>
           <div class="auth-box">
             <span id="authStatus" class="auth-status">访客只读</span>
             <button id="loginBtn" type="button">登录</button>
@@ -39,6 +40,14 @@
         <label>教学楼<select id="buildingSelect"></select></label>
         <label>楼层<select id="floorSelect"></select></label>
         <label>学院高亮<select id="collegeSelect"></select></label>
+        <div class="plan-mode-box">
+          <span>方案模式</span>
+          <div class="mode-toggle" role="tablist" aria-label="方案显示模式">
+            <button id="singleModeBtn" type="button" class="is-active">单方案</button>
+            <button id="compareModeBtn" type="button">对比模式</button>
+          </div>
+        </div>
+        <label id="singlePlanFilter">当前方案<select id="currentPlanSelect"></select></label>
         <div id="planCompareFilters" class="plan-filter-group">
           <label>对比前方案<select id="beforePlanSelect"></select></label>
           <label>对比后方案<select id="afterPlanSelect"></select></label>
@@ -138,6 +147,53 @@
           <button id="confirmDeletePlanBtn" type="button" class="primary-button">确认删除</button>
           <button id="cancelDeletePlanBtn" type="button">取消</button>
         </div>
+      </div>
+    </div>
+
+    <div id="loginModal" class="modal-backdrop is-hidden" aria-hidden="true">
+      <div class="modal-card modal-card-form" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
+        <h3 id="loginModalTitle">登录编辑账号</h3>
+        <p>访客可直接浏览；如需维护布局、上传数据包或管理方案，请登录编辑或管理员账号。</p>
+        <form id="loginForm" class="modal-form">
+          <label class="modal-field">
+            <span>账号</span>
+            <input id="loginUsernameInput" name="username" type="text" autocomplete="username" />
+          </label>
+          <label class="modal-field">
+            <span>密码</span>
+            <div class="password-row">
+              <input id="loginPasswordInput" name="password" type="password" autocomplete="current-password" />
+              <button id="togglePasswordBtn" type="button" class="ghost-button">显示</button>
+            </div>
+          </label>
+          <label class="modal-check">
+            <input id="rememberLoginInput" name="remember" type="checkbox" checked />
+            <span>记住登录状态，后续打开时无需重复输入密码</span>
+          </label>
+          <div id="loginErrorText" class="modal-error" aria-live="polite"></div>
+          <div class="modal-actions">
+            <button id="loginSubmitBtn" type="submit" class="primary-button">登录</button>
+            <button id="cancelLoginBtn" type="button">取消</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="newPlanModal" class="modal-backdrop is-hidden" aria-hidden="true">
+      <div class="modal-card modal-card-form" role="dialog" aria-modal="true" aria-labelledby="newPlanModalTitle">
+        <h3 id="newPlanModalTitle">新增方案</h3>
+        <p id="newPlanModalText">基于当前方案复制一套新方案，并同步复制当前分配关系。</p>
+        <form id="newPlanForm" class="modal-form">
+          <label class="modal-field">
+            <span>方案名称</span>
+            <input id="newPlanNameInput" name="planName" type="text" maxlength="60" />
+          </label>
+          <div id="newPlanErrorText" class="modal-error" aria-live="polite"></div>
+          <div class="modal-actions">
+            <button id="confirmNewPlanBtn" type="submit" class="primary-button">创建方案</button>
+            <button id="cancelNewPlanBtn" type="button">取消</button>
+          </div>
+        </form>
       </div>
     </div>
   </body>

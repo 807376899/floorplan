@@ -244,6 +244,8 @@
     const { building, space, lab, assignment } = context;
     const pageTitle = lab?.lab_name || space.front_door || space.space_code;
     const canMove = Boolean(canEdit && assignment && lab);
+    const spaceActionLabel = canEdit ? "编辑此空间" : "查看此空间";
+    const labActionLabel = canEdit ? "编辑此实验室" : "查看此实验室";
     const detailRows = [detailLine("门牌", space.front_door || "未填写")];
 
     if (lab) {
@@ -289,10 +291,10 @@
       </div>
 
       <div class="details-actions">
-        <button type="button" class="link-button action-link" data-focus-key="spaces" data-focus-id="${escapeHtml(space.id)}">编辑此空间</button>
-        <button type="button" class="link-button action-link" data-focus-key="labs" data-focus-id="${escapeHtml(lab?.id || "")}" ${lab ? "" : "disabled"}>编辑此实验室</button>
+        <button type="button" class="link-button action-link" data-focus-key="spaces" data-focus-id="${escapeHtml(space.id)}">${spaceActionLabel}</button>
+        <button type="button" class="link-button action-link" data-focus-key="labs" data-focus-id="${escapeHtml(lab?.id || "")}" ${lab ? "" : "disabled"}>${labActionLabel}</button>
         <button type="button" class="link-button action-link" data-focus-key="plan_assignments" data-focus-id="${escapeHtml(assignment?.id || "")}">${assignment ? "查看当前分配" : "去分配表处理"}</button>
-        <button type="button" class="primary-button" data-action="move" ${canMove ? "" : "disabled"}>搬迁实验室</button>
+        ${canEdit ? `<button type="button" class="primary-button" data-action="move" ${canMove ? "" : "disabled"}>搬迁实验室</button>` : ""}
       </div>
     </div>`;
 

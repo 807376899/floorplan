@@ -24,6 +24,7 @@ const {
   isoNow,
 } = window.FloorplanDomain;
 const { colorMap, renderLegend, renderThumbList, renderFloorplan, renderDetailsPanel } = window.FloorplanRender;
+const REMEMBERED_USER_KEY = "floorplan_remembered_user";
 
 const state = {
   data: emptyDataset(),
@@ -31,6 +32,11 @@ const state = {
   user: null,
   permissions: { role: "viewer", canEdit: false, canAdmin: false },
   serverMode: false,
+  maintenance: {
+    textCorruptionDetected: false,
+    textRepairAvailable: false,
+    textRepairSourceLabel: "",
+  },
   selectedSpaceId: null,
   editorKey: "spaces",
   editorHighlight: null,
@@ -44,6 +50,8 @@ const state = {
   moveTargetKey: null,
   pendingNavigation: null,
   planDeleteTargetId: null,
+  loginSubmitting: false,
+  planDraftName: "",
   statusMessage: "",
 };
 
@@ -65,7 +73,8 @@ function bindEvents() {
   els.exportWorkbookBtn.addEventListener("click", () => runWithUnsavedGuard(exportWorkbook));
   els.manageImportsBtn.addEventListener("click", () => void manageImportDrafts());
   els.manageSnapshotsBtn.addEventListener("click", () => void manageSnapshots());
-  els.loginBtn.addEventListener("click", () => void loginFlow());
+  els.repairTextBtn.addEventListener("click", () => void repairCorruptedText());
+  els.loginBtn.addEventListener("click", openLoginModal);
   els.logoutBtn.addEventListener("click", () => void logoutFlow());
   els.fitCanvasBtn.addEventListener("click", resetCanvasZoom);
   els.zoomOutBtn.addEventListener("click", () => changeCanvasZoom(-0.15));
@@ -73,8 +82,10 @@ function bindEvents() {
   els.addRowBtn.addEventListener("click", () => runWithUnsavedGuard(addEditorRow));
   els.applyTableBtn.addEventListener("click", () => runWithUnsavedGuard(() => { void applyEditorRows(); }));
   els.downloadSheetBtn.addEventListener("click", () => runWithUnsavedGuard(downloadCurrentSheet));
-  els.newPlanBtn.addEventListener("click", () => runWithUnsavedGuard(() => { void createPlanFromActiveAction(); }));
+  els.newPlanBtn.addEventListener("click", () => runWithUnsavedGuard(openNewPlanModal));
   els.deletePlanBtn.addEventListener("click", () => runWithUnsavedGuard(openDeletePlanModal));
+  els.singleModeBtn.addEventListener("click", () => runWithUnsavedGuard(() => setPlanViewMode("single")));
+  els.compareModeBtn.addEventListener("click", () => runWithUnsavedGuard(() => setPlanViewMode("compare")));
 
   els.buildingSelect.addEventListener("change", (event) => handleSelectChange(event, () => {
     populateFloorOptions();
@@ -92,6 +103,7 @@ function bindEvents() {
     renderApp();
   }));
   els.collegeSelect.addEventListener("change", (event) => handleSelectChange(event, renderApp));
+  els.currentPlanSelect.addEventListener("change", (event) => handleSelectChange(event, onPlanSelectorChange));
   els.beforePlanSelect.addEventListener("change", (event) => handleSelectChange(event, onPlanSelectorChange));
   els.afterPlanSelect.addEventListener("change", (event) => handleSelectChange(event, onPlanSelectorChange));
 
@@ -101,6 +113,17 @@ function bindEvents() {
 
   els.confirmDeletePlanBtn.addEventListener("click", () => void confirmDeletePlanAction());
   els.cancelDeletePlanBtn.addEventListener("click", closeDeletePlanModal);
+  els.loginForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void loginFlow();
+  });
+  els.cancelLoginBtn.addEventListener("click", closeLoginModal);
+  els.togglePasswordBtn.addEventListener("click", togglePasswordVisibility);
+  els.newPlanForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void createPlanFromActiveAction();
+  });
+  els.cancelNewPlanBtn.addEventListener("click", closeNewPlanModal);
 
   window.addEventListener("resize", () => els.floorplan.classList.contains("is-fit") && applyCanvasMode());
 }
@@ -112,9 +135,10 @@ async function bootstrap() {
     state.user = payload.user;
     state.permissions = payload.permissions;
     state.serverRevision = payload.revision;
+    state.maintenance = payload.maintenance || state.maintenance;
     state.data = normalizeDataset(payload.dataset);
     resetContextState();
-    refreshStateAndRender("已加载服务器当前数据", { stamp: false, forceMoveReset: true });
+    refreshStateAndRender(buildBootstrapStatus("已加载服务器当前数据"), { stamp: false, forceMoveReset: true });
     return;
   } catch (error) {
     console.warn("bootstrap from server failed", error);
@@ -145,6 +169,14 @@ function cloneDataset(dataset) {
   return JSON.parse(JSON.stringify(dataset));
 }
 
+function buildBootstrapStatus(baseText) {
+  if (!state.maintenance.textCorruptionDetected) return baseText;
+  const suffix = state.permissions.canAdmin && state.maintenance.textRepairAvailable
+    ? ` 检测到当前正式数据的中文文本可能已损坏，可点击“修复中文显示”恢复。`
+    : " 检测到当前正式数据的中文文本可能已损坏。";
+  return `${baseText}。${suffix}`;
+}
+
 function applyAuthUi() {
   const role = state.permissions.role || "viewer";
   els.authStatus.textContent = state.user ? `${state.user.username} · ${role}` : "访客只读";
@@ -153,31 +185,70 @@ function applyAuthUi() {
   els.loginBtn.hidden = Boolean(state.user);
   els.logoutBtn.hidden = !state.user;
   els.importPackageLabel.hidden = !state.permissions.canAdmin;
+  els.downloadTemplateBtn.hidden = !state.permissions.canEdit;
   els.manageImportsBtn.hidden = !state.permissions.canAdmin;
   els.manageSnapshotsBtn.hidden = !state.permissions.canAdmin;
+  els.repairTextBtn.hidden = !(state.permissions.canAdmin && state.maintenance.textRepairAvailable);
   els.loadSampleBtn.hidden = state.serverMode;
-  els.addRowBtn.disabled = !state.permissions.canEdit;
-  els.applyTableBtn.disabled = !state.permissions.canEdit;
-  els.newPlanBtn.disabled = !state.permissions.canEdit;
+  els.addRowBtn.hidden = !state.permissions.canEdit;
+  els.applyTableBtn.hidden = !state.permissions.canEdit;
+  els.newPlanBtn.hidden = !state.permissions.canEdit;
+  els.deletePlanBtn.hidden = !state.permissions.canAdmin;
+}
+
+function openLoginModal() {
+  els.loginUsernameInput.value = localStorage.getItem(REMEMBERED_USER_KEY) || "";
+  els.loginPasswordInput.value = "";
+  els.loginErrorText.textContent = "";
+  els.loginPasswordInput.type = "password";
+  els.togglePasswordBtn.textContent = "显示";
+  els.loginModal.classList.remove("is-hidden");
+  els.loginModal.setAttribute("aria-hidden", "false");
+  setTimeout(() => (els.loginUsernameInput.value ? els.loginPasswordInput : els.loginUsernameInput).focus(), 0);
+}
+
+function closeLoginModal() {
+  els.loginModal.classList.add("is-hidden");
+  els.loginModal.setAttribute("aria-hidden", "true");
+  els.loginErrorText.textContent = "";
+  state.loginSubmitting = false;
+  els.loginSubmitBtn.disabled = false;
+}
+
+function togglePasswordVisibility() {
+  const isPassword = els.loginPasswordInput.type === "password";
+  els.loginPasswordInput.type = isPassword ? "text" : "password";
+  els.togglePasswordBtn.textContent = isPassword ? "隐藏" : "显示";
 }
 
 async function loginFlow() {
-  const username = window.prompt("请输入账号");
-  if (!username) return;
-  const password = window.prompt("请输入密码");
-  if (!password) return;
+  const username = els.loginUsernameInput.value.trim();
+  const password = els.loginPasswordInput.value;
+  const remember = els.rememberLoginInput.checked;
+  if (!username || !password || state.loginSubmitting) {
+    els.loginErrorText.textContent = "请输入账号和密码。";
+    return;
+  }
+  state.loginSubmitting = true;
+  els.loginErrorText.textContent = "";
+  els.loginSubmitBtn.disabled = true;
   try {
     const payload = await fetchJson("/api/auth/login", {
       method: "POST",
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, remember }),
     });
+    localStorage.setItem(REMEMBERED_USER_KEY, username);
     state.user = payload.user;
     state.permissions = payload.permissions;
+    closeLoginModal();
     applyAuthUi();
     renderApp();
     updateStatus(`已登录为 ${payload.user.username}`);
   } catch (error) {
-    updateStatus(`登录失败：${error.message}`);
+    els.loginErrorText.textContent = error.message;
+  } finally {
+    state.loginSubmitting = false;
+    els.loginSubmitBtn.disabled = false;
   }
 }
 
@@ -186,6 +257,7 @@ async function logoutFlow() {
     await fetchJson("/api/auth/logout", { method: "POST", body: JSON.stringify({}) });
     state.user = null;
     state.permissions = { role: "viewer", canEdit: false, canAdmin: false };
+    state.loginSubmitting = false;
     applyAuthUi();
     renderApp();
     updateStatus("已退出登录");
@@ -206,8 +278,26 @@ async function saveDatasetToServer(changeNote) {
   });
   state.serverRevision = payload.revision;
   state.data = normalizeDataset(payload.dataset);
+  if (payload.maintenance) state.maintenance = payload.maintenance;
   persistDataset();
   return true;
+}
+
+async function repairCorruptedText() {
+  if (!state.permissions.canAdmin || !state.maintenance.textRepairAvailable) return;
+  try {
+    const payload = await fetchJson("/api/dataset/repair-text", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    state.serverRevision = payload.revision;
+    state.data = normalizeDataset(payload.dataset);
+    state.maintenance = payload.maintenance || state.maintenance;
+    resetContextState();
+    refreshStateAndRender("已修复当前正式数据中的中文文本。", { stamp: false, forceMoveReset: true });
+  } catch (error) {
+    updateStatus(`修复中文文本失败：${error.message}`);
+  }
 }
 
 function bootstrapLocal() {
@@ -339,6 +429,7 @@ async function manageSnapshots() {
 async function reloadDatasetFromServer(message) {
   const payload = await fetchJson("/api/dataset/active");
   state.serverRevision = payload.revision;
+  state.maintenance = payload.maintenance || state.maintenance;
   state.data = normalizeDataset(payload.dataset);
   resetContextState();
   refreshStateAndRender(message, { stamp: false, forceMoveReset: true });
@@ -435,7 +526,8 @@ function persistDataset() {
 }
 
 function syncPlanViewMode() {
-  state.planViewMode = state.data.plans.length >= 2 ? "compare" : "single";
+  if (state.data.plans.length < 2) state.planViewMode = "single";
+  else if (!["single", "compare"].includes(state.planViewMode)) state.planViewMode = "single";
 }
 
 function populateBuildingOptions() {
@@ -457,26 +549,30 @@ function populateCollegeOptions() {
 }
 
 function populatePlanOptions() {
+  const previousSingle = els.currentPlanSelect.value;
   const previousBefore = els.beforePlanSelect.value;
   const previousAfter = els.afterPlanSelect.value;
   const items = state.data.plans.slice().sort((a, b) => compare(a.plan_name, b.plan_name)).map((plan) => ({ value: plan.id, label: plan.plan_name }));
+  fillSelect(els.currentPlanSelect, items);
   fillSelect(els.beforePlanSelect, items);
   fillSelect(els.afterPlanSelect, items);
 
   const defaults = defaultComparePlans(state.data.plans);
   const planIds = new Set(items.map((item) => item.value));
+  const defaultSingle = planIds.has(state.activePlanId) ? state.activePlanId : (items[0]?.value || "");
   const defaultBefore = defaults.before?.id || items[0]?.value || "";
   const fallbackAfter = items.find((item) => item.value !== defaultBefore)?.value || defaultBefore;
 
+  const singleValue = planIds.has(previousSingle) ? previousSingle : defaultSingle;
   const beforeValue = planIds.has(previousBefore) ? previousBefore : defaultBefore;
   let afterValue = planIds.has(previousAfter) ? previousAfter : defaults.after?.id || fallbackAfter;
-  if (state.planViewMode === "single") afterValue = beforeValue;
   if (state.planViewMode === "compare" && items.length > 1 && afterValue === beforeValue) {
     afterValue = items.find((item) => item.value !== beforeValue)?.value || afterValue;
   }
 
+  els.currentPlanSelect.value = singleValue;
   els.beforePlanSelect.value = beforeValue;
-  els.afterPlanSelect.value = afterValue;
+  els.afterPlanSelect.value = state.planViewMode === "single" ? singleValue : afterValue;
 }
 
 function fillSelect(select, items) {
@@ -487,10 +583,11 @@ function fillSelect(select, items) {
 }
 
 function ensureActivePlan() {
+  const single = planById(els.currentPlanSelect.value);
   const before = planById(els.beforePlanSelect.value);
   const after = planById(els.afterPlanSelect.value);
   if (state.planViewMode === "single") {
-    state.activePlanId = before?.id || state.data.plans[0]?.id || null;
+    state.activePlanId = single?.id || before?.id || state.data.plans[0]?.id || null;
     return;
   }
   const compareIds = [before?.id, after?.id].filter(Boolean);
@@ -510,29 +607,63 @@ function syncSelectedSpace() {
 }
 
 function syncControlSnapshots() {
-  [els.buildingSelect, els.floorSelect, els.collegeSelect, els.beforePlanSelect, els.afterPlanSelect].forEach((select) => {
+  [els.buildingSelect, els.floorSelect, els.collegeSelect, els.currentPlanSelect, els.beforePlanSelect, els.afterPlanSelect].forEach((select) => {
     select.dataset.currentValue = select.value;
   });
 }
 
+function setPlanViewMode(mode) {
+  if (mode === "compare" && state.data.plans.length < 2) {
+    updateStatus("至少需要两套方案才能切换到对比模式。");
+    return;
+  }
+  if (state.planViewMode === mode) return;
+  state.planViewMode = mode;
+  const activePlanId = state.activePlanId || els.currentPlanSelect.value || els.afterPlanSelect.value || els.beforePlanSelect.value;
+  if (mode === "single") {
+    els.currentPlanSelect.value = activePlanId || els.currentPlanSelect.value;
+  } else {
+    const beforeValue = els.beforePlanSelect.value || state.data.plans[0]?.id || "";
+    let afterValue = activePlanId || els.afterPlanSelect.value || els.currentPlanSelect.value || beforeValue;
+    if (afterValue === beforeValue) {
+      afterValue = state.data.plans.find((plan) => plan.id !== beforeValue)?.id || afterValue;
+    }
+    els.beforePlanSelect.value = beforeValue;
+    els.afterPlanSelect.value = afterValue;
+  }
+  ensureActivePlan();
+  syncMoveDraft(true);
+  renderEditor();
+  renderApp();
+  syncControlSnapshots();
+}
+
 function renderCompareChrome() {
   const isCompare = state.planViewMode === "compare";
+  const currentPlan = planById(els.currentPlanSelect.value);
   const beforePlan = planById(els.beforePlanSelect.value);
   const afterPlan = planById(els.afterPlanSelect.value);
   const activePlan = planById(state.activePlanId);
   const deletePlan = activePlan;
   const canDeletePlan = Boolean(state.permissions.canAdmin && deletePlan && !deletePlan.is_locked && state.data.plans.length > 1);
 
+  els.singlePlanFilter.classList.toggle("is-hidden", isCompare);
   els.planCompareFilters.classList.toggle("is-hidden", !isCompare);
+  els.currentPlanSelect.disabled = isCompare;
   els.beforePlanSelect.disabled = !isCompare;
   els.afterPlanSelect.disabled = !isCompare;
+  els.compareModeBtn.disabled = state.data.plans.length < 2;
+  els.singleModeBtn.classList.toggle("is-active", !isCompare);
+  els.compareModeBtn.classList.toggle("is-active", isCompare);
   els.compareColumns.classList.toggle("is-single", !isCompare);
   els.afterColumn.classList.toggle("is-hidden", !isCompare);
 
   els.planModeBadge.textContent = isCompare ? `对比模式 · ${state.data.plans.length} 套` : "单方案维护";
   els.comparePanelTitle.textContent = "缩略图";
-  els.comparePanelHint.textContent = "";
-  els.beforePlanName.textContent = beforePlan?.plan_name || activePlan?.plan_name || "";
+  els.comparePanelHint.textContent = isCompare ? "点击左右缩略图，切换主图中的对比方案。" : "当前按单方案维护，可随时切换到对比模式。";
+  els.beforePlanName.textContent = isCompare
+    ? beforePlan?.plan_name || activePlan?.plan_name || ""
+    : currentPlan?.plan_name || activePlan?.plan_name || "";
   els.afterPlanName.textContent = isCompare ? afterPlan?.plan_name || "" : "";
 
   els.newPlanBtn.disabled = !state.permissions.canEdit;
@@ -555,11 +686,12 @@ function renderEditorTabs() {
 
 function renderApp() {
   const building = buildingByCode(els.buildingSelect.value);
+  const currentPlan = planById(els.currentPlanSelect.value);
   const beforePlan = planById(els.beforePlanSelect.value);
   const afterPlan = planById(els.afterPlanSelect.value);
   const activePlan = planById(state.activePlanId);
   const colors = colorMap(state.data.labs);
-  const thumbPlan = state.planViewMode === "compare" ? beforePlan : activePlan || beforePlan;
+  const thumbPlan = state.planViewMode === "compare" ? beforePlan : currentPlan || activePlan || beforePlan;
   const context = getSelectedContext();
 
   renderCompareChrome();
@@ -878,6 +1010,34 @@ function discardAndContinuePendingAction() {
   pending();
 }
 
+function openNewPlanModal() {
+  if (!state.permissions.canEdit) {
+    updateStatus("当前账号没有新增方案权限。");
+    return;
+  }
+  const activePlan = planById(state.activePlanId) || state.data.plans[0];
+  if (!activePlan) {
+    updateStatus("当前没有可复制的方案。");
+    return;
+  }
+  state.planDraftName = uniquePlanName(`${activePlan.plan_name} 副本`);
+  els.newPlanNameInput.value = state.planDraftName;
+  els.newPlanErrorText.textContent = "";
+  els.newPlanModalText.textContent = `将基于“${activePlan.plan_name}”复制创建一套新方案，并同步复制当前分配关系。`;
+  els.newPlanModal.classList.remove("is-hidden");
+  els.newPlanModal.setAttribute("aria-hidden", "false");
+  setTimeout(() => {
+    els.newPlanNameInput.focus();
+    els.newPlanNameInput.select();
+  }, 0);
+}
+
+function closeNewPlanModal() {
+  els.newPlanModal.classList.add("is-hidden");
+  els.newPlanModal.setAttribute("aria-hidden", "true");
+  els.newPlanErrorText.textContent = "";
+}
+
 function openDeletePlanModal() {
   if (!state.permissions.canAdmin) {
     updateStatus("只有管理员可以删除方案。");
@@ -1055,13 +1215,11 @@ function replaceFilteredAssignments(replacement) {
   ];
 }
 
-async function createPlanFromActive() {
+async function createPlanFromActive(planNameInput) {
   if (!state.permissions.canEdit) {
     updateStatus("当前账号没有新增方案权限。");
     return;
   }
-  const previousData = cloneDataset(state.data);
-  const previousRevision = state.serverRevision;
   const activePlan = planById(state.activePlanId) || state.data.plans[0];
   if (!activePlan) {
     updateStatus("当前没有可复制的方案。");
@@ -1069,7 +1227,12 @@ async function createPlanFromActive() {
   }
 
   const planCode = `plan-${Date.now()}`;
-  const planName = uniquePlanName(`${activePlan.plan_name} 副本`);
+  const normalizedName = String(planNameInput || "").trim();
+  if (!normalizedName) {
+    els.newPlanErrorText.textContent = "请输入方案名称。";
+    return;
+  }
+  const planName = uniquePlanName(normalizedName);
   const newPlan = normalizePlan({
     plan_code: planCode,
     plan_name: planName,
@@ -1101,11 +1264,16 @@ async function createPlanFromActive() {
   state.data.plan_assignments = [...state.data.plan_assignments, ...copiedAssignments];
   state.data = normalizeDataset(state.data);
 
-  const beforePlanId = state.planViewMode === "compare" ? (els.beforePlanSelect.value || activePlan.id) : activePlan.id;
-  els.beforePlanSelect.value = beforePlanId;
-  els.afterPlanSelect.value = newPlan.id;
+  if (state.planViewMode === "compare") {
+    const beforePlanId = els.beforePlanSelect.value || activePlan.id;
+    els.beforePlanSelect.value = beforePlanId;
+    els.afterPlanSelect.value = newPlan.id;
+  } else {
+    els.currentPlanSelect.value = newPlan.id;
+  }
   state.activePlanId = newPlan.id;
   state.detailsMode = "view";
+  closeNewPlanModal();
 
   refreshStateAndRender(`已基于 ${activePlan.plan_name} 新增方案 ${planName}。`, { stamp: false, forceMoveReset: true });
 }
@@ -1113,7 +1281,7 @@ async function createPlanFromActive() {
 async function createPlanFromActiveAction() {
   const previousData = cloneDataset(state.data);
   const previousRevision = state.serverRevision;
-  await createPlanFromActive();
+  await createPlanFromActive(els.newPlanNameInput.value);
   if (JSON.stringify(previousData) === JSON.stringify(state.data)) return;
   try {
     await saveDatasetToServer("新增方案");
@@ -1121,6 +1289,7 @@ async function createPlanFromActiveAction() {
   } catch (error) {
     state.data = normalizeDataset(previousData);
     state.serverRevision = previousRevision;
+    els.newPlanErrorText.textContent = error.message;
     refreshStateAndRender(`新增方案失败：${error.message}`, { stamp: false, forceMoveReset: true });
   }
 }

@@ -104,6 +104,11 @@ button:disabled {
   text-decoration: underline;
 }
 
+.ghost-button {
+  min-width: 54px;
+  padding: 7px 10px;
+}
+
 .shell {
   position: relative;
   width: min(1640px, calc(100vw - 24px));
@@ -231,11 +236,17 @@ button:disabled {
   gap: 5px;
 }
 
-.filters label {
+.filters label,
+.plan-mode-box {
   min-width: 160px;
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0.02em;
+}
+
+.plan-mode-box {
+  display: grid;
+  gap: 8px;
 }
 
 .plan-filter-group {
@@ -245,6 +256,39 @@ button:disabled {
 
 .plan-filter-group.is-hidden {
   display: none;
+}
+
+#singlePlanFilter.is-hidden {
+  display: none;
+}
+
+.mode-toggle {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: var(--shadow-crisp);
+}
+
+.mode-toggle button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  padding: 4px 12px;
+  box-shadow: none;
+}
+
+.mode-toggle button:hover {
+  transform: none;
+}
+
+.mode-toggle button.is-active {
+  background: linear-gradient(135deg, rgba(15, 118, 110, 0.14), rgba(29, 78, 216, 0.14));
+  color: var(--ink-soft);
 }
 
 .filters select {
@@ -1157,6 +1201,64 @@ button:disabled {
   line-height: 1.6;
 }
 
+.modal-card-form {
+  width: min(520px, 100%);
+}
+
+.modal-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.modal-field {
+  display: grid;
+  gap: 6px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.modal-field input {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  padding: 8px 12px;
+}
+
+.modal-field input:focus {
+  outline: 0;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.password-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.modal-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #475467;
+  font-size: 13px;
+}
+
+.modal-check input {
+  width: 16px;
+  height: 16px;
+}
+
+.modal-error {
+  min-height: 20px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
 .modal-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1276,6 +1378,10 @@ button:disabled {
   .plan-filter-group {
     grid-auto-flow: row;
   }
+
+  .plan-mode-box {
+    min-width: 100%;
+  }
 }
 
 @media (max-width: 900px) {
@@ -1302,6 +1408,10 @@ button:disabled {
 
   .modal-actions {
     flex-direction: column;
+  }
+
+  .password-row {
+    grid-template-columns: 1fr;
   }
 
   .compare-columns {

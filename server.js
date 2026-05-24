@@ -116,11 +116,13 @@ http.createServer(async (req, res) => {
 
 function routeApi(req, res, url, pathname, context) {
   if (req.method === "GET" && pathname === "/api/bootstrap") {
+    const active = getActiveDataset();
     return sendJson(res, 200, {
       user: publicUser(context.user),
       permissions: permissionsFor(context.user),
-      dataset: getActiveDataset().dataset,
-      revision: getActiveDataset().revision,
+      dataset: active.dataset,
+      revision: active.revision,
+      maintenance: buildMaintenance(active.dataset),
     });
   }
 
@@ -138,12 +140,17 @@ function routeApi(req, res, url, pathname, context) {
 
   if (req.method === "GET" && pathname === "/api/dataset/active") {
     const active = getActiveDataset();
-    return sendJson(res, 200, { dataset: active.dataset, revision: active.revision });
+    return sendJson(res, 200, { dataset: active.dataset, revision: active.revision, maintenance: buildMaintenance(active.dataset) });
   }
 
   if (req.method === "PUT" && pathname === "/api/dataset/active") {
     requireRole(context.user, ["editor", "admin"]);
     return handleSaveDataset(req, res, context);
+  }
+
+  if (req.method === "POST" && pathname === "/api/dataset/repair-text") {
+    requireRole(context.user, ["admin"]);
+    return handleRepairDatasetText(res, context);
   }
 
   if (req.method === "POST" && pathname === "/api/imports") {
@@ -192,15 +199,16 @@ async function handleLogin(req, res, context) {
   const body = await readJsonBody(req);
   const username = String(body.username || "").trim();
   const password = String(body.password || "");
+  const remember = Boolean(body.remember);
   const user = db.prepare("SELECT * FROM users WHERE username = ? AND is_active = 1").get(username);
   if (!user || !verifyPassword(password, user.salt, user.password_hash)) {
     writeAudit("login_failed", username || "anonymous", context.ip, {});
     return sendJson(res, 401, { error: "invalid_credentials", message: "用户名或密码错误" });
   }
 
-  const session = createSession(user.id);
-  res.setHeader("Set-Cookie", serializeCookie(sessionCookieName, session.id, { maxAge: 60 * 60 * 24 * 7 }));
-  writeAudit("login_success", user.username, context.ip, { role: user.role });
+  const session = createSession(user.id, remember);
+  res.setHeader("Set-Cookie", serializeCookie(sessionCookieName, session.id, remember ? { maxAge: 60 * 60 * 24 * 30 } : {}));
+  writeAudit("login_success", user.username, context.ip, { role: user.role, remember });
   sendJson(res, 200, { user: publicUser(user), permissions: permissionsFor(user) });
 }
 
@@ -219,6 +227,18 @@ async function handleSaveDataset(req, res, context) {
   const validation = validateDataset(dataset);
   if (!validation.ok) {
     return sendJson(res, 400, { error: "invalid_dataset", message: validation.errors.join("；"), errors: validation.errors });
+  }
+  const corruption = detectTextCorruption(dataset);
+  if (corruption.detected) {
+    writeAudit("suspected_text_corruption_rejected", context.user.username, context.ip, {
+      source: "save_dataset",
+      summary: corruption,
+    });
+    return sendJson(res, 422, {
+      error: "suspected_text_corruption",
+      message: "检测到本次保存包含异常的问号化文本，已阻止覆盖正式数据，请先修复编码后再保存。",
+      details: corruption,
+    });
   }
 
   const active = getActiveDataset();
@@ -241,7 +261,7 @@ async function handleSaveDataset(req, res, context) {
     changeNote: String(body.changeNote || "").trim(),
     summary: summarizeDataset(dataset),
   });
-  sendJson(res, 200, { ok: true, revision, dataset, updatedAt });
+  sendJson(res, 200, { ok: true, revision, dataset, updatedAt, maintenance: buildMaintenance(dataset) });
 }
 
 async function handleCreateImportDraft(req, res, context) {
@@ -250,6 +270,19 @@ async function handleCreateImportDraft(req, res, context) {
   const validation = validateDataset(dataset);
   if (!validation.ok) {
     return sendJson(res, 400, { error: "invalid_dataset", message: validation.errors.join("；"), errors: validation.errors });
+  }
+  const corruption = detectTextCorruption(dataset);
+  if (corruption.detected) {
+    writeAudit("suspected_text_corruption_rejected", context.user.username, context.ip, {
+      source: "create_import_draft",
+      summary: corruption,
+      fileName: String(body.fileName || "").trim(),
+    });
+    return sendJson(res, 422, {
+      error: "suspected_text_corruption",
+      message: "检测到导入包内存在异常的问号化文本，已阻止创建草稿，请先修复原始文件编码。",
+      details: corruption,
+    });
   }
 
   const fileName = String(body.fileName || "未命名数据包").trim();
@@ -300,7 +333,7 @@ function publishImportDraft(draftId, actor, ip) {
     revision,
     summary: JSON.parse(draft.summary_json),
   });
-  return { ok: true, revision, dataset: nextDataset };
+  return { ok: true, revision, dataset: nextDataset, maintenance: buildMaintenance(nextDataset) };
 }
 
 function discardImportDraft(draftId, actor, ip) {
@@ -323,7 +356,31 @@ function restoreSnapshot(snapshotId, actor, ip) {
   db.prepare("UPDATE active_dataset SET revision = ?, dataset_json = ?, updated_by = ?, updated_at = ? WHERE id = 1")
     .run(revision, snapshot.dataset_json, actor, updatedAt);
   writeAudit("snapshot_restored", actor, ip, { snapshotId, revision, label: snapshot.label });
-  return { ok: true, revision, dataset: JSON.parse(snapshot.dataset_json) };
+  const dataset = JSON.parse(snapshot.dataset_json);
+  return { ok: true, revision, dataset, maintenance: buildMaintenance(dataset) };
+}
+
+function handleRepairDatasetText(res, context) {
+  const active = getActiveDataset();
+  const source = findTextRepairSource(active.dataset);
+  if (!source) {
+    return sendJson(res, 404, {
+      error: "repair_source_not_found",
+      message: "未找到可用于修复中文文本的可信数据源。",
+    });
+  }
+
+  const repaired = repairDatasetText(active.dataset, source.dataset);
+  const revision = active.revision + 1;
+  const updatedAt = nowIso();
+  createSnapshot("pre_text_repair", `中文修复前快照 #${active.revision}`, active.dataset, active.revision, context.user.username, 0);
+  db.prepare("UPDATE active_dataset SET revision = ?, dataset_json = ?, updated_by = ?, updated_at = ? WHERE id = 1")
+    .run(revision, JSON.stringify(repaired), context.user.username, updatedAt);
+  writeAudit("dataset_text_repaired", context.user.username, context.ip, {
+    revision,
+    source: source.label,
+  });
+  return sendJson(res, 200, { ok: true, revision, dataset: repaired, updatedAt, maintenance: buildMaintenance(repaired) });
 }
 
 function listImportDrafts() {
@@ -375,6 +432,16 @@ function publicUser(user) {
 function requireRole(user, roles) {
   if (!user) throw httpError(401, "login_required", "请先登录");
   if (!roles.includes(user.role)) throw httpError(403, "forbidden", "当前账号没有对应权限");
+}
+
+function buildMaintenance(dataset) {
+  const corruption = detectTextCorruption(dataset);
+  const source = corruption.detected ? findTextRepairSource(dataset) : null;
+  return {
+    textCorruptionDetected: corruption.detected,
+    textRepairAvailable: Boolean(source),
+    textRepairSourceLabel: source?.label || "",
+  };
 }
 
 function getActiveDataset() {
@@ -541,6 +608,92 @@ function emptyDataset() {
   };
 }
 
+const repairFieldMap = {
+  buildings: ["building_name", "campus_zone", "notes"],
+  floor_segments: ["notes"],
+  spaces: ["network_segment", "notes"],
+  labs: ["lab_name", "college", "major", "lab_type", "director", "notes"],
+  plans: ["plan_name", "description"],
+  plan_assignments: ["move_note"],
+};
+
+function containsCjk(value) {
+  return /[\u3400-\u9fff]/.test(String(value || ""));
+}
+
+function isQuestionCorrupted(value) {
+  const text = String(value || "").trim();
+  return Boolean(text) && /[?？]+/.test(text) && !containsCjk(text);
+}
+
+function detectTextCorruption(dataset) {
+  let scanned = 0;
+  let suspicious = 0;
+  for (const [key, fields] of Object.entries(repairFieldMap)) {
+    for (const row of dataset[key] || []) {
+      for (const field of fields) {
+        const value = String(row[field] ?? "").trim();
+        if (!value) continue;
+        scanned += 1;
+        if (isQuestionCorrupted(value)) suspicious += 1;
+      }
+    }
+  }
+  return {
+    detected: suspicious >= 5 && suspicious / Math.max(scanned, 1) >= 0.08,
+    suspiciousFields: suspicious,
+    scannedFields: scanned,
+  };
+}
+
+function hasSufficientRepairCoverage(activeDataset, candidateDataset) {
+  const keys = ["buildings", "floor_segments", "spaces", "labs"];
+  return keys.every((key) => {
+    const activeIds = new Set((activeDataset[key] || []).map((row) => row.id));
+    const candidateIds = new Set((candidateDataset[key] || []).map((row) => row.id));
+    if (!activeIds.size || !candidateIds.size) return false;
+    let matched = 0;
+    for (const id of activeIds) if (candidateIds.has(id)) matched += 1;
+    return matched / activeIds.size >= 0.8;
+  });
+}
+
+function findTextRepairSource(activeDataset) {
+  const draftRows = db.prepare("SELECT id, file_name, dataset_json FROM import_drafts ORDER BY id DESC").all();
+  for (const row of draftRows) {
+    const dataset = JSON.parse(row.dataset_json);
+    if (!hasSufficientRepairCoverage(activeDataset, dataset) || detectTextCorruption(dataset).detected) continue;
+    return { dataset, label: `导入草稿 #${row.id} ${row.file_name}` };
+  }
+
+  const snapshotRows = db.prepare("SELECT id, label, dataset_json, is_protected FROM snapshots ORDER BY id DESC").all();
+  for (const row of snapshotRows) {
+    const dataset = JSON.parse(row.dataset_json);
+    if (!hasSufficientRepairCoverage(activeDataset, dataset) || detectTextCorruption(dataset).detected) continue;
+    return { dataset, label: row.is_protected ? `受保护快照 #${row.id} ${row.label}` : `快照 #${row.id} ${row.label}` };
+  }
+  return null;
+}
+
+function repairDatasetText(activeDataset, sourceDataset) {
+  const repaired = JSON.parse(JSON.stringify(activeDataset));
+  for (const [key, fields] of Object.entries(repairFieldMap)) {
+    const sourceById = new Map((sourceDataset[key] || []).map((row) => [row.id, row]));
+    repaired[key] = (repaired[key] || []).map((row) => {
+      const source = sourceById.get(row.id);
+      if (!source) return row;
+      const next = { ...row };
+      for (const field of fields) {
+        if (isQuestionCorrupted(row[field]) && String(source[field] ?? "").trim()) {
+          next[field] = source[field];
+        }
+      }
+      return next;
+    });
+  }
+  return repaired;
+}
+
 function validateDataset(dataset) {
   const errors = [];
   for (const key of datasetKeys.slice(0, 6)) {
@@ -619,9 +772,10 @@ function buildImportSummary(currentDataset, nextDataset) {
   };
 }
 
-function createSession(userId) {
+function createSession(userId, remember) {
   const id = crypto.randomUUID();
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const ttlMs = remember ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+  const expiresAt = new Date(Date.now() + ttlMs).toISOString();
   db.prepare("INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)")
     .run(id, userId, expiresAt, nowIso());
   return { id, expiresAt };
