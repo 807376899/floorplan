@@ -53,6 +53,20 @@ node server.js
 - `FLOORPLAN_EDITOR_USER`
 - `FLOORPLAN_EDITOR_PASSWORD`
 
+这些环境变量只在首次初始化数据库、`users` 表为空时生效；已有 `data/app.db` 后不会覆盖现有账号。
+
+如果需要在已有数据库中修改密码或新增账号，使用用户管理脚本：
+
+```powershell
+npm run user -- admin "新管理员密码" admin
+npm run user -- editor "新编辑密码" editor
+npm run user -- zhangsan "编辑账号密码" editor
+```
+
+第三个参数只能是 `admin` 或 `editor`。账号不存在时会创建；账号已存在时会更新密码、角色并重新启用该账号。修改后建议重启服务，并让相关用户重新登录。
+
+如果 Windows PowerShell 提示禁止运行 `npm.ps1`，可改用 `npm.cmd run user -- ...`，或直接使用 `node scripts/manage-user.js ...`。
+
 ## 运行时数据目录
 
 服务端会在仓库下创建 `data/`：

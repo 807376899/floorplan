@@ -4,6 +4,7 @@
   "private": true,
   "description": "实验室布局维护系统",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "user": "node scripts/manage-user.js"
   }
 }
