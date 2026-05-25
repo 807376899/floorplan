@@ -24,6 +24,9 @@ const {
   isoNow,
 } = window.FloorplanDomain;
 const { colorMap, renderLegend, renderThumbList, renderFloorplan, renderDetailsPanel } = window.FloorplanRender;
+const { fetchJson } = window.FloorplanApp.Api;
+const ImportExport = window.FloorplanApp.ImportExport;
+const Canvas = window.FloorplanApp.Canvas;
 const REMEMBERED_USER_KEY = "floorplan_remembered_user";
 
 const state = {
@@ -69,19 +72,19 @@ function bindEvents() {
     runWithUnsavedGuard(() => { void importPackageFile(file); });
   });
   els.loadSampleBtn.addEventListener("click", () => runWithUnsavedGuard(loadSampleData));
-  els.downloadTemplateBtn.addEventListener("click", downloadTemplateWorkbook);
-  els.exportWorkbookBtn.addEventListener("click", () => runWithUnsavedGuard(exportWorkbook));
+  els.downloadTemplateBtn.addEventListener("click", () => ImportExport.downloadTemplateWorkbook(updateStatus));
+  els.exportWorkbookBtn.addEventListener("click", () => runWithUnsavedGuard(() => ImportExport.exportWorkbook(state, updateStatus)));
   els.manageImportsBtn.addEventListener("click", () => void manageImportDrafts());
   els.manageSnapshotsBtn.addEventListener("click", () => void manageSnapshots());
   els.repairTextBtn.addEventListener("click", () => void repairCorruptedText());
   els.loginBtn.addEventListener("click", openLoginModal);
   els.logoutBtn.addEventListener("click", () => void logoutFlow());
-  els.fitCanvasBtn.addEventListener("click", resetCanvasZoom);
-  els.zoomOutBtn.addEventListener("click", () => changeCanvasZoom(-0.15));
-  els.zoomInBtn.addEventListener("click", () => changeCanvasZoom(0.15));
+  els.fitCanvasBtn.addEventListener("click", () => Canvas.resetCanvasZoom(state, els));
+  els.zoomOutBtn.addEventListener("click", () => Canvas.changeCanvasZoom(state, els, -0.15));
+  els.zoomInBtn.addEventListener("click", () => Canvas.changeCanvasZoom(state, els, 0.15));
   els.addRowBtn.addEventListener("click", () => runWithUnsavedGuard(addEditorRow));
   els.applyTableBtn.addEventListener("click", () => runWithUnsavedGuard(() => { void applyEditorRows(); }));
-  els.downloadSheetBtn.addEventListener("click", () => runWithUnsavedGuard(downloadCurrentSheet));
+  els.downloadSheetBtn.addEventListener("click", () => runWithUnsavedGuard(() => ImportExport.downloadCurrentSheet(state, editorRows, updateStatus)));
   els.newPlanBtn.addEventListener("click", () => runWithUnsavedGuard(openNewPlanModal));
   els.deletePlanBtn.addEventListener("click", () => runWithUnsavedGuard(openDeletePlanModal));
   els.singleModeBtn.addEventListener("click", () => runWithUnsavedGuard(() => setPlanViewMode("single")));
@@ -125,11 +128,12 @@ function bindEvents() {
   });
   els.cancelNewPlanBtn.addEventListener("click", closeNewPlanModal);
 
-  window.addEventListener("resize", () => els.floorplan.classList.contains("is-fit") && applyCanvasMode());
+  window.addEventListener("resize", () => els.floorplan.classList.contains("is-fit") && Canvas.applyCanvasMode(state, els));
 }
 
 async function bootstrap() {
   try {
+    // 优先连接服务端；开发或离线打开页面失败时，再降级到 localStorage 示例模式。
     const payload = await fetchJson("/api/bootstrap");
     state.serverMode = true;
     state.user = payload.user;
@@ -146,27 +150,20 @@ async function bootstrap() {
   bootstrapLocal();
 }
 
-async function fetchJson(url, options = {}) {
-  const response = await fetch(url, {
-    credentials: "same-origin",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(payload.message || payload.error || "请求失败");
-    error.status = response.status;
-    error.payload = payload;
-    throw error;
-  }
-  return payload;
-}
-
 function cloneDataset(dataset) {
   return JSON.parse(JSON.stringify(dataset));
+}
+
+async function saveWithRollback(previousData, previousRevision, changeNote, failurePrefix) {
+  try {
+    await saveDatasetToServer(changeNote);
+    return true;
+  } catch (error) {
+    state.data = normalizeDataset(previousData);
+    state.serverRevision = previousRevision;
+    refreshStateAndRender(`${failurePrefix}：${error.message}`, { stamp: false, forceMoveReset: true });
+    return false;
+  }
 }
 
 function buildBootstrapStatus(baseText) {
@@ -319,6 +316,7 @@ function handleSelectChange(event, applyChange) {
   const nextValue = select.value;
   const previousValue = select.dataset.currentValue ?? nextValue;
   if (nextValue === previousValue) return;
+  // 先把控件值回退，等未保存搬迁内容处理完后再真正切换筛选条件。
   select.value = previousValue;
   runWithUnsavedGuard(() => {
     select.value = nextValue;
@@ -350,7 +348,7 @@ async function importPackageFile(file) {
     let raw;
     const name = file.name.toLowerCase();
     if (name.endsWith(".json")) raw = JSON.parse(await file.text());
-    else if ((name.endsWith(".xlsx") || name.endsWith(".xls")) && workbookAvailable()) raw = readWorkbookDataset(await file.arrayBuffer());
+    else if ((name.endsWith(".xlsx") || name.endsWith(".xls")) && ImportExport.workbookAvailable()) raw = ImportExport.readWorkbookDataset(await file.arrayBuffer());
     else throw new Error("请导入单个 Excel 数据包，或在无法读取 Excel 时导入 JSON 数据包。");
     const normalized = normalizeDataset(raw);
     const payload = await fetchJson("/api/imports", {
@@ -448,24 +446,9 @@ function resetContextState() {
   state.planDeleteTargetId = null;
 }
 
-function workbookAvailable() {
-  return Boolean(window.XLSX?.utils?.book_new);
-}
-
-function readWorkbookDataset(arrayBuffer) {
-  const workbook = XLSX.read(arrayBuffer, { type: "array" });
-  const data = emptyDataset();
-  for (const definition of DATASETS) {
-    const sheet = workbook.Sheets[definition.sheet] || workbook.Sheets[definition.label];
-    data[definition.key] = sheet ? XLSX.utils.sheet_to_json(sheet, { defval: "" }) : [];
-  }
-  data.file_assets = workbook.Sheets.file_assets ? XLSX.utils.sheet_to_json(workbook.Sheets.file_assets, { defval: "" }) : [];
-  data.imports = workbook.Sheets.imports ? XLSX.utils.sheet_to_json(workbook.Sheets.imports, { defval: "" }) : [];
-  return data;
-}
-
 function refreshStateAndRender(message, options = {}) {
   const { stamp = false, forceMoveReset = false } = options;
+  // 统一入口：任何数据变更后都经过这里同步控件、权限、编辑表、主图和状态栏。
   if (stamp) stampMetadata(message);
   persistDataset();
   syncPlanViewMode();
@@ -591,6 +574,7 @@ function ensureActivePlan() {
     return;
   }
   const compareIds = [before?.id, after?.id].filter(Boolean);
+  // 对比模式下，主图只能落在左右方案之一；否则默认右侧方案优先。
   if (!state.activePlanId || !compareIds.includes(state.activePlanId)) {
     state.activePlanId = after?.id || before?.id || state.data.plans[0]?.id || null;
   }
@@ -748,7 +732,7 @@ function renderApp() {
     onCancelMove: cancelMoveMode,
   });
 
-  applyCanvasMode();
+  Canvas.applyCanvasMode(state, els);
 }
 
 function getSelectedContext() {
@@ -882,6 +866,7 @@ function validateMoveDraft() {
   }
 
   const conflictAssignment = state.data.plan_assignments.find((row) => row.plan_id === context.activePlan?.id && row.space_id === targetSpace.id) || null;
+  // 只有 assigned 状态视为硬占用，unplaced/pending_move 仍允许被后续流程处理。
   if (conflictAssignment && conflictAssignment.id !== context.assignment?.id && conflictAssignment.assignment_status === "assigned") {
     errors.targetSpaceCode = "目标空间已有 assigned 占用，无法搬迁。";
   }
@@ -912,6 +897,7 @@ function confirmMoveAssignment() {
       }, relation);
     }
     if (conflictAssignment && row.id === conflictAssignment.id) {
+      // 目标空间被占用时，把原分配释放为未落位，避免同一方案下出现双占用。
       return normalizeAssignment({
         ...row,
         previous_space_code: row.space_code || row.previous_space_code,
@@ -942,16 +928,9 @@ async function confirmMoveAssignmentAction() {
   const previousRevision = state.serverRevision;
   const ok = confirmMoveAssignment();
   if (!ok) return false;
-  try {
-    await saveDatasetToServer("搬迁实验室");
-    refreshStateAndRender("已保存实验室搬迁。", { stamp: false, forceMoveReset: true });
-    return true;
-  } catch (error) {
-    state.data = normalizeDataset(previousData);
-    state.serverRevision = previousRevision;
-    refreshStateAndRender(`搬迁保存失败：${error.message}`, { stamp: false, forceMoveReset: true });
-    return false;
-  }
+  if (!(await saveWithRollback(previousData, previousRevision, "搬迁实验室", "搬迁保存失败"))) return false;
+  refreshStateAndRender("已保存实验室搬迁。", { stamp: false, forceMoveReset: true });
+  return true;
 }
 
 function focusRowFromDetails(key, rowId) {
@@ -1091,14 +1070,8 @@ async function confirmDeletePlanAction() {
   const previousRevision = state.serverRevision;
   confirmDeletePlan();
   if (JSON.stringify(previousData) === JSON.stringify(state.data)) return;
-  try {
-    await saveDatasetToServer("删除方案");
+  if (await saveWithRollback(previousData, previousRevision, "删除方案", "删除方案失败")) {
     refreshStateAndRender("已删除当前方案。", { stamp: false, forceMoveReset: true });
-  } catch (error) {
-    state.data = normalizeDataset(previousData);
-    state.serverRevision = previousRevision;
-    closeDeletePlanModal();
-    refreshStateAndRender(`删除方案失败：${error.message}`, { stamp: false, forceMoveReset: true });
   }
 }
 
@@ -1188,13 +1161,8 @@ async function applyEditorRows() {
   if (state.editorKey === "plan_assignments") replaceFilteredAssignments(rows.map((row) => normalizeAssignment(row, relationMaps(state.data))));
 
   state.data = normalizeDataset(state.data);
-  try {
-    await saveDatasetToServer(`编辑 ${state.editorKey}`);
+  if (await saveWithRollback(previousData, previousRevision, `编辑 ${state.editorKey}`, "表格保存失败")) {
     refreshStateAndRender("已应用表格修改。", { stamp: false, forceMoveReset: true });
-  } catch (error) {
-    state.data = normalizeDataset(previousData);
-    state.serverRevision = previousRevision;
-    refreshStateAndRender(`表格保存失败：${error.message}`, { stamp: false, forceMoveReset: true });
   }
 }
 
@@ -1301,205 +1269,12 @@ function uniquePlanName(baseName) {
   return `${baseName} ${index}`;
 }
 
-function downloadCurrentSheet() {
-  const definition = DATASETS.find((item) => item.key === state.editorKey);
-  const rows = editorRows().map((row) => Object.fromEntries(definition.columns.map(([key]) => [key, row[key] ?? ""])));
-  exportCsv(`${definition.sheet}.csv`, definition.columns, rows);
-}
-
-function downloadTemplateWorkbook() {
-  try {
-    if (!workbookAvailable()) {
-      downloadJson("实验室布局维护模板.json", buildTemplatePackage());
-      updateStatus("当前环境未加载 Excel 组件，已降级下载 JSON 模板。");
-      return;
-    }
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(templateInstructions()), "说明");
-    for (const definition of DATASETS) XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(templateRows(definition.key)), definition.sheet);
-    XLSX.writeFile(workbook, "实验室布局维护模板.xlsx");
-    updateStatus("模板已开始下载。");
-  } catch (error) {
-    downloadJson("实验室布局维护模板.json", buildTemplatePackage());
-    updateStatus(`Excel 模板生成失败，已降级下载 JSON 模板：${error.message}`);
-  }
-}
-
-function exportWorkbook() {
-  try {
-    if (!workbookAvailable()) {
-      downloadJson("实验室布局维护数据包.json", state.data);
-      updateStatus("当前环境未加载 Excel 组件，已降级下载 JSON 数据包。");
-      return;
-    }
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(templateInstructions()), "说明");
-    for (const definition of DATASETS) {
-      const rows = state.data[definition.key].map((row) => exportRow(definition.key, row));
-      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), definition.sheet);
-    }
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(state.data.file_assets), "file_assets");
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(state.data.imports), "imports");
-    XLSX.writeFile(workbook, "实验室布局维护数据包.xlsx");
-    updateStatus("数据包已开始下载。");
-  } catch (error) {
-    downloadJson("实验室布局维护数据包.json", state.data);
-    updateStatus(`Excel 数据包导出失败，已降级下载 JSON 数据包：${error.message}`);
-  }
-}
-
-function buildTemplatePackage() {
-  return Object.fromEntries(DATASETS.map((definition) => [definition.key, templateRows(definition.key)]));
-}
-
-function exportRow(key, row) {
-  const fields = DATASETS.find((item) => item.key === key).columns.map(([field]) => field);
-  return pick(row, fields);
-}
-
-function exportCsv(name, columns, rows) {
-  const table = [columns.map(([, label]) => label), ...rows.map((row) => columns.map(([key]) => row[key] ?? ""))];
-  download(name, `\uFEFF${table.map((row) => row.map(csv).join(",")).join("\n")}`, "text/csv;charset=utf-8");
-}
-
-function downloadJson(name, data) {
-  download(name, JSON.stringify(data, null, 2), "application/json;charset=utf-8");
-}
-
-function download(name, text, type) {
-  const anchor = document.createElement("a");
-  const url = URL.createObjectURL(new Blob([text], { type }));
-  anchor.href = url;
-  anchor.download = name;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
 function buildingByCode(buildingCode) {
   return state.data.buildings.find((row) => row.building_code === buildingCode) || null;
 }
 
 function planById(id) {
   return state.data.plans.find((row) => row.id === id) || null;
-}
-
-function changeCanvasZoom(delta) {
-  state.zoom = Math.min(2.5, Math.max(0.4, Number((state.zoom + delta).toFixed(2))));
-  applyCanvasMode();
-}
-
-function resetCanvasZoom() {
-  state.zoom = 1;
-  applyCanvasMode();
-}
-
-function applyCanvasMode() {
-  const stage = els.floorplan.querySelector(".floorplan-stage");
-  const svg = stage?.querySelector("svg");
-  if (!stage || !svg) return;
-  const width = Number(stage.dataset.layoutWidth);
-  const height = Number(stage.dataset.layoutHeight);
-  const bounds = els.floorplan.getBoundingClientRect();
-  const paddingAllowance = 72;
-  const fit = Math.max(0.1, Math.min(1, (bounds.width - paddingAllowance) / width, (bounds.height - paddingAllowance) / height));
-  const scale = fit * state.zoom;
-  const scaledWidth = width * scale;
-  const scaledHeight = height * scale;
-  const stagePadding = 52;
-  const stageWidth = Math.max(scaledWidth + stagePadding, bounds.width - paddingAllowance);
-  const stageHeight = Math.max(scaledHeight + stagePadding, bounds.height - paddingAllowance);
-
-  els.floorplan.classList.toggle("is-zoomed", state.zoom > 1);
-  els.canvasModeText.textContent = state.zoom === 1 ? "适配显示" : `缩放 ${Math.round(state.zoom * 100)}%`;
-  stage.style.width = `${stageWidth}px`;
-  stage.style.height = `${stageHeight}px`;
-  svg.style.width = `${scaledWidth}px`;
-  svg.style.height = `${scaledHeight}px`;
-  applyRoomLabelSizing(svg, scale);
-
-  if (state.zoom > 1) {
-    els.floorplan.scrollLeft = Math.max(0, (stageWidth - bounds.width) / 2);
-    els.floorplan.scrollTop = Math.max(0, (stageHeight - bounds.height) / 2);
-  } else {
-    els.floorplan.scrollLeft = 0;
-    els.floorplan.scrollTop = 0;
-  }
-}
-
-function applyRoomLabelSizing(svg, scale) {
-  const screenScale = Math.max(scale, 0.01);
-  const doorScreenSize = state.zoom > 1 ? Math.min(18, 13 + (state.zoom - 1) * 4) : 13;
-  const nameScreenSize = state.zoom > 1 ? Math.min(16, 12 + (state.zoom - 1) * 3) : 12;
-  const doorFontSize = doorScreenSize / screenScale;
-  const bodyFontSize = nameScreenSize / screenScale;
-  const lineGap = Math.max(2 / screenScale, bodyFontSize * 0.24);
-
-  svg.querySelectorAll(".room").forEach((room) => {
-    const x = Number(room.dataset.roomX);
-    const y = Number(room.dataset.roomY);
-    const width = Number(room.dataset.roomWidth);
-    const height = Number(room.dataset.roomHeight);
-    if (![x, y, width, height].every(Number.isFinite)) return;
-
-    const padding = Math.min(Math.max(5 / screenScale, width * 0.08), Math.max(4, width * 0.18));
-    const maxWidth = Math.max(0, width - padding * 2);
-    const lines = {
-      door: room.querySelector('[data-label-role="door"]'),
-      name: room.querySelector('[data-label-role="name"]'),
-      meta: room.querySelector('[data-label-role="meta"]'),
-      area: room.querySelector('[data-label-role="area"]'),
-    };
-    const availableHeight = Math.max(0, height - padding * 2);
-    const wanted = [
-      { node: lines.door, fontSize: doorFontSize, weight: "700" },
-      { node: lines.name, fontSize: bodyFontSize, weight: "600" },
-      { node: lines.meta, fontSize: bodyFontSize * 0.92, weight: "500", optional: true },
-      { node: lines.area, fontSize: bodyFontSize * 0.92, weight: "500", optional: true },
-    ].filter((item) => item.node);
-    const requiredForPrimary = doorFontSize + bodyFontSize + lineGap;
-    const canStackPrimary = availableHeight >= requiredForPrimary;
-    const visible = canStackPrimary
-      ? wanted.slice(0, Math.max(2, Math.min(wanted.length, Math.floor((availableHeight + lineGap) / (bodyFontSize + lineGap)))))
-      : wanted.slice(0, 1);
-    const totalHeight = visible.reduce((sum, item) => sum + item.fontSize, 0) + Math.max(0, visible.length - 1) * lineGap;
-    let currentY = y + Math.max(padding + visible[0].fontSize, (height - totalHeight) / 2 + visible[0].fontSize);
-    const inlineLabel = !canStackPrimary && lines.door && lines.name
-      ? `${lines.door.dataset.labelText || lines.door.textContent || ""} ${lines.name.dataset.labelText || lines.name.textContent || ""}`.trim()
-      : "";
-
-    wanted.forEach((item) => {
-      const isVisible = visible.includes(item);
-      item.node.style.display = isVisible ? "" : "none";
-      if (!isVisible) return;
-      item.node.setAttribute("x", String(x + padding));
-      item.node.setAttribute("y", String(currentY));
-      item.node.setAttribute("font-size", String(item.fontSize));
-      item.node.setAttribute("font-weight", item.weight);
-      fitRoomLabelText(item.node, maxWidth, item.node === lines.door && inlineLabel ? inlineLabel : null);
-      currentY += item.fontSize + lineGap;
-    });
-  });
-}
-
-function fitRoomLabelText(node, maxWidth, textOverride = null) {
-  const fullText = textOverride ?? node.dataset.labelText ?? node.textContent ?? "";
-  if (maxWidth <= 0) {
-    node.style.display = "none";
-    return;
-  }
-  node.textContent = fullText;
-  if (node.getComputedTextLength() <= maxWidth) return;
-
-  let low = 0;
-  let high = fullText.length;
-  while (low < high) {
-    const mid = Math.ceil((low + high) / 2);
-    node.textContent = `${fullText.slice(0, mid)}…`;
-    if (node.getComputedTextLength() <= maxWidth) low = mid;
-    else high = mid - 1;
-  }
-  node.textContent = low > 0 ? `${fullText.slice(0, low)}…` : "";
-  if (!node.textContent) node.style.display = "none";
 }
 
 function updateDatasetSummary(text) {
@@ -1509,7 +1284,7 @@ function updateDatasetSummary(text) {
 
 function updateStatus(text) {
   state.statusMessage = text;
-  const workbookHint = workbookAvailable()
+  const workbookHint = ImportExport.workbookAvailable()
     ? ""
     : " 当前未加载 Excel 组件，可正常浏览和导入导出 JSON；如需导入 .xlsx 或导出 Excel，请在可访问 SheetJS CDN 的环境中打开。";
   els.statusText.textContent = `${text}${workbookHint}`;

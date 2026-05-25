@@ -1,4 +1,5 @@
 (function attachFloorplanRender(global) {
+  // 渲染模块负责把已规范化的数据转成 SVG/HTML；交互状态和保存逻辑由 app.js 编排。
   const {
     ALL_COLLEGES,
     ROOM_GAP_M,

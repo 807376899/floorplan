@@ -1,4 +1,5 @@
 (function attachFloorplanDomain(global) {
+  // 领域模块只处理数据结构、规范化、模板和示例数据，不直接读写 DOM 或请求服务端。
   const STORAGE_KEY = "floorplan-migration-dataset-v2";
   const ALL_COLLEGES = "全部学院";
   const ROOM_GAP_M = 0.7;
