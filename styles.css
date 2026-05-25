@@ -774,6 +774,19 @@ button:disabled {
   opacity: 0.32;
 }
 
+.room-label {
+  paint-order: stroke;
+  pointer-events: none;
+  stroke: rgba(15, 23, 42, 0.24);
+  stroke-linejoin: round;
+  stroke-width: 2.8px;
+}
+
+.room-label[fill="#344054"] {
+  stroke: rgba(255, 255, 255, 0.82);
+  stroke-width: 3.2px;
+}
+
 .room-details {
   height: 100%;
   max-height: clamp(460px, calc(100vh - 240px), 920px);

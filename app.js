@@ -1415,6 +1415,7 @@ function applyCanvasMode() {
   stage.style.height = `${stageHeight}px`;
   svg.style.width = `${scaledWidth}px`;
   svg.style.height = `${scaledHeight}px`;
+  applyRoomLabelSizing(svg, scale);
 
   if (state.zoom > 1) {
     els.floorplan.scrollLeft = Math.max(0, (stageWidth - bounds.width) / 2);
@@ -1423,6 +1424,82 @@ function applyCanvasMode() {
     els.floorplan.scrollLeft = 0;
     els.floorplan.scrollTop = 0;
   }
+}
+
+function applyRoomLabelSizing(svg, scale) {
+  const screenScale = Math.max(scale, 0.01);
+  const doorScreenSize = state.zoom > 1 ? Math.min(18, 13 + (state.zoom - 1) * 4) : 13;
+  const nameScreenSize = state.zoom > 1 ? Math.min(16, 12 + (state.zoom - 1) * 3) : 12;
+  const doorFontSize = doorScreenSize / screenScale;
+  const bodyFontSize = nameScreenSize / screenScale;
+  const lineGap = Math.max(2 / screenScale, bodyFontSize * 0.24);
+
+  svg.querySelectorAll(".room").forEach((room) => {
+    const x = Number(room.dataset.roomX);
+    const y = Number(room.dataset.roomY);
+    const width = Number(room.dataset.roomWidth);
+    const height = Number(room.dataset.roomHeight);
+    if (![x, y, width, height].every(Number.isFinite)) return;
+
+    const padding = Math.min(Math.max(5 / screenScale, width * 0.08), Math.max(4, width * 0.18));
+    const maxWidth = Math.max(0, width - padding * 2);
+    const lines = {
+      door: room.querySelector('[data-label-role="door"]'),
+      name: room.querySelector('[data-label-role="name"]'),
+      meta: room.querySelector('[data-label-role="meta"]'),
+      area: room.querySelector('[data-label-role="area"]'),
+    };
+    const availableHeight = Math.max(0, height - padding * 2);
+    const wanted = [
+      { node: lines.door, fontSize: doorFontSize, weight: "700" },
+      { node: lines.name, fontSize: bodyFontSize, weight: "600" },
+      { node: lines.meta, fontSize: bodyFontSize * 0.92, weight: "500", optional: true },
+      { node: lines.area, fontSize: bodyFontSize * 0.92, weight: "500", optional: true },
+    ].filter((item) => item.node);
+    const requiredForPrimary = doorFontSize + bodyFontSize + lineGap;
+    const canStackPrimary = availableHeight >= requiredForPrimary;
+    const visible = canStackPrimary
+      ? wanted.slice(0, Math.max(2, Math.min(wanted.length, Math.floor((availableHeight + lineGap) / (bodyFontSize + lineGap)))))
+      : wanted.slice(0, 1);
+    const totalHeight = visible.reduce((sum, item) => sum + item.fontSize, 0) + Math.max(0, visible.length - 1) * lineGap;
+    let currentY = y + Math.max(padding + visible[0].fontSize, (height - totalHeight) / 2 + visible[0].fontSize);
+    const inlineLabel = !canStackPrimary && lines.door && lines.name
+      ? `${lines.door.dataset.labelText || lines.door.textContent || ""} ${lines.name.dataset.labelText || lines.name.textContent || ""}`.trim()
+      : "";
+
+    wanted.forEach((item) => {
+      const isVisible = visible.includes(item);
+      item.node.style.display = isVisible ? "" : "none";
+      if (!isVisible) return;
+      item.node.setAttribute("x", String(x + padding));
+      item.node.setAttribute("y", String(currentY));
+      item.node.setAttribute("font-size", String(item.fontSize));
+      item.node.setAttribute("font-weight", item.weight);
+      fitRoomLabelText(item.node, maxWidth, item.node === lines.door && inlineLabel ? inlineLabel : null);
+      currentY += item.fontSize + lineGap;
+    });
+  });
+}
+
+function fitRoomLabelText(node, maxWidth, textOverride = null) {
+  const fullText = textOverride ?? node.dataset.labelText ?? node.textContent ?? "";
+  if (maxWidth <= 0) {
+    node.style.display = "none";
+    return;
+  }
+  node.textContent = fullText;
+  if (node.getComputedTextLength() <= maxWidth) return;
+
+  let low = 0;
+  let high = fullText.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    node.textContent = `${fullText.slice(0, mid)}…`;
+    if (node.getComputedTextLength() <= maxWidth) low = mid;
+    else high = mid - 1;
+  }
+  node.textContent = low > 0 ? `${fullText.slice(0, low)}…` : "";
+  if (!node.textContent) node.style.display = "none";
 }
 
 function updateDatasetSummary(text) {

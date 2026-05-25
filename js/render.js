@@ -119,14 +119,15 @@
 
     const muted = collegeFilter !== ALL_COLLEGES && box.space.lab?.college !== collegeFilter;
     const selected = selectedSpaceId === box.space.id;
+    const doorLabel = box.space.front_door || box.space.space_code;
     const label = box.space.lab?.lab_name || box.space.front_door || box.space.space_code;
     const subLabel = box.space.lab?.college || box.space.network_segment || box.space.current_status;
-    return `<g class="room ${muted && box.space.lab ? "is-muted" : ""} ${selected ? "is-selected" : ""}" data-space-id="${box.space.id}">
+    return `<g class="room ${muted && box.space.lab ? "is-muted" : ""} ${selected ? "is-selected" : ""}" data-space-id="${box.space.id}" data-room-x="${box.x}" data-room-y="${box.y}" data-room-width="${box.width}" data-room-height="${box.height}">
       <rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="4" fill="${fill}"></rect>
-      <text x="${box.x + 8}" y="${box.y + 18}" fill="${labelFill}" font-size="13" font-weight="700">${escapeHtml(box.space.front_door || box.space.space_code)}</text>
-      <text x="${box.x + 8}" y="${box.y + 36}" fill="${labelFill}" font-size="12">${escapeHtml(label)}</text>
-      <text x="${box.x + 8}" y="${box.y + 53}" fill="${labelFill}" font-size="12">${escapeHtml(subLabel)}</text>
-      <text x="${box.x + 8}" y="${box.y + 70}" fill="${labelFill}" font-size="12">${escapeHtml(box.space.area_m2.toFixed(1))} m²</text>
+      <text class="room-label room-label-door" data-label-role="door" data-label-text="${escapeHtml(doorLabel)}" x="${box.x + 8}" y="${box.y + 18}" fill="${labelFill}" font-size="13" font-weight="700">${escapeHtml(doorLabel)}</text>
+      <text class="room-label room-label-name" data-label-role="name" data-label-text="${escapeHtml(label)}" x="${box.x + 8}" y="${box.y + 36}" fill="${labelFill}" font-size="12">${escapeHtml(label)}</text>
+      <text class="room-label room-label-meta" data-label-role="meta" data-label-text="${escapeHtml(subLabel)}" x="${box.x + 8}" y="${box.y + 53}" fill="${labelFill}" font-size="12">${escapeHtml(subLabel)}</text>
+      <text class="room-label room-label-area" data-label-role="area" data-label-text="${escapeHtml(`${box.space.area_m2.toFixed(1)} m²`)}" x="${box.x + 8}" y="${box.y + 70}" fill="${labelFill}" font-size="12">${escapeHtml(box.space.area_m2.toFixed(1))} m²</text>
     </g>`;
   }
 
