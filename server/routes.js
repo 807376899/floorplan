@@ -1,16 +1,17 @@
 const { readJsonBody, sendJson } = require("./http-utils");
 
 function createRouteApi(services) {
-  const { auth, dataset, imports, snapshots, audit } = services;
+  const { auth, dataset, imports, snapshots, audit, planCopies } = services;
 
   return async function routeApi(req, res, _url, pathname, context) {
     if (req.method === "GET" && pathname === "/api/bootstrap") {
-      const active = dataset.getActiveDataset();
+      const active = planCopies.buildVisibleDataset(context.user);
       return sendJson(res, 200, {
         user: auth.publicUser(context.user),
         permissions: auth.permissionsFor(context.user),
         dataset: active.dataset,
         revision: active.revision,
+        planCopies: active.copies,
         maintenance: dataset.buildMaintenance(active.dataset),
       });
     }
@@ -32,8 +33,49 @@ function createRouteApi(services) {
     }
 
     if (req.method === "GET" && pathname === "/api/dataset/active") {
-      const active = dataset.getActiveDataset();
-      return sendJson(res, 200, { dataset: active.dataset, revision: active.revision, maintenance: dataset.buildMaintenance(active.dataset) });
+      const active = planCopies.buildVisibleDataset(context.user);
+      return sendJson(res, 200, {
+        dataset: active.dataset,
+        revision: active.revision,
+        planCopies: active.copies,
+        maintenance: dataset.buildMaintenance(active.dataset),
+      });
+    }
+
+    if (req.method === "POST" && pathname === "/api/plan-copies") {
+      auth.requireRole(context.user, ["editor", "admin"]);
+      const body = await readJsonBody(req);
+      const result = planCopies.createCopy(body, context.user);
+      audit.writeAudit("plan_copy_created", context.user.username, context.ip, result);
+      return sendVisibleDataset(res, context, services, 200, { ok: true, ...result });
+    }
+
+    const copyMatch = pathname.match(/^\/api\/plan-copies\/(\d+)$/);
+    if (req.method === "PATCH" && copyMatch) {
+      auth.requireRole(context.user, ["editor", "admin"]);
+      const body = await readJsonBody(req);
+      planCopies.updateCopy(Number(copyMatch[1]), body, context.user);
+      audit.writeAudit("plan_copy_updated", context.user.username, context.ip, { copyId: Number(copyMatch[1]) });
+      return sendVisibleDataset(res, context, services);
+    }
+
+    if (req.method === "DELETE" && copyMatch) {
+      auth.requireRole(context.user, ["editor", "admin"]);
+      planCopies.deleteCopy(Number(copyMatch[1]), context.user);
+      audit.writeAudit("plan_copy_deleted", context.user.username, context.ip, { copyId: Number(copyMatch[1]) });
+      return sendVisibleDataset(res, context, services);
+    }
+
+    const assignmentMatch = pathname.match(/^\/api\/plan-copies\/(\d+)\/assignments$/);
+    if (req.method === "PUT" && assignmentMatch) {
+      auth.requireRole(context.user, ["editor", "admin"]);
+      const body = await readJsonBody(req);
+      const result = planCopies.saveAssignments(Number(assignmentMatch[1]), body, context.user);
+      audit.writeAudit("plan_copy_assignments_saved", context.user.username, context.ip, {
+        copyId: Number(assignmentMatch[1]),
+        revision: result.revision,
+      });
+      return sendVisibleDataset(res, context, services, 200, { ok: true, copyRevision: result.revision });
     }
 
     if (req.method === "PUT" && pathname === "/api/dataset/active") {
@@ -88,9 +130,20 @@ function createRouteApi(services) {
   };
 }
 
+function sendVisibleDataset(res, context, services, statusCode = 200, extra = {}) {
+  const active = services.planCopies.buildVisibleDataset(context.user);
+  return sendJson(res, statusCode, {
+    ...extra,
+    dataset: active.dataset,
+    revision: active.revision,
+    planCopies: active.copies,
+    maintenance: services.dataset.buildMaintenance(active.dataset),
+  });
+}
+
 async function handleSaveDataset(req, res, context, services) {
   const body = await readJsonBody(req);
-  const normalized = services.dataset.normalizeIncomingDataset(body.dataset);
+  const normalized = services.dataset.normalizeIncomingDataset(stripPlanCopies(body.dataset));
   const validation = services.dataset.validateDataset(normalized);
   if (!validation.ok) {
     return sendJson(res, 400, { error: "invalid_dataset", message: validation.errors.join("；"), errors: validation.errors });
@@ -115,7 +168,7 @@ async function handleSaveDataset(req, res, context, services) {
       changeNote: String(body.changeNote || "").trim(),
       summary: services.dataset.summarizeDataset(normalized),
     });
-    return sendJson(res, 200, { ok: true, ...result });
+    return sendVisibleDataset(res, context, services, 200, { ok: true, revision: result.revision });
   } catch (error) {
     if (error.code === "revision_conflict") {
       return sendJson(res, 409, {
@@ -126,6 +179,16 @@ async function handleSaveDataset(req, res, context, services) {
     }
     throw error;
   }
+}
+
+function stripPlanCopies(rawDataset) {
+  const dataset = { ...(rawDataset || {}) };
+  const copyCodes = new Set((dataset.plans || [])
+    .map((plan) => String(plan.plan_code || ""))
+    .filter((code) => code.startsWith("copy-")));
+  dataset.plans = (dataset.plans || []).filter((plan) => !copyCodes.has(String(plan.plan_code || "")));
+  dataset.plan_assignments = (dataset.plan_assignments || []).filter((assignment) => !copyCodes.has(String(assignment.plan_code || "")));
+  return dataset;
 }
 
 function handleRepairDatasetText(res, context, services) {

@@ -7,6 +7,7 @@ const { createAuthService } = require("./server/auth-service");
 const { createDatasetService } = require("./server/dataset-service");
 const { createSnapshotService } = require("./server/snapshot-service");
 const { createImportService } = require("./server/import-service");
+const { createPlanCopyService } = require("./server/plan-copy-service");
 const { createRouteApi } = require("./server/routes");
 
 // server.js 只负责装配依赖和启动 HTTP 服务；业务逻辑放在 server/*-service.js 中。
@@ -16,7 +17,8 @@ const auth = createAuthService(db, config, audit);
 const dataset = createDatasetService(db, config, audit);
 const snapshots = createSnapshotService(db, config, audit, dataset);
 const imports = createImportService(db, config, audit, dataset, snapshots);
-const services = { audit, auth, dataset, snapshots, imports };
+const planCopies = createPlanCopyService(db, dataset);
+const services = { audit, auth, dataset, snapshots, imports, planCopies };
 const routeApi = createRouteApi(services);
 const serveStatic = createStaticHandler(config);
 

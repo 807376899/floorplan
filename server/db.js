@@ -33,6 +33,24 @@ function openDatabase(config) {
       updated_by TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS plan_copies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      owner_user_id INTEGER NOT NULL,
+      plan_code TEXT NOT NULL UNIQUE,
+      plan_name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      visibility TEXT NOT NULL DEFAULT 'private',
+      revision INTEGER NOT NULL DEFAULT 1,
+      plan_json TEXT NOT NULL,
+      assignments_json TEXT NOT NULL,
+      source_plan_code TEXT NOT NULL DEFAULT '',
+      source_copy_id INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT,
+      FOREIGN KEY(owner_user_id) REFERENCES users(id),
+      FOREIGN KEY(source_copy_id) REFERENCES plan_copies(id)
+    );
     CREATE TABLE IF NOT EXISTS import_drafts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       file_name TEXT NOT NULL,

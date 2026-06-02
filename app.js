@@ -32,6 +32,7 @@ const REMEMBERED_USER_KEY = "floorplan_remembered_user";
 const state = {
   data: emptyDataset(),
   serverRevision: 0,
+  planCopies: [],
   user: null,
   permissions: { role: "viewer", canEdit: false, canAdmin: false },
   serverMode: false,
@@ -86,6 +87,7 @@ function bindEvents() {
   els.applyTableBtn.addEventListener("click", () => runWithUnsavedGuard(() => { void applyEditorRows(); }));
   els.downloadSheetBtn.addEventListener("click", () => runWithUnsavedGuard(() => ImportExport.downloadCurrentSheet(state, editorRows, updateStatus)));
   els.newPlanBtn.addEventListener("click", () => runWithUnsavedGuard(openNewPlanModal));
+  els.toggleVisibilityBtn.addEventListener("click", () => void toggleActivePlanVisibility());
   els.deletePlanBtn.addEventListener("click", () => runWithUnsavedGuard(openDeletePlanModal));
   els.singleModeBtn.addEventListener("click", () => runWithUnsavedGuard(() => setPlanViewMode("single")));
   els.compareModeBtn.addEventListener("click", () => runWithUnsavedGuard(() => setPlanViewMode("compare")));
@@ -139,6 +141,7 @@ async function bootstrap() {
     state.user = payload.user;
     state.permissions = payload.permissions;
     state.serverRevision = payload.revision;
+    state.planCopies = payload.planCopies || [];
     state.maintenance = payload.maintenance || state.maintenance;
     state.data = normalizeDataset(payload.dataset);
     resetContextState();
@@ -190,7 +193,8 @@ function applyAuthUi() {
   els.addRowBtn.hidden = !state.permissions.canEdit;
   els.applyTableBtn.hidden = !state.permissions.canEdit;
   els.newPlanBtn.hidden = !state.permissions.canEdit;
-  els.deletePlanBtn.hidden = !state.permissions.canAdmin;
+  els.toggleVisibilityBtn.hidden = !state.permissions.canEdit;
+  els.deletePlanBtn.hidden = !state.permissions.canEdit;
 }
 
 function openLoginModal() {
@@ -237,10 +241,8 @@ async function loginFlow() {
     localStorage.setItem(REMEMBERED_USER_KEY, username);
     state.user = payload.user;
     state.permissions = payload.permissions;
+    await reloadDatasetFromServer(`已登录为 ${payload.user.username}`);
     closeLoginModal();
-    applyAuthUi();
-    renderApp();
-    updateStatus(`已登录为 ${payload.user.username}`);
   } catch (error) {
     els.loginErrorText.textContent = error.message;
   } finally {
@@ -254,10 +256,8 @@ async function logoutFlow() {
     await fetchJson("/api/auth/logout", { method: "POST", body: JSON.stringify({}) });
     state.user = null;
     state.permissions = { role: "viewer", canEdit: false, canAdmin: false };
+    await reloadDatasetFromServer("已退出登录");
     state.loginSubmitting = false;
-    applyAuthUi();
-    renderApp();
-    updateStatus("已退出登录");
   } catch (error) {
     updateStatus(`退出失败：${error.message}`);
   }
@@ -265,6 +265,7 @@ async function logoutFlow() {
 
 async function saveDatasetToServer(changeNote) {
   if (!state.serverMode) return true;
+  if (!state.permissions.canAdmin) throw new Error("只有管理员可以修改共享基线数据");
   const payload = await fetchJson("/api/dataset/active", {
     method: "PUT",
     body: JSON.stringify({
@@ -274,10 +275,45 @@ async function saveDatasetToServer(changeNote) {
     }),
   });
   state.serverRevision = payload.revision;
+  state.planCopies = payload.planCopies || [];
   state.data = normalizeDataset(payload.dataset);
   if (payload.maintenance) state.maintenance = payload.maintenance;
   persistDataset();
   return true;
+}
+
+async function saveActivePlanCopyToServer() {
+  if (!state.serverMode) return true;
+  const activePlan = planById(state.activePlanId);
+  const copy = copyMetaForPlan(activePlan);
+  if (!canManageCopy(copy)) throw new Error("只能保存自己创建的方案副本");
+  const payload = await fetchJson(`/api/plan-copies/${copy.id}/assignments`, {
+    method: "PUT",
+    body: JSON.stringify({
+      assignments: assignmentRowsForPlan(activePlan.id),
+      expectedRevision: copy.revision,
+    }),
+  });
+  state.serverRevision = payload.revision;
+  state.planCopies = payload.planCopies || [];
+  state.data = normalizeDataset(payload.dataset);
+  if (payload.maintenance) state.maintenance = payload.maintenance;
+  persistDataset();
+  return true;
+}
+
+async function savePlanAssignmentsWithRollback(previousData, previousRevision) {
+  const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
+  try {
+    await saveActivePlanCopyToServer();
+    return true;
+  } catch (error) {
+    state.data = normalizeDataset(previousData);
+    state.serverRevision = previousRevision;
+    state.planCopies = previousCopies;
+    refreshStateAndRender(`方案副本保存失败：${error.message}`, { stamp: false, forceMoveReset: true });
+    return false;
+  }
 }
 
 async function repairCorruptedText() {
@@ -427,6 +463,7 @@ async function manageSnapshots() {
 async function reloadDatasetFromServer(message) {
   const payload = await fetchJson("/api/dataset/active");
   state.serverRevision = payload.revision;
+  state.planCopies = payload.planCopies || [];
   state.maintenance = payload.maintenance || state.maintenance;
   state.data = normalizeDataset(payload.dataset);
   resetContextState();
@@ -508,6 +545,39 @@ function persistDataset() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data));
 }
 
+function copyIdFromPlan(plan) {
+  const match = String(plan?.plan_code || "").match(/^copy-(\d+)$/);
+  return match ? Number(match[1]) : null;
+}
+
+function copyMetaForPlan(plan) {
+  const copyId = copyIdFromPlan(plan);
+  return copyId ? state.planCopies.find((copy) => copy.id === copyId) || null : null;
+}
+
+function activePlanCopyMeta() {
+  return copyMetaForPlan(planById(state.activePlanId));
+}
+
+function canManageCopy(copy) {
+  return Boolean(copy && state.user && (copy.ownerUserId === state.user.id || state.permissions.canAdmin));
+}
+
+function canEditActivePlan() {
+  if (!state.serverMode) return state.permissions.canEdit;
+  return canManageCopy(activePlanCopyMeta());
+}
+
+function canEditEditorKey(key) {
+  if (!state.serverMode) return state.permissions.canEdit;
+  if (key === "plan_assignments") return canEditActivePlan();
+  return state.permissions.canAdmin;
+}
+
+function assignmentRowsForPlan(planId) {
+  return state.data.plan_assignments.filter((row) => row.plan_id === planId);
+}
+
 function syncPlanViewMode() {
   if (state.data.plans.length < 2) state.planViewMode = "single";
   else if (!["single", "compare"].includes(state.planViewMode)) state.planViewMode = "single";
@@ -535,7 +605,11 @@ function populatePlanOptions() {
   const previousSingle = els.currentPlanSelect.value;
   const previousBefore = els.beforePlanSelect.value;
   const previousAfter = els.afterPlanSelect.value;
-  const items = state.data.plans.slice().sort((a, b) => compare(a.plan_name, b.plan_name)).map((plan) => ({ value: plan.id, label: plan.plan_name }));
+  const items = state.data.plans.slice().sort((a, b) => compare(a.plan_name, b.plan_name)).map((plan) => {
+    const copy = copyMetaForPlan(plan);
+    const prefix = copy ? (canManageCopy(copy) ? "我的副本 · " : "公开副本 · ") : "";
+    return { value: plan.id, label: `${prefix}${plan.plan_name}` };
+  });
   fillSelect(els.currentPlanSelect, items);
   fillSelect(els.beforePlanSelect, items);
   fillSelect(els.afterPlanSelect, items);
@@ -629,7 +703,9 @@ function renderCompareChrome() {
   const afterPlan = planById(els.afterPlanSelect.value);
   const activePlan = planById(state.activePlanId);
   const deletePlan = activePlan;
-  const canDeletePlan = Boolean(state.permissions.canAdmin && deletePlan && !deletePlan.is_locked && state.data.plans.length > 1);
+  const activeCopy = copyMetaForPlan(activePlan);
+  const canDeletePlan = Boolean(canManageCopy(activeCopy) && state.data.plans.length > 1);
+  const canToggleVisibility = Boolean(canManageCopy(activeCopy));
 
   els.singlePlanFilter.classList.toggle("is-hidden", isCompare);
   els.planCompareFilters.classList.toggle("is-hidden", !isCompare);
@@ -650,8 +726,11 @@ function renderCompareChrome() {
   els.afterPlanName.textContent = isCompare ? afterPlan?.plan_name || "" : "";
 
   els.newPlanBtn.disabled = !state.permissions.canEdit;
+  els.toggleVisibilityBtn.disabled = !canToggleVisibility;
+  els.toggleVisibilityBtn.textContent = activeCopy?.visibility === "public" ? "设为私有" : "公开副本";
+  els.toggleVisibilityBtn.title = canToggleVisibility ? "" : "只能公开或私有化自己创建的副本";
   els.deletePlanBtn.disabled = !canDeletePlan;
-  els.deletePlanBtn.title = canDeletePlan ? "" : (deletePlan?.is_locked ? "锁定方案不可删除" : "至少保留一套方案");
+  els.deletePlanBtn.title = canDeletePlan ? "" : (deletePlan?.is_locked ? "锁定方案不可删除" : "只能删除自己创建的副本");
 }
 
 function renderEditorTabs() {
@@ -724,7 +803,7 @@ function renderApp() {
     moveDraft: state.moveDraft,
     moveErrors: state.moveErrors,
     moveDirty: state.moveDirty,
-    canEdit: state.permissions.canEdit,
+    canEdit: canEditActivePlan(),
     onFocusRow: focusRowFromDetails,
     onOpenMove: openMoveMode,
     onMoveFieldChange: updateMoveField,
@@ -811,8 +890,8 @@ function handleSpaceSelect(spaceId) {
 }
 
 function openMoveMode() {
-  if (!state.permissions.canEdit) {
-    updateStatus("请先以 editor 或 admin 身份登录后再执行搬迁。");
+  if (!canEditActivePlan()) {
+    updateStatus("请先选择自己创建的方案副本后再执行搬迁。");
     return;
   }
   const context = getSelectedContext();
@@ -920,15 +999,24 @@ function confirmMoveAssignment() {
 }
 
 async function confirmMoveAssignmentAction() {
-  if (!state.permissions.canEdit) {
-    updateStatus("当前账号没有搬迁权限。");
+  if (!canEditActivePlan()) {
+    updateStatus("当前账号没有编辑此方案副本的权限。");
     return false;
   }
   const previousData = cloneDataset(state.data);
   const previousRevision = state.serverRevision;
+  const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
   const ok = confirmMoveAssignment();
   if (!ok) return false;
-  if (!(await saveWithRollback(previousData, previousRevision, "搬迁实验室", "搬迁保存失败"))) return false;
+  try {
+    await saveActivePlanCopyToServer();
+  } catch (error) {
+    state.data = normalizeDataset(previousData);
+    state.serverRevision = previousRevision;
+    state.planCopies = previousCopies;
+    refreshStateAndRender(`搬迁保存失败：${error.message}`, { stamp: false, forceMoveReset: true });
+    return false;
+  }
   refreshStateAndRender("已保存实验室搬迁。", { stamp: false, forceMoveReset: true });
   return true;
 }
@@ -1017,8 +1105,8 @@ function closeNewPlanModal() {
 }
 
 function openDeletePlanModal() {
-  if (!state.permissions.canAdmin) {
-    updateStatus("只有管理员可以删除方案。");
+  if (!canManageCopy(activePlanCopyMeta())) {
+    updateStatus("只能删除自己创建的方案副本。");
     return;
   }
   const plan = planById(state.activePlanId);
@@ -1043,6 +1131,27 @@ function closeDeletePlanModal() {
   els.deletePlanModal.setAttribute("aria-hidden", "true");
 }
 
+async function toggleActivePlanVisibility() {
+  const copy = activePlanCopyMeta();
+  if (!canManageCopy(copy)) {
+    updateStatus("只能公开或私有化自己创建的方案副本。");
+    return;
+  }
+  const nextVisibility = copy.visibility === "public" ? "private" : "public";
+  try {
+    const payload = await fetchJson(`/api/plan-copies/${copy.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ visibility: nextVisibility }),
+    });
+    state.serverRevision = payload.revision;
+    state.planCopies = payload.planCopies || [];
+    state.data = normalizeDataset(payload.dataset);
+    refreshStateAndRender(nextVisibility === "public" ? "方案副本已公开展示。" : "方案副本已设为私有。", { stamp: false, forceMoveReset: true });
+  } catch (error) {
+    updateStatus(`更新公开状态失败：${error.message}`);
+  }
+}
+
 function confirmDeletePlan() {
   const planId = state.planDeleteTargetId;
   const plan = planById(planId);
@@ -1062,16 +1171,21 @@ function confirmDeletePlan() {
 }
 
 async function confirmDeletePlanAction() {
-  if (!state.permissions.canAdmin) {
-    updateStatus("只有管理员可以删除方案。");
+  const copy = activePlanCopyMeta();
+  if (!canManageCopy(copy)) {
+    updateStatus("只能删除自己创建的方案副本。");
     return;
   }
-  const previousData = cloneDataset(state.data);
-  const previousRevision = state.serverRevision;
-  confirmDeletePlan();
-  if (JSON.stringify(previousData) === JSON.stringify(state.data)) return;
-  if (await saveWithRollback(previousData, previousRevision, "删除方案", "删除方案失败")) {
-    refreshStateAndRender("已删除当前方案。", { stamp: false, forceMoveReset: true });
+  try {
+    const payload = await fetchJson(`/api/plan-copies/${copy.id}`, { method: "DELETE" });
+    state.serverRevision = payload.revision;
+    state.planCopies = payload.planCopies || [];
+    state.data = normalizeDataset(payload.dataset);
+    closeDeletePlanModal();
+    resetContextState();
+    refreshStateAndRender("已删除当前方案副本。", { stamp: false, forceMoveReset: true });
+  } catch (error) {
+    updateStatus(`删除方案副本失败：${error.message}`);
   }
 }
 
@@ -1088,7 +1202,7 @@ function renderEditor() {
     return;
   }
 
-  const inputDisabled = state.permissions.canEdit ? "" : "disabled";
+  const inputDisabled = canEditEditorKey(state.editorKey) ? "" : "disabled";
   els.dataEditor.innerHTML = `<table><thead><tr>${definition.columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}</tr></thead><tbody>${rows.map((row, rowIndex) => `<tr data-row-id="${escapeHtml(row.id || "")}" class="${highlightRowId && row.id === highlightRowId ? "is-highlight" : ""}">${definition.columns.map(([key]) => `<td data-key="${key}"><input data-row="${rowIndex}" data-key="${key}" value="${escapeHtml(row[key] ?? "")}" ${inputDisabled}></td>`).join("")}</tr>`).join("")}</tbody></table>`;
 
   if (highlightRowId) {
@@ -1107,7 +1221,7 @@ function editorRows() {
 }
 
 function addEditorRow() {
-  if (!state.permissions.canEdit) {
+  if (!canEditEditorKey(state.editorKey)) {
     updateStatus("当前账号没有编辑权限。");
     return;
   }
@@ -1142,7 +1256,7 @@ function addEditorRow() {
 }
 
 async function applyEditorRows() {
-  if (!state.permissions.canEdit) {
+  if (!canEditEditorKey(state.editorKey)) {
     updateStatus("当前账号没有编辑权限。");
     return;
   }
@@ -1161,7 +1275,10 @@ async function applyEditorRows() {
   if (state.editorKey === "plan_assignments") replaceFilteredAssignments(rows.map((row) => normalizeAssignment(row, relationMaps(state.data))));
 
   state.data = normalizeDataset(state.data);
-  if (await saveWithRollback(previousData, previousRevision, `编辑 ${state.editorKey}`, "表格保存失败")) {
+  const saveOk = state.editorKey === "plan_assignments"
+    ? await savePlanAssignmentsWithRollback(previousData, previousRevision)
+    : await saveWithRollback(previousData, previousRevision, `编辑 ${state.editorKey}`, "表格保存失败");
+  if (saveOk) {
     refreshStateAndRender("已应用表格修改。", { stamp: false, forceMoveReset: true });
   }
 }
@@ -1246,18 +1363,37 @@ async function createPlanFromActive(planNameInput) {
 }
 
 async function createPlanFromActiveAction() {
-  const previousData = cloneDataset(state.data);
-  const previousRevision = state.serverRevision;
-  await createPlanFromActive(els.newPlanNameInput.value);
-  if (JSON.stringify(previousData) === JSON.stringify(state.data)) return;
+  const activePlan = planById(state.activePlanId) || state.data.plans[0];
+  const planName = String(els.newPlanNameInput.value || "").trim();
+  if (!activePlan) {
+    els.newPlanErrorText.textContent = "当前没有可复制的方案。";
+    return;
+  }
+  if (!planName) {
+    els.newPlanErrorText.textContent = "请输入方案名称。";
+    return;
+  }
   try {
-    await saveDatasetToServer("新增方案");
-    refreshStateAndRender("已保存新增方案。", { stamp: false, forceMoveReset: true });
+    const payload = await fetchJson("/api/plan-copies", {
+      method: "POST",
+      body: JSON.stringify({
+        sourcePlanCode: activePlan.plan_code,
+        planName,
+      }),
+    });
+    state.serverRevision = payload.revision;
+    state.planCopies = payload.planCopies || [];
+    state.data = normalizeDataset(payload.dataset);
+    const createdPlan = planById(`copy-${payload.copyId}`);
+    if (createdPlan) {
+      els.currentPlanSelect.value = createdPlan.id;
+      state.activePlanId = createdPlan.id;
+    }
+    closeNewPlanModal();
+    refreshStateAndRender("已创建新的个人方案副本。", { stamp: false, forceMoveReset: true });
   } catch (error) {
-    state.data = normalizeDataset(previousData);
-    state.serverRevision = previousRevision;
     els.newPlanErrorText.textContent = error.message;
-    refreshStateAndRender(`新增方案失败：${error.message}`, { stamp: false, forceMoveReset: true });
+    updateStatus(`新增方案副本失败：${error.message}`);
   }
 }
 
