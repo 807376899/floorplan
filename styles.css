@@ -31,6 +31,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background:
@@ -1211,6 +1215,19 @@ button:disabled {
   width: min(520px, 100%);
 }
 
+.modal-card-users {
+  width: min(880px, 100%);
+  max-height: min(760px, calc(100vh - 36px));
+  overflow: auto;
+}
+
+.modal-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 .modal-form {
   display: grid;
   gap: 14px;
@@ -1225,7 +1242,8 @@ button:disabled {
   font-weight: 600;
 }
 
-.modal-field input {
+.modal-field input,
+.modal-field select {
   min-height: 40px;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -1234,10 +1252,66 @@ button:disabled {
   padding: 8px 12px;
 }
 
-.modal-field input:focus {
+.modal-field input:focus,
+.modal-field select:focus {
   outline: 0;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+}
+
+.user-create-form {
+  grid-template-columns: minmax(140px, 1fr) minmax(160px, 1fr) 120px auto;
+  align-items: end;
+}
+
+.user-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.user-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 700px;
+  font-size: 13px;
+}
+
+.user-table th,
+.user-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.user-table th {
+  background: var(--panel-soft);
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 2px 9px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-pill.is-disabled {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .password-row {
@@ -1337,6 +1411,17 @@ button:disabled {
 
   .thumb-preview {
     max-height: 110px;
+  }
+}
+
+@media (max-width: 760px) {
+  .user-create-form {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-heading {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

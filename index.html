@@ -20,7 +20,7 @@
           <h1>实验室布局</h1>
         </div>
         <div class="controls">
-          <label id="importPackageLabel" class="file-control">
+          <label id="importPackageLabel" class="file-control" hidden>
             <span>上传数据包</span>
             <input id="packageFileInput" type="file" accept=".xlsx,.xls,.json" />
           </label>
@@ -179,6 +179,59 @@
             <button id="cancelLoginBtn" type="button">取消</button>
           </div>
         </form>
+      </div>
+    </div>
+
+    <div id="userManagementModal" class="modal-backdrop is-hidden" aria-hidden="true">
+      <div class="modal-card modal-card-users" role="dialog" aria-modal="true" aria-labelledby="userManagementModalTitle">
+        <div class="modal-heading">
+          <div>
+            <h3 id="userManagementModalTitle">管理用户</h3>
+            <p>创建 admin/editor 账号，或禁用不再使用的账号。</p>
+          </div>
+          <button id="closeUserManagementBtn" type="button" class="ghost-button">关闭</button>
+        </div>
+        <form id="userCreateForm" class="modal-form user-create-form">
+          <label class="modal-field">
+            <span>用户名</span>
+            <input id="newUsernameInput" name="username" type="text" autocomplete="off" />
+          </label>
+          <label class="modal-field">
+            <span>初始密码</span>
+            <input id="newUserPasswordInput" name="password" type="password" autocomplete="new-password" />
+          </label>
+          <label class="modal-field">
+            <span>角色</span>
+            <select id="newUserRoleSelect" name="role">
+              <option value="editor">editor</option>
+              <option value="admin">admin</option>
+            </select>
+          </label>
+          <button id="createUserBtn" type="submit" class="primary-button">创建用户</button>
+        </form>
+        <div id="userManagementErrorText" class="modal-error" aria-live="polite"></div>
+        <div class="user-table-wrap">
+          <table class="user-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>用户名</th>
+                <th>角色</th>
+                <th>状态</th>
+                <th>创建时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="userTableBody">
+              <tr>
+                <td colspan="6">正在加载用户...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="modal-actions">
+          <button id="refreshUsersBtn" type="button">刷新</button>
+        </div>
       </div>
     </div>
 

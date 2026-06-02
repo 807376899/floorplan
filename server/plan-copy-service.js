@@ -236,7 +236,8 @@ function createPlanCopyService(db, datasetService) {
 
   function stripPayload(copy, user) {
     const { plan, assignments, ...rest } = copy;
-    if (!user) delete rest.ownerUsername;
+    const canSeeOwner = user && (user.role === "admin" || user.id === copy.ownerUserId);
+    if (!canSeeOwner) delete rest.ownerUsername;
     return rest;
   }
 

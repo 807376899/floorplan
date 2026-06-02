@@ -55,6 +55,10 @@ const state = {
   pendingNavigation: null,
   planDeleteTargetId: null,
   loginSubmitting: false,
+  userManagement: {
+    users: [],
+    loading: false,
+  },
   planDraftName: "",
   statusMessage: "",
 };
@@ -69,6 +73,10 @@ function bindEvents() {
   els.packageFileInput.addEventListener("change", (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
+    if (!state.permissions.canAdmin) {
+      updateStatus("只有管理员可以上传新的数据包草稿。");
+      return;
+    }
     if (!file) return;
     runWithUnsavedGuard(() => { void importPackageFile(file); });
   });
@@ -125,6 +133,12 @@ function bindEvents() {
   });
   els.cancelLoginBtn.addEventListener("click", closeLoginModal);
   els.togglePasswordBtn.addEventListener("click", togglePasswordVisibility);
+  els.userCreateForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void createManagedUserAction();
+  });
+  els.closeUserManagementBtn.addEventListener("click", closeUserManagementModal);
+  els.refreshUsersBtn.addEventListener("click", () => void loadManagedUsers());
   els.newPlanForm.addEventListener("submit", (event) => {
     event.preventDefault();
     void createPlanFromActiveAction();
@@ -468,34 +482,108 @@ async function manageUsers() {
     updateStatus("只有管理员可以管理用户。");
     return;
   }
+  openUserManagementModal();
+  await loadManagedUsers();
+}
+
+function openUserManagementModal() {
+  els.userManagementErrorText.textContent = "";
+  els.userManagementModal.classList.remove("is-hidden");
+  els.userManagementModal.setAttribute("aria-hidden", "false");
+  setTimeout(() => els.newUsernameInput.focus(), 0);
+}
+
+function closeUserManagementModal() {
+  els.userManagementModal.classList.add("is-hidden");
+  els.userManagementModal.setAttribute("aria-hidden", "true");
+  els.userManagementErrorText.textContent = "";
+  els.userCreateForm.reset();
+  els.newUserRoleSelect.value = "editor";
+}
+
+async function loadManagedUsers() {
+  state.userManagement.loading = true;
+  renderManagedUsers();
   try {
     const payload = await fetchJson("/api/users");
-    const summary = payload.users
-      .map((user) => `#${user.id} ${user.username} [${user.role}] ${user.isActive ? "启用" : "禁用"}`)
-      .join("\n");
-    const command = window.prompt(`用户列表：\n${summary}\n\n输入 C 用户名 密码 admin|editor 创建用户；输入 D 用户ID 禁用用户。`);
-    if (!command) return;
-    const [action, first, second, third] = command.trim().split(/\s+/);
-    if (String(action).toUpperCase() === "C") {
-      if (!first || !second || !["admin", "editor"].includes(third)) {
-        updateStatus("创建用户失败：请输入 C 用户名 密码 admin|editor。");
-        return;
-      }
-      await fetchJson("/api/users", {
-        method: "POST",
-        body: JSON.stringify({ username: first, password: second, role: third }),
-      });
-      updateStatus(`已创建用户 ${first}。`);
-      return;
-    }
-    if (String(action).toUpperCase() === "D") {
-      const userId = Number(first);
-      if (!userId) return;
-      await fetchJson(`/api/users/${userId}`, { method: "DELETE" });
-      updateStatus(`已禁用用户 #${userId}。`);
-    }
+    state.userManagement.users = payload.users || [];
+    els.userManagementErrorText.textContent = "";
   } catch (error) {
-    updateStatus(`用户管理失败：${error.message}`);
+    els.userManagementErrorText.textContent = `用户列表加载失败：${error.message}`;
+  } finally {
+    state.userManagement.loading = false;
+    renderManagedUsers();
+  }
+}
+
+function renderManagedUsers() {
+  if (state.userManagement.loading) {
+    els.userTableBody.innerHTML = `<tr><td colspan="6">正在加载用户...</td></tr>`;
+    return;
+  }
+  if (!state.userManagement.users.length) {
+    els.userTableBody.innerHTML = `<tr><td colspan="6">暂无用户。</td></tr>`;
+    return;
+  }
+  els.userTableBody.innerHTML = state.userManagement.users.map((user) => {
+    const isSelf = state.user?.id === user.id;
+    const canDisable = user.isActive && !isSelf;
+    const statusClass = user.isActive ? "status-pill" : "status-pill is-disabled";
+    const statusText = user.isActive ? "启用" : "禁用";
+    const action = canDisable
+      ? `<button type="button" data-user-disable="${user.id}">禁用</button>`
+      : `<button type="button" disabled>${isSelf ? "当前账号" : "已禁用"}</button>`;
+    return `
+      <tr>
+        <td>#${user.id}</td>
+        <td>${escapeHtml(user.username)}</td>
+        <td>${escapeHtml(user.role)}</td>
+        <td><span class="${statusClass}">${statusText}</span></td>
+        <td>${escapeHtml(formatDateTime(user.createdAt))}</td>
+        <td>${action}</td>
+      </tr>
+    `;
+  }).join("");
+  els.userTableBody.querySelectorAll("[data-user-disable]").forEach((button) => {
+    button.addEventListener("click", () => void disableManagedUserAction(Number(button.dataset.userDisable)));
+  });
+}
+
+async function createManagedUserAction() {
+  const username = els.newUsernameInput.value.trim();
+  const password = els.newUserPasswordInput.value;
+  const role = els.newUserRoleSelect.value;
+  if (!username || !password || !["admin", "editor"].includes(role)) {
+    els.userManagementErrorText.textContent = "请输入用户名、初始密码，并选择 admin 或 editor。";
+    return;
+  }
+  els.createUserBtn.disabled = true;
+  try {
+    await fetchJson("/api/users", {
+      method: "POST",
+      body: JSON.stringify({ username, password, role }),
+    });
+    els.userCreateForm.reset();
+    els.newUserRoleSelect.value = "editor";
+    updateStatus(`已创建用户 ${username}。`);
+    await loadManagedUsers();
+  } catch (error) {
+    els.userManagementErrorText.textContent = `创建用户失败：${error.message}`;
+  } finally {
+    els.createUserBtn.disabled = false;
+  }
+}
+
+async function disableManagedUserAction(userId) {
+  const user = state.userManagement.users.find((item) => item.id === userId);
+  if (!user || !user.isActive || state.user?.id === userId) return;
+  if (!window.confirm(`确认禁用用户 ${user.username}？该用户现有登录会话会立即失效。`)) return;
+  try {
+    await fetchJson(`/api/users/${userId}`, { method: "DELETE" });
+    updateStatus(`已禁用用户 ${user.username}。`);
+    await loadManagedUsers();
+  } catch (error) {
+    els.userManagementErrorText.textContent = `禁用用户失败：${error.message}`;
   }
 }
 
@@ -606,11 +694,25 @@ function isOwnCopy(copy) {
   return Boolean(copy && state.user && copy.ownerUserId === state.user.id);
 }
 
-function planCopyPrefix(copy) {
-  if (!copy) return "";
-  if (isOwnCopy(copy)) return "我的副本 · ";
-  if (state.permissions.canAdmin && copy.ownerUsername) return `${copy.ownerUsername} 的副本 · `;
-  return `公开副本 · ${copy.planName} · 公开 #${copy.id}`;
+function planCopyLabel(plan, copy) {
+  if (!copy) return plan.plan_name;
+  const idLabel = copy.visibility === "public" ? `公开 #${copy.id}` : `#${copy.id}`;
+  if (isOwnCopy(copy)) return `我的副本 · ${plan.plan_name} · ${idLabel}`;
+  if (state.permissions.canAdmin && copy.ownerUsername) return `${copy.ownerUsername} 的副本 · ${plan.plan_name} · ${idLabel}`;
+  return `公开副本 · ${plan.plan_name} · 公开 #${copy.id}`;
+}
+
+function formatDateTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function canEditActivePlan() {
@@ -657,10 +759,7 @@ function populatePlanOptions() {
   const previousAfter = els.afterPlanSelect.value;
   const items = state.data.plans.slice().sort((a, b) => compare(a.plan_name, b.plan_name)).map((plan) => {
     const copy = copyMetaForPlan(plan);
-    const label = copy && !isOwnCopy(copy) && !state.permissions.canAdmin
-      ? planCopyPrefix(copy)
-      : `${planCopyPrefix(copy)}${plan.plan_name}`;
-    return { value: plan.id, label };
+    return { value: plan.id, label: planCopyLabel(plan, copy) };
   });
   fillSelect(els.currentPlanSelect, items);
   fillSelect(els.beforePlanSelect, items);
