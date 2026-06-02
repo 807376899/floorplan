@@ -1,6 +1,8 @@
 const crypto = require("crypto");
 const { httpError, nowIso, parseCookies, serializeCookie } = require("./http-utils");
 
+const VALID_ROLES = new Set(["admin", "editor"]);
+
 function createAuthService(db, config, audit) {
   function seedUsers() {
     const count = db.prepare("SELECT COUNT(*) AS count FROM users").get().count;
@@ -10,10 +12,57 @@ function createAuthService(db, config, audit) {
   }
 
   function createUser(username, password, role) {
+    if (!VALID_ROLES.has(role)) throw httpError(400, "invalid_role", "Role must be admin or editor");
     const salt = crypto.randomBytes(16).toString("hex");
     const passwordHash = hashPassword(password, salt);
     db.prepare("INSERT INTO users (username, password_hash, salt, role, created_at) VALUES (?, ?, ?, ?, ?)")
       .run(username, passwordHash, salt, role, nowIso());
+  }
+
+  function listUsers() {
+    return db.prepare(`
+      SELECT id, username, role, is_active, created_at
+      FROM users
+      ORDER BY id ASC
+    `).all().map((row) => ({
+      id: row.id,
+      username: row.username,
+      role: row.role,
+      isActive: Boolean(row.is_active),
+      createdAt: row.created_at,
+    }));
+  }
+
+  function createManagedUser(body) {
+    const username = String(body.username || "").trim();
+    const password = String(body.password || "");
+    const role = String(body.role || "").trim();
+    if (!username) throw httpError(400, "invalid_username", "请输入账号");
+    if (!password) throw httpError(400, "invalid_password", "请输入密码");
+    if (!VALID_ROLES.has(role)) throw httpError(400, "invalid_role", "Role must be admin or editor");
+    const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(username);
+    if (existing) throw httpError(409, "username_exists", "账号已存在");
+    createUser(username, password, role);
+    const row = db.prepare("SELECT id, username, role, is_active, created_at FROM users WHERE username = ?").get(username);
+    return {
+      id: row.id,
+      username: row.username,
+      role: row.role,
+      isActive: Boolean(row.is_active),
+      createdAt: row.created_at,
+    };
+  }
+
+  function disableUser(userId, actorUser) {
+    const id = Number(userId);
+    if (!id) throw httpError(400, "invalid_user_id", "用户 ID 无效");
+    if (actorUser?.id === id) throw httpError(400, "cannot_disable_self", "不能禁用当前登录账号");
+    const target = db.prepare("SELECT id, username FROM users WHERE id = ? AND is_active = 1").get(id);
+    if (!target) throw httpError(404, "user_not_found", "未找到可禁用的用户");
+    const now = nowIso();
+    db.prepare("UPDATE users SET is_active = 0 WHERE id = ?").run(id);
+    db.prepare("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL").run(now, id);
+    return target;
   }
 
   function buildRequestContext(req) {
@@ -102,6 +151,9 @@ function createAuthService(db, config, audit) {
     permissionsFor,
     publicUser,
     requireRole,
+    listUsers,
+    createManagedUser,
+    disableUser,
     login,
     logout,
   };

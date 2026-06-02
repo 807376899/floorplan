@@ -77,6 +77,7 @@ function bindEvents() {
   els.exportWorkbookBtn.addEventListener("click", () => runWithUnsavedGuard(() => ImportExport.exportWorkbook(state, updateStatus)));
   els.manageImportsBtn.addEventListener("click", () => void manageImportDrafts());
   els.manageSnapshotsBtn.addEventListener("click", () => void manageSnapshots());
+  els.manageUsersBtn.addEventListener("click", () => void manageUsers());
   els.repairTextBtn.addEventListener("click", () => void repairCorruptedText());
   els.loginBtn.addEventListener("click", openLoginModal);
   els.logoutBtn.addEventListener("click", () => void logoutFlow());
@@ -185,9 +186,11 @@ function applyAuthUi() {
   els.loginBtn.hidden = Boolean(state.user);
   els.logoutBtn.hidden = !state.user;
   els.importPackageLabel.hidden = !state.permissions.canAdmin;
+  els.packageFileInput.disabled = !state.permissions.canAdmin;
   els.downloadTemplateBtn.hidden = !state.permissions.canEdit;
   els.manageImportsBtn.hidden = !state.permissions.canAdmin;
   els.manageSnapshotsBtn.hidden = !state.permissions.canAdmin;
+  els.manageUsersBtn.hidden = !state.permissions.canAdmin;
   els.repairTextBtn.hidden = !(state.permissions.canAdmin && state.maintenance.textRepairAvailable);
   els.loadSampleBtn.hidden = state.serverMode;
   els.addRowBtn.hidden = !state.permissions.canEdit;
@@ -460,6 +463,42 @@ async function manageSnapshots() {
   }
 }
 
+async function manageUsers() {
+  if (!state.permissions.canAdmin) {
+    updateStatus("只有管理员可以管理用户。");
+    return;
+  }
+  try {
+    const payload = await fetchJson("/api/users");
+    const summary = payload.users
+      .map((user) => `#${user.id} ${user.username} [${user.role}] ${user.isActive ? "启用" : "禁用"}`)
+      .join("\n");
+    const command = window.prompt(`用户列表：\n${summary}\n\n输入 C 用户名 密码 admin|editor 创建用户；输入 D 用户ID 禁用用户。`);
+    if (!command) return;
+    const [action, first, second, third] = command.trim().split(/\s+/);
+    if (String(action).toUpperCase() === "C") {
+      if (!first || !second || !["admin", "editor"].includes(third)) {
+        updateStatus("创建用户失败：请输入 C 用户名 密码 admin|editor。");
+        return;
+      }
+      await fetchJson("/api/users", {
+        method: "POST",
+        body: JSON.stringify({ username: first, password: second, role: third }),
+      });
+      updateStatus(`已创建用户 ${first}。`);
+      return;
+    }
+    if (String(action).toUpperCase() === "D") {
+      const userId = Number(first);
+      if (!userId) return;
+      await fetchJson(`/api/users/${userId}`, { method: "DELETE" });
+      updateStatus(`已禁用用户 #${userId}。`);
+    }
+  } catch (error) {
+    updateStatus(`用户管理失败：${error.message}`);
+  }
+}
+
 async function reloadDatasetFromServer(message) {
   const payload = await fetchJson("/api/dataset/active");
   state.serverRevision = payload.revision;
@@ -563,6 +602,17 @@ function canManageCopy(copy) {
   return Boolean(copy && state.user && (copy.ownerUserId === state.user.id || state.permissions.canAdmin));
 }
 
+function isOwnCopy(copy) {
+  return Boolean(copy && state.user && copy.ownerUserId === state.user.id);
+}
+
+function planCopyPrefix(copy) {
+  if (!copy) return "";
+  if (isOwnCopy(copy)) return "我的副本 · ";
+  if (state.permissions.canAdmin && copy.ownerUsername) return `${copy.ownerUsername} 的副本 · `;
+  return `公开副本 · ${copy.planName} · 公开 #${copy.id}`;
+}
+
 function canEditActivePlan() {
   if (!state.serverMode) return state.permissions.canEdit;
   return canManageCopy(activePlanCopyMeta());
@@ -607,8 +657,10 @@ function populatePlanOptions() {
   const previousAfter = els.afterPlanSelect.value;
   const items = state.data.plans.slice().sort((a, b) => compare(a.plan_name, b.plan_name)).map((plan) => {
     const copy = copyMetaForPlan(plan);
-    const prefix = copy ? (canManageCopy(copy) ? "我的副本 · " : "公开副本 · ") : "";
-    return { value: plan.id, label: `${prefix}${plan.plan_name}` };
+    const label = copy && !isOwnCopy(copy) && !state.permissions.canAdmin
+      ? planCopyPrefix(copy)
+      : `${planCopyPrefix(copy)}${plan.plan_name}`;
+    return { value: plan.id, label };
   });
   fillSelect(els.currentPlanSelect, items);
   fillSelect(els.beforePlanSelect, items);

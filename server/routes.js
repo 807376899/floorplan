@@ -20,6 +20,34 @@ function createRouteApi(services) {
       return sendJson(res, 200, { user: auth.publicUser(context.user), permissions: auth.permissionsFor(context.user) });
     }
 
+    if (req.method === "GET" && pathname === "/api/users") {
+      auth.requireRole(context.user, ["admin"]);
+      return sendJson(res, 200, { users: auth.listUsers() });
+    }
+
+    if (req.method === "POST" && pathname === "/api/users") {
+      auth.requireRole(context.user, ["admin"]);
+      const body = await readJsonBody(req);
+      const user = auth.createManagedUser(body);
+      audit.writeAudit("user_created", context.user.username, context.ip, {
+        userId: user.id,
+        username: user.username,
+        role: user.role,
+      });
+      return sendJson(res, 200, { ok: true, user });
+    }
+
+    const userMatch = pathname.match(/^\/api\/users\/(\d+)$/);
+    if (req.method === "DELETE" && userMatch) {
+      auth.requireRole(context.user, ["admin"]);
+      const user = auth.disableUser(Number(userMatch[1]), context.user);
+      audit.writeAudit("user_disabled", context.user.username, context.ip, {
+        userId: user.id,
+        username: user.username,
+      });
+      return sendJson(res, 200, { ok: true });
+    }
+
     if (req.method === "POST" && pathname === "/api/auth/login") {
       const body = await readJsonBody(req);
       const login = auth.login(String(body.username || "").trim(), String(body.password || ""), Boolean(body.remember), context);

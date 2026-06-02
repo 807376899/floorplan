@@ -49,7 +49,7 @@ function createPlanCopyService(db, datasetService) {
     }
     return {
       dataset: datasetService.normalizeIncomingDataset(dataset),
-      copies: copies.map(stripPayload),
+      copies: copies.map((copy) => stripPayload(copy, user)),
       revision: active.revision,
       updatedBy: active.updatedBy,
       updatedAt: active.updatedAt,
@@ -234,8 +234,9 @@ function createPlanCopyService(db, datasetService) {
     };
   }
 
-  function stripPayload(copy) {
+  function stripPayload(copy, user) {
     const { plan, assignments, ...rest } = copy;
+    if (!user) delete rest.ownerUsername;
     return rest;
   }
 
