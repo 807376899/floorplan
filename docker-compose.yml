@@ -1,0 +1,19 @@
+services:
+  floorplan:
+    build: .
+    image: floorplan:local
+    container_name: floorplan
+    restart: unless-stopped
+    environment:
+      PORT: "5173"
+      FLOORPLAN_ADMIN_USER: "admin"
+      FLOORPLAN_ADMIN_PASSWORD: "admin123456"
+      FLOORPLAN_EDITOR_USER: "editor"
+      FLOORPLAN_EDITOR_PASSWORD: "editor123456"
+    ports:
+      - "5173:5173"
+    volumes:
+      - floorplan-data:/app/data
+
+volumes:
+  floorplan-data:

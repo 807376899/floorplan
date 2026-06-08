@@ -59,6 +59,126 @@ node server.js
 
 访问 [http://localhost:5173](http://localhost:5173)。
 
+## Docker 部署到新服务器
+
+适合以后把项目部署到一台新的 Windows 或 Linux 服务器。服务器需要能访问 Docker Hub，首次构建会拉取 `node:24-bookworm-slim` 镜像。
+
+### 1. 安装 Docker
+
+- Windows 服务器：安装 Docker Desktop，并确认 Linux engine 可以启动。
+- Linux 服务器：安装 Docker Engine 和 Docker Compose plugin。
+
+安装完成后验证：
+
+```bash
+docker version
+docker compose version
+```
+
+### 2. 获取代码
+
+```bash
+git clone <your-repo-url> floorplan
+cd floorplan
+```
+
+如果服务器没有 Git，也可以把整个项目目录复制到服务器，但要包含这些文件和目录：
+
+- `Dockerfile`
+- `docker-compose.yml`
+- `.dockerignore`
+- `server.js`
+- `app.js`
+- `index.html`
+- `styles.css`
+- `js/`
+- `server/`
+- `scripts/`
+- `sample-floors.csv`
+- `sample-rooms.csv`
+
+### 3. 修改默认账号密码
+
+首次启动会自动创建默认账号。上线前建议先编辑 `docker-compose.yml`，把下面几个环境变量改成强密码：
+
+```yaml
+FLOORPLAN_ADMIN_USER: "admin"
+FLOORPLAN_ADMIN_PASSWORD: "change-this-admin-password"
+FLOORPLAN_EDITOR_USER: "editor"
+FLOORPLAN_EDITOR_PASSWORD: "change-this-editor-password"
+```
+
+这些变量只在第一次初始化数据库、`users` 表为空时生效。如果已经生成过数据库，后续修改密码请用系统里的用户管理功能，或使用 `scripts/manage-user.js`。
+
+### 4. 构建并启动
+
+```bash
+docker compose up -d --build
+```
+
+查看运行状态：
+
+```bash
+docker compose ps
+docker compose logs -f
+```
+
+默认访问地址：
+
+```text
+http://服务器IP:5173
+```
+
+如果服务器有防火墙或云安全组，需要放行 TCP `5173` 端口。
+
+### 5. 数据持久化
+
+`docker-compose.yml` 会把运行数据保存到 Docker volume：
+
+```text
+floorplan_floorplan-data
+```
+
+里面包含：
+
+- `app.db`：SQLite 数据库。
+- `uploads/`：导入草稿归档。
+- `backups/`：数据库备份。
+
+升级代码时直接重新构建即可，volume 不会被删除：
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+不要使用 `docker compose down -v`，除非确认要删除全部运行数据。
+
+### 6. 迁移到另一台服务器
+
+在旧服务器导出数据卷：
+
+```bash
+docker run --rm -v floorplan_floorplan-data:/data -v "$PWD":/backup alpine tar czf /backup/floorplan-data.tar.gz -C /data .
+```
+
+把 `floorplan-data.tar.gz` 复制到新服务器项目目录后导入：
+
+```bash
+docker volume create floorplan_floorplan-data
+docker run --rm -v floorplan_floorplan-data:/data -v "$PWD":/backup alpine sh -c "cd /data && tar xzf /backup/floorplan-data.tar.gz"
+docker compose up -d --build
+```
+
+### 7. 常用维护命令
+
+```bash
+docker compose restart
+docker compose logs -f
+docker compose down
+docker compose up -d --build
+```
+
 ## 默认账号
 
 首次启动会自动创建两个账号，可通过环境变量覆盖：
