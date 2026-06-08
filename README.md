@@ -179,6 +179,136 @@ docker compose down
 docker compose up -d --build
 ```
 
+## 无 Docker 简易部署
+
+如果新服务器没有安装 Docker，也可以直接从 GitHub 拉代码后用 Node 运行。这个项目没有第三方 npm 依赖，主要要求是 Node 版本必须支持内置 `node:sqlite`。
+
+推荐做法是先按下面的清单检查服务器环境，缺什么再补什么，而不是把运行环境文件提交到仓库。密码、端口等敏感配置应该保存在服务器环境变量或服务器自己的启动脚本里，不要提交到 Git。
+
+### 1. 环境检查清单
+
+Windows PowerShell：
+
+```powershell
+git --version
+node --version
+node -e "require('node:sqlite'); console.log('node:sqlite ok')"
+```
+
+Linux shell：
+
+```bash
+git --version
+node --version
+node -e "require('node:sqlite'); console.log('node:sqlite ok')"
+```
+
+需要满足：
+
+- `git --version` 能正常输出版本。
+- `node --version` 建议为 Node 24 或更新版本。
+- `node -e "require('node:sqlite')"` 能输出 `node:sqlite ok`。
+
+如果缺 Git，就先安装 Git。如果缺 Node，或 `node:sqlite` 检查失败，就安装 Node 24 或更新版本。
+
+### 2. 从 GitHub 拉代码
+
+```bash
+git clone <your-repo-url> floorplan
+cd floorplan
+```
+
+拉下来后确认关键文件存在：
+
+```bash
+ls server.js app.js index.html styles.css
+ls server js scripts
+```
+
+Windows PowerShell 可用：
+
+```powershell
+Get-ChildItem server.js, app.js, index.html, styles.css
+Get-ChildItem server, js, scripts
+```
+
+### 3. 配置账号和端口
+
+首次启动会自动初始化数据库和默认账号。上线前建议先设置环境变量。
+
+Windows PowerShell 当前窗口临时设置：
+
+```powershell
+$env:PORT = "5173"
+$env:FLOORPLAN_ADMIN_USER = "admin"
+$env:FLOORPLAN_ADMIN_PASSWORD = "change-this-admin-password"
+$env:FLOORPLAN_EDITOR_USER = "editor"
+$env:FLOORPLAN_EDITOR_PASSWORD = "change-this-editor-password"
+```
+
+Linux 当前 shell 临时设置：
+
+```bash
+export PORT=5173
+export FLOORPLAN_ADMIN_USER=admin
+export FLOORPLAN_ADMIN_PASSWORD='change-this-admin-password'
+export FLOORPLAN_EDITOR_USER=editor
+export FLOORPLAN_EDITOR_PASSWORD='change-this-editor-password'
+```
+
+这些变量只在第一次初始化数据库、`users` 表为空时生效。生成 `data/app.db` 后，后续改环境变量不会覆盖已有账号。
+
+### 4. 直接启动
+
+Windows 或 Linux 都可以：
+
+```bash
+node server.js
+```
+
+访问：
+
+```text
+http://服务器IP:5173
+```
+
+如果服务器有防火墙或云安全组，需要放行 TCP `5173` 端口。
+
+### 5. 后台运行
+
+Linux 简易后台运行：
+
+```bash
+nohup node server.js > server.log 2> server.err.log &
+```
+
+查看日志：
+
+```bash
+tail -f server.log server.err.log
+```
+
+Windows 可以先用前台方式确认服务正常；长期运行建议改成 Windows 服务、计划任务，或直接使用 Docker 部署。
+
+### 6. 无 Docker 模式的数据目录
+
+直接运行时，数据保存在项目目录下的 `data/`：
+
+- `data/app.db`：SQLite 数据库。
+- `data/uploads/`：导入草稿归档。
+- `data/backups/`：数据库备份。
+
+迁移服务器时，把项目代码更新到新服务器后，再复制旧服务器的 `data/` 目录即可。不要把 `data/` 提交到 Git。
+
+### 7. 更新代码
+
+```bash
+git pull
+node server.js
+```
+
+如果服务已经在后台运行，更新后需要停止旧进程再重新启动。
+
 ## 默认账号
 
 首次启动会自动创建两个账号，可通过环境变量覆盖：
