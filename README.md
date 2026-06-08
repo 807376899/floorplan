@@ -209,9 +209,48 @@ node -e "require('node:sqlite'); console.log('node:sqlite ok')"
 - `node --version` 建议为 Node 24 或更新版本。
 - `node -e "require('node:sqlite')"` 能输出 `node:sqlite ok`。
 
-如果缺 Git，就先安装 Git。如果缺 Node，或 `node:sqlite` 检查失败，就安装 Node 24 或更新版本。
+如果缺 Git，就先安装 Git。如果缺 Node/npm，或 `node:sqlite` 检查失败，就安装 Node 24 或更新版本。npm 会随 Node 一起安装，不需要单独安装。
 
-### 2. 从 GitHub 拉代码
+### 2. 安装 Node/npm
+
+Windows 服务器推荐用 winget 安装 Node.js LTS：
+
+```powershell
+winget install OpenJS.NodeJS.LTS --scope machine --accept-package-agreements --accept-source-agreements
+```
+
+安装后重新打开一个 PowerShell 或 CMD，再验证：
+
+```powershell
+node --version
+npm.cmd --version
+node -e "require('node:sqlite'); console.log('node:sqlite ok')"
+```
+
+如果 PowerShell 执行 `npm` 时提示 `npm.ps1 cannot be loaded because running scripts is disabled`，改用 `npm.cmd`：
+
+```powershell
+npm.cmd start
+```
+
+Linux 服务器可以用 NodeSource 安装 Node 24：
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+验证：
+
+```bash
+node --version
+npm --version
+node -e "require('node:sqlite'); console.log('node:sqlite ok')"
+```
+
+如果服务器不能访问外网，就先在其他机器下载 Node 24 或更新版本的离线安装包，再复制到服务器安装。无论哪种方式，最终都要通过上面的三条验证命令后再运行项目。
+
+### 3. 从 GitHub 拉代码
 
 ```bash
 git clone <your-repo-url> floorplan
@@ -232,7 +271,7 @@ Get-ChildItem server.js, app.js, index.html, styles.css
 Get-ChildItem server, js, scripts
 ```
 
-### 3. 配置账号和端口
+### 4. 配置账号和端口
 
 首次启动会自动初始化数据库和默认账号。上线前建议先设置环境变量。
 
@@ -258,7 +297,7 @@ export FLOORPLAN_EDITOR_PASSWORD='change-this-editor-password'
 
 这些变量只在第一次初始化数据库、`users` 表为空时生效。生成 `data/app.db` 后，后续改环境变量不会覆盖已有账号。
 
-### 4. 直接启动
+### 5. 直接启动
 
 Windows 或 Linux 都可以：
 
@@ -274,7 +313,7 @@ http://服务器IP:5173
 
 如果服务器有防火墙或云安全组，需要放行 TCP `5173` 端口。
 
-### 5. 后台运行
+### 6. 后台运行
 
 Linux 简易后台运行：
 
@@ -290,7 +329,7 @@ tail -f server.log server.err.log
 
 Windows 可以先用前台方式确认服务正常；长期运行建议改成 Windows 服务、计划任务，或直接使用 Docker 部署。
 
-### 6. 无 Docker 模式的数据目录
+### 7. 无 Docker 模式的数据目录
 
 直接运行时，数据保存在项目目录下的 `data/`：
 
@@ -300,7 +339,7 @@ Windows 可以先用前台方式确认服务正常；长期运行建议改成 Wi
 
 迁移服务器时，把项目代码更新到新服务器后，再复制旧服务器的 `data/` 目录即可。不要把 `data/` 提交到 Git。
 
-### 7. 更新代码
+### 8. 更新代码
 
 ```bash
 git pull
