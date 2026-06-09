@@ -80,6 +80,19 @@ function createDatasetService(db, config, audit) {
     return "";
   }
 
+  function normalizeAssignmentStatus(value, hasSpace = false) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (["assigned", "pending_move", "已分配", "已落位", "待搬迁"].includes(raw)) return "assigned";
+    if (["invalid", "unplaced", "无效", "未落位", "未分配"].includes(raw)) return "Invalid";
+    return hasSpace ? "assigned" : "Invalid";
+  }
+
+  function normalizeSpaceStatus(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (["unavailable", "不可用", "disabled", "inactive"].includes(raw)) return "unavailable";
+    return "active";
+  }
+
   /**
    * 服务端会再次规范化前端传入的数据，保证导入、编辑和恢复快照都落到同一套 id/引用规则。
    */
@@ -114,6 +127,7 @@ function createDatasetService(db, config, audit) {
         length_m: Number.isFinite(length) ? length : 0,
         width_m: Number.isFinite(width) ? width : 0,
         area_m2: Number(row.area_m2 || length * width || 0),
+        current_status: normalizeSpaceStatus(row.current_status),
       };
     }));
     const labs = dedupeById(data.labs.map((row) => ({
@@ -154,7 +168,7 @@ function createDatasetService(db, config, audit) {
         lab_id: row.lab_id || lab?.id || "",
         space_id: row.space_id || space?.id || "",
         previous_space_id: row.previous_space_id || previousSpace?.id || "",
-        assignment_status: String(row.assignment_status || (space ? "assigned" : "unplaced")).trim(),
+        assignment_status: normalizeAssignmentStatus(row.assignment_status, Boolean(space)),
       };
     }));
     return {

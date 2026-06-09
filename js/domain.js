@@ -227,6 +227,19 @@
     return ["stairs", "楼梯"].includes(raw) ? "stairs" : "corridor";
   }
 
+  function normalizeAssignmentStatus(value, hasSpace = false) {
+    const raw = String(value ?? "").trim().toLowerCase();
+    if (["assigned", "pending_move", "已分配", "已落位", "待搬迁"].includes(raw)) return "assigned";
+    if (["invalid", "unplaced", "无效", "未落位", "未分配"].includes(raw)) return "Invalid";
+    return hasSpace ? "assigned" : "Invalid";
+  }
+
+  function normalizeSpaceStatus(value) {
+    const raw = String(value ?? "").trim().toLowerCase();
+    if (["unavailable", "不可用", "disabled", "inactive"].includes(raw)) return "unavailable";
+    return "active";
+  }
+
   function csv(value) {
     const text = String(value ?? "");
     return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -328,7 +341,7 @@
       width_m: width,
       area_m2: numberValue(row.area_m2, length * width),
       network_segment: row.network_segment || "",
-      current_status: row.current_status || "active",
+      current_status: normalizeSpaceStatus(row.current_status),
       notes: row.notes || "",
       created_at: row.created_at || now,
       updated_at: now,
@@ -396,7 +409,7 @@
       lab_id: lab?.id || "",
       space_id: space?.id || "",
       previous_space_id: previousSpace?.id || "",
-      assignment_status: row.assignment_status || (space ? "assigned" : "unplaced"),
+      assignment_status: normalizeAssignmentStatus(row.assignment_status, Boolean(space)),
       move_note: row.move_note || "",
       effective_from: row.effective_from || "",
       created_at: row.created_at || now,
@@ -465,7 +478,7 @@
         { space_code: "102", building_code: "B01", floor_code: "1", segment_code: "main", offset_m: 15, side: "south", front_door: "102", rear_door: "104", length_m: 11.2, width_m: 7, network_segment: "192.168.2.0/24", current_status: "active" },
         { space_code: "108", building_code: "B01", floor_code: "1", segment_code: "branch", offset_m: 6, side: "east", front_door: "108", rear_door: "110", length_m: 10, width_m: 6, network_segment: "VLAN-118", current_status: "active" },
         { space_code: "201", building_code: "B01", floor_code: "2", segment_code: "loop-north", offset_m: 8, side: "north", front_door: "201", rear_door: "", length_m: 9, width_m: 6.8, network_segment: "192.168.3.0/24", current_status: "active" },
-        { space_code: "202", building_code: "B01", floor_code: "2", segment_code: "loop-east", offset_m: 7, side: "east", front_door: "202", rear_door: "204", length_m: 12, width_m: 7, network_segment: "192.168.4.0/24", current_status: "reserved" },
+        { space_code: "202", building_code: "B01", floor_code: "2", segment_code: "loop-east", offset_m: 7, side: "east", front_door: "202", rear_door: "204", length_m: 12, width_m: 7, network_segment: "192.168.4.0/24", current_status: "active" },
         { space_code: "A-101", building_code: "B02", floor_code: "1", segment_code: "zig-1", offset_m: 6, side: "north", front_door: "A101", rear_door: "A103", length_m: 12, width_m: 7.8, network_segment: "10.10.10.0/24", current_status: "active" },
         { space_code: "A-104", building_code: "B02", floor_code: "1", segment_code: "zig-3", offset_m: 5, side: "south", front_door: "A104", rear_door: "A106", length_m: 11, width_m: 7, network_segment: "10.10.20.0/24", current_status: "active" },
       ],
@@ -487,11 +500,11 @@
         { plan_code: "baseline", lab_code: "LAB005", space_code: "202", previous_space_code: "", assignment_status: "assigned", move_note: "", effective_from: "" },
         { plan_code: "baseline", lab_code: "LAB006", space_code: "A-101", previous_space_code: "", assignment_status: "assigned", move_note: "", effective_from: "" },
         { plan_code: "baseline", lab_code: "LAB007", space_code: "A-104", previous_space_code: "", assignment_status: "assigned", move_note: "", effective_from: "" },
-        { plan_code: "draft-2026", lab_code: "LAB001", space_code: "201", previous_space_code: "101", assignment_status: "pending_move", move_note: "搬迁至二层共享区域", effective_from: "2026-09-01" },
+        { plan_code: "draft-2026", lab_code: "LAB001", space_code: "201", previous_space_code: "101", assignment_status: "assigned", move_note: "搬迁至二层共享区域", effective_from: "2026-09-01" },
         { plan_code: "draft-2026", lab_code: "LAB002", space_code: "102", previous_space_code: "102", assignment_status: "assigned", move_note: "原位保留", effective_from: "" },
         { plan_code: "draft-2026", lab_code: "LAB003", space_code: "108", previous_space_code: "108", assignment_status: "assigned", move_note: "", effective_from: "" },
-        { plan_code: "draft-2026", lab_code: "LAB004", space_code: "101", previous_space_code: "201", assignment_status: "pending_move", move_note: "迁入一层", effective_from: "2026-09-01" },
-        { plan_code: "draft-2026", lab_code: "LAB005", space_code: "", previous_space_code: "202", assignment_status: "unplaced", move_note: "待扩建后落位", effective_from: "" },
+        { plan_code: "draft-2026", lab_code: "LAB004", space_code: "101", previous_space_code: "201", assignment_status: "assigned", move_note: "迁入一层", effective_from: "2026-09-01" },
+        { plan_code: "draft-2026", lab_code: "LAB005", space_code: "", previous_space_code: "202", assignment_status: "Invalid", move_note: "待扩建后落位", effective_from: "" },
         { plan_code: "draft-2026", lab_code: "LAB006", space_code: "A-101", previous_space_code: "A-101", assignment_status: "assigned", move_note: "", effective_from: "" },
         { plan_code: "draft-2026", lab_code: "LAB007", space_code: "A-104", previous_space_code: "A-104", assignment_status: "assigned", move_note: "", effective_from: "" },
       ],

@@ -134,7 +134,7 @@
 
   function floorRenderData(data, buildingCode, floorCode, planId) {
     const segments = data.floor_segments.filter((row) => row.building_code === buildingCode && row.floor_code === floorCode);
-    const assignments = data.plan_assignments.filter((row) => row.plan_id === planId);
+    const assignments = data.plan_assignments.filter((row) => row.plan_id === planId && row.assignment_status === "assigned");
     const labs = new Map(data.labs.map((row) => [row.id, row]));
     const spaces = data.spaces
       .filter((row) => row.building_code === buildingCode && row.floor_code === floorCode)
@@ -146,7 +146,7 @@
   }
 
   function renderLegend(legendEl, data, colors, activePlanId) {
-    const assignments = data.plan_assignments.filter((row) => row.plan_id === activePlanId);
+    const assignments = data.plan_assignments.filter((row) => row.plan_id === activePlanId && row.assignment_status === "assigned");
     const labsById = new Map(data.labs.map((row) => [row.id, row]));
     const activeColleges = unique(assignments.map((row) => labsById.get(row.lab_id)?.college));
     const colleges = activeColleges.map((college) => `<span class="legend-item"><span class="legend-swatch" style="background:${colors[college] || "#94a3b8"}"></span>${escapeHtml(college)}</span>`);
