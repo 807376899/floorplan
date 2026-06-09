@@ -59,7 +59,7 @@ function createPlanCopyService(db, datasetService) {
     const dataset = clone(active.dataset);
     const copies = listVisibleCopies(user);
     const latestBaselineCode = copies.find((copy) => copy.isBaseline)?.planCode || "";
-    for (const copy of copies) mergeCopyDataset(dataset, copy, latestBaselineCode);
+    for (const copy of copies.slice().reverse()) mergeCopyDataset(dataset, copy, latestBaselineCode);
     return {
       dataset: datasetService.normalizeIncomingDataset(dataset),
       copies: copies.map((copy) => stripPayload(copy, user)),

@@ -223,21 +223,34 @@ function sendVisibleDataset(res, context, services, statusCode = 200, extra = {}
 
 async function handleSaveDataset(req, res, context, services) {
   const body = await readJsonBody(req);
-  const normalized = services.dataset.normalizeIncomingDataset(stripPlanCopies(body.dataset));
+  const active = services.dataset.getActiveDataset();
+  const activeNormalized = services.dataset.normalizeIncomingDataset(stripPlanCopies(active.dataset));
+  const incomingNormalized = services.dataset.normalizeIncomingDataset(stripPlanCopies(body.dataset));
+  const normalized = services.dataset.mergeTextSafeDataset(activeNormalized, incomingNormalized);
   const validation = services.dataset.validateDataset(normalized);
   if (!validation.ok) {
     return sendJson(res, 400, { error: "invalid_dataset", message: validation.errors.join("；"), errors: validation.errors });
   }
   const corruption = services.dataset.detectTextCorruption(normalized);
   if (corruption.detected) {
-    services.audit.writeAudit("suspected_text_corruption_rejected", context.user.username, context.ip, {
+    const activeCorruption = services.dataset.detectTextCorruption(activeNormalized);
+    const makesCorruptionWorse = !activeCorruption.detected || corruption.suspiciousFields > activeCorruption.suspiciousFields;
+    if (makesCorruptionWorse) {
+      services.audit.writeAudit("suspected_text_corruption_rejected", context.user.username, context.ip, {
+        source: "save_dataset",
+        summary: corruption,
+        activeSummary: activeCorruption,
+      });
+      return sendJson(res, 422, {
+        error: "suspected_text_corruption",
+        message: "检测到本次保存新增或加重了异常的问号化文本，已阻止覆盖正式数据，请先修复编码后再保存。",
+        details: corruption,
+      });
+    }
+    services.audit.writeAudit("suspected_text_corruption_allowed", context.user.username, context.ip, {
       source: "save_dataset",
       summary: corruption,
-    });
-    return sendJson(res, 422, {
-      error: "suspected_text_corruption",
-      message: "检测到本次保存包含异常的问号化文本，已阻止覆盖正式数据，请先修复编码后再保存。",
-      details: corruption,
+      activeSummary: activeCorruption,
     });
   }
 

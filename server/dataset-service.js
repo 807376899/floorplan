@@ -277,6 +277,25 @@ function createDatasetService(db, config, audit) {
     return repaired;
   }
 
+  function mergeTextSafeDataset(baseDataset, incomingDataset) {
+    const merged = JSON.parse(JSON.stringify(incomingDataset));
+    for (const [key, fields] of Object.entries(repairFieldMap)) {
+      const baseById = new Map((baseDataset[key] || []).map((row) => [row.id, row]));
+      merged[key] = (merged[key] || []).map((row) => {
+        const base = baseById.get(row.id);
+        if (!base) return row;
+        const next = { ...row };
+        for (const field of fields) {
+          if (isQuestionCorrupted(next[field]) && !isQuestionCorrupted(base[field])) {
+            next[field] = base[field];
+          }
+        }
+        return next;
+      });
+    }
+    return merged;
+  }
+
   function validateDataset(dataset) {
     const errors = [];
     for (const key of config.datasetKeys.slice(0, 6)) {
@@ -374,6 +393,7 @@ function createDatasetService(db, config, audit) {
     detectTextCorruption,
     findTextRepairSource,
     repairDatasetText,
+    mergeTextSafeDataset,
     summarizeDataset,
     buildImportSummary,
     buildMaintenance,
