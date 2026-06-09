@@ -78,6 +78,40 @@ function createRouteApi(services) {
       return sendVisibleDataset(res, context, services, 200, { ok: true, ...result });
     }
 
+    if (req.method === "GET" && pathname === "/api/manage/plans") {
+      auth.requireRole(context.user, ["admin"]);
+      return sendJson(res, 200, { plans: planCopies.listManageablePlans(context.user) });
+    }
+
+    const managedPlanMatch = pathname.match(/^\/api\/manage\/plans\/(\d+)$/);
+    if (req.method === "GET" && managedPlanMatch) {
+      auth.requireRole(context.user, ["admin"]);
+      return sendJson(res, 200, planCopies.getManagedPlan(Number(managedPlanMatch[1]), context.user));
+    }
+
+    if (req.method === "PATCH" && managedPlanMatch) {
+      auth.requireRole(context.user, ["admin"]);
+      const body = await readJsonBody(req);
+      planCopies.updateManagedPlan(Number(managedPlanMatch[1]), body, context.user);
+      audit.writeAudit("managed_plan_updated", context.user.username, context.ip, { copyId: Number(managedPlanMatch[1]) });
+      return sendVisibleDataset(res, context, services);
+    }
+
+    if (req.method === "DELETE" && managedPlanMatch) {
+      auth.requireRole(context.user, ["admin"]);
+      planCopies.deleteManagedPlan(Number(managedPlanMatch[1]), context.user);
+      audit.writeAudit("managed_plan_deleted", context.user.username, context.ip, { copyId: Number(managedPlanMatch[1]) });
+      return sendVisibleDataset(res, context, services);
+    }
+
+    const baselineMatch = pathname.match(/^\/api\/manage\/plans\/(\d+)\/baseline$/);
+    if (req.method === "POST" && baselineMatch) {
+      auth.requireRole(context.user, ["admin"]);
+      planCopies.setManagedPlanBaseline(Number(baselineMatch[1]), context.user);
+      audit.writeAudit("managed_plan_baselined", context.user.username, context.ip, { copyId: Number(baselineMatch[1]) });
+      return sendVisibleDataset(res, context, services);
+    }
+
     const copyMatch = pathname.match(/^\/api\/plan-copies\/(\d+)$/);
     if (req.method === "PATCH" && copyMatch) {
       auth.requireRole(context.user, ["editor", "admin"]);
@@ -106,6 +140,18 @@ function createRouteApi(services) {
       return sendVisibleDataset(res, context, services, 200, { ok: true, copyRevision: result.revision });
     }
 
+    const copyDatasetMatch = pathname.match(/^\/api\/plan-copies\/(\d+)\/dataset$/);
+    if (req.method === "PUT" && copyDatasetMatch) {
+      auth.requireRole(context.user, ["editor", "admin"]);
+      const body = await readJsonBody(req);
+      const result = planCopies.saveCopyDataset(Number(copyDatasetMatch[1]), body, context.user);
+      audit.writeAudit("plan_copy_dataset_saved", context.user.username, context.ip, {
+        copyId: Number(copyDatasetMatch[1]),
+        revision: result.revision,
+      });
+      return sendVisibleDataset(res, context, services, 200, { ok: true, copyRevision: result.revision });
+    }
+
     if (req.method === "PUT" && pathname === "/api/dataset/active") {
       auth.requireRole(context.user, ["editor", "admin"]);
       return handleSaveDataset(req, res, context, services);
@@ -126,6 +172,12 @@ function createRouteApi(services) {
     if (req.method === "GET" && pathname === "/api/imports") {
       auth.requireRole(context.user, ["admin"]);
       return sendJson(res, 200, { drafts: imports.listImportDrafts() });
+    }
+
+    const importDraftMatch = pathname.match(/^\/api\/imports\/(\d+)$/);
+    if (req.method === "GET" && importDraftMatch) {
+      auth.requireRole(context.user, ["admin"]);
+      return sendJson(res, 200, { draft: imports.getImportDraft(Number(importDraftMatch[1])) });
     }
 
     const publishMatch = pathname.match(/^\/api\/imports\/(\d+)\/publish$/);

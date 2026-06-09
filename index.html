@@ -27,7 +27,7 @@
           <button id="loadSampleBtn" type="button">加载示例数据</button>
           <button id="downloadTemplateBtn" type="button">下载模板</button>
           <button id="exportWorkbookBtn" type="button">导出当前数据包</button>
-          <button id="manageImportsBtn" type="button">管理导入草稿</button>
+          <button id="manageImportsBtn" type="button">管理方案</button>
           <button id="manageSnapshotsBtn" type="button">恢复快照</button>
           <button id="manageUsersBtn" type="button">管理用户</button>
           <button id="repairTextBtn" type="button" hidden>修复中文显示</button>
@@ -149,6 +149,35 @@
         <div class="modal-actions">
           <button id="confirmDeletePlanBtn" type="button" class="primary-button">确认删除</button>
           <button id="cancelDeletePlanBtn" type="button">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="importDraftsModal" class="modal-backdrop is-hidden" aria-hidden="true">
+      <div class="modal-card modal-card-imports" role="dialog" aria-modal="true" aria-labelledby="importDraftsModalTitle">
+        <div class="modal-heading">
+          <div>
+            <h3 id="importDraftsModalTitle">管理方案</h3>
+            <p>查看方案来源和可视化预览，重命名、删除或设为基线。</p>
+          </div>
+          <button id="closeImportDraftsBtn" type="button" class="ghost-button">关闭</button>
+        </div>
+        <div id="importDraftsErrorText" class="modal-error" aria-live="polite"></div>
+        <div class="import-review-layout">
+          <aside class="import-draft-list-panel">
+            <div class="import-panel-heading">
+              <strong>方案列表</strong>
+              <button id="refreshImportDraftsBtn" type="button">刷新</button>
+            </div>
+            <div id="importDraftList" class="import-draft-list"></div>
+          </aside>
+          <section class="import-draft-detail-panel">
+            <div id="importDraftDetail" class="import-draft-detail-empty">请选择一个方案查看预览。</div>
+            <div class="import-detail-actions">
+              <button id="publishImportDraftBtn" type="button" class="primary-button" disabled>设为基线</button>
+              <button id="discardImportDraftBtn" type="button" disabled>删除方案</button>
+            </div>
+          </section>
         </div>
       </div>
     </div>

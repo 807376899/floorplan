@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { nowIso, httpError } = require("./http-utils");
 
-function createImportService(db, config, audit, datasetService, snapshotService) {
+function createImportService(db, config, audit, datasetService, snapshotService, planCopyService) {
   function createImportDraft(body, context) {
     const dataset = datasetService.normalizeIncomingDataset(body.dataset);
     const validation = datasetService.validateDataset(dataset);
@@ -51,7 +51,11 @@ function createImportService(db, config, audit, datasetService, snapshotService)
       summary,
     });
 
-    return { statusCode: 200, payload: { ok: true, draftId: Number(result.lastInsertRowid), summary } };
+    const importedPlans = planCopyService
+      ? planCopyService.createImportedPlans(Number(result.lastInsertRowid), fileName, dataset, context.user)
+      : [];
+
+    return { statusCode: 200, payload: { ok: true, draftId: Number(result.lastInsertRowid), summary, importedPlans } };
   }
 
   function publishImportDraft(draftId, actor, ip) {
@@ -92,11 +96,31 @@ function createImportService(db, config, audit, datasetService, snapshotService)
       }));
   }
 
+  function getImportDraft(draftId) {
+    const row = db.prepare("SELECT id, file_name, source_type, uploaded_by, uploaded_at, dataset_json, summary_json, status, published_at, discarded_at FROM import_drafts WHERE id = ?").get(draftId);
+    if (!row) {
+      throw httpError(404, "draft_not_found", "Import draft not found");
+    }
+    return {
+      id: row.id,
+      file_name: row.file_name,
+      source_type: row.source_type,
+      uploaded_by: row.uploaded_by,
+      uploaded_at: row.uploaded_at,
+      status: row.status,
+      published_at: row.published_at,
+      discarded_at: row.discarded_at,
+      summary: JSON.parse(row.summary_json),
+      dataset: JSON.parse(row.dataset_json),
+    };
+  }
+
   return {
     createImportDraft,
     publishImportDraft,
     discardImportDraft,
     listImportDrafts,
+    getImportDraft,
   };
 }
 

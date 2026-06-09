@@ -82,7 +82,23 @@ function openDatabase(config) {
       created_at TEXT NOT NULL
     );
   `);
+  migratePlanCopies(db);
   return db;
+}
+
+function migratePlanCopies(db) {
+  const columns = new Set(db.prepare("PRAGMA table_info(plan_copies)").all().map((row) => row.name));
+  const migrations = [
+    ["source_type", "ALTER TABLE plan_copies ADD COLUMN source_type TEXT NOT NULL DEFAULT 'copy'"],
+    ["dataset_json", "ALTER TABLE plan_copies ADD COLUMN dataset_json TEXT"],
+    ["import_draft_id", "ALTER TABLE plan_copies ADD COLUMN import_draft_id INTEGER"],
+    ["is_baseline", "ALTER TABLE plan_copies ADD COLUMN is_baseline INTEGER NOT NULL DEFAULT 0"],
+    ["baselined_at", "ALTER TABLE plan_copies ADD COLUMN baselined_at TEXT"],
+    ["baselined_by", "ALTER TABLE plan_copies ADD COLUMN baselined_by TEXT"],
+  ];
+  for (const [name, sql] of migrations) {
+    if (!columns.has(name)) db.exec(sql);
+  }
 }
 
 module.exports = { openDatabase };

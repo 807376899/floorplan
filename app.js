@@ -59,6 +59,18 @@ const state = {
     users: [],
     loading: false,
   },
+  importDrafts: {
+    drafts: [],
+    selectedId: null,
+    detail: null,
+    loadingList: false,
+    loadingDetail: false,
+    preview: {
+      buildingCode: "",
+      floorCode: "",
+      planId: "",
+    },
+  },
   planDraftName: "",
   statusMessage: "",
 };
@@ -84,6 +96,10 @@ function bindEvents() {
   els.downloadTemplateBtn.addEventListener("click", () => ImportExport.downloadTemplateWorkbook(updateStatus));
   els.exportWorkbookBtn.addEventListener("click", () => runWithUnsavedGuard(() => ImportExport.exportWorkbook(state, updateStatus)));
   els.manageImportsBtn.addEventListener("click", () => void manageImportDrafts());
+  els.closeImportDraftsBtn.addEventListener("click", closeImportDraftsModal);
+  els.refreshImportDraftsBtn.addEventListener("click", () => void loadImportDrafts());
+  els.publishImportDraftBtn.addEventListener("click", () => void publishSelectedImportDraft());
+  els.discardImportDraftBtn.addEventListener("click", () => void discardSelectedImportDraft());
   els.manageSnapshotsBtn.addEventListener("click", () => void manageSnapshots());
   els.manageUsersBtn.addEventListener("click", () => void manageUsers());
   els.repairTextBtn.addEventListener("click", () => void repairCorruptedText());
@@ -283,6 +299,23 @@ async function logoutFlow() {
 async function saveDatasetToServer(changeNote) {
   if (!state.serverMode) return true;
   if (!state.permissions.canAdmin) throw new Error("只有管理员可以修改共享基线数据");
+  const activeCopy = activePlanCopyMeta();
+  if (activeCopy && canManageCopy(activeCopy) && (activeCopy.hasDataset || activeCopy.isBaseline)) {
+    const payload = await fetchJson(`/api/plan-copies/${activeCopy.id}/dataset`, {
+      method: "PUT",
+      body: JSON.stringify({
+        dataset: state.data,
+        expectedRevision: activeCopy.revision,
+        changeNote,
+      }),
+    });
+    state.serverRevision = payload.revision;
+    state.planCopies = payload.planCopies || [];
+    state.data = normalizeDataset(payload.dataset);
+    if (payload.maintenance) state.maintenance = payload.maintenance;
+    persistDataset();
+    return true;
+  }
   const payload = await fetchJson("/api/dataset/active", {
     method: "PUT",
     body: JSON.stringify({
@@ -412,7 +445,7 @@ async function importPackageFile(file) {
         dataset: normalized,
       }),
     });
-    updateStatus(`已创建导入草稿 #${payload.draftId}，请在“管理导入草稿”中发布或丢弃。`);
+    await reloadDatasetFromServer(`已导入数据包并创建 ${payload.importedPlans?.length || 0} 个管理员私有方案，可在“管理方案”中预览和设为基线。`);
   } catch (error) {
     updateStatus(`导入失败：${error.message}`);
   }
@@ -420,34 +453,265 @@ async function importPackageFile(file) {
 
 async function manageImportDrafts() {
   if (!state.permissions.canAdmin) {
-    updateStatus("只有管理员可以管理导入草稿。");
+    updateStatus("只有管理员可以管理方案。");
     return;
   }
+  openImportDraftsModal();
+  await loadImportDrafts();
+}
+
+function openImportDraftsModal() {
+  els.importDraftsErrorText.textContent = "";
+  els.importDraftsModal.classList.remove("is-hidden");
+  els.importDraftsModal.setAttribute("aria-hidden", "false");
+  renderImportDrafts();
+}
+
+function closeImportDraftsModal() {
+  els.importDraftsModal.classList.add("is-hidden");
+  els.importDraftsModal.setAttribute("aria-hidden", "true");
+  els.importDraftsErrorText.textContent = "";
+}
+
+async function loadImportDrafts() {
+  state.importDrafts.loadingList = true;
+  renderImportDrafts();
   try {
-    const payload = await fetchJson("/api/imports");
-    if (!payload.drafts.length) {
-      updateStatus("当前没有待处理的导入草稿。");
-      return;
+    const payload = await fetchJson("/api/manage/plans");
+    state.importDrafts.drafts = payload.plans || [];
+    els.importDraftsErrorText.textContent = "";
+    const selectedStillExists = state.importDrafts.drafts.some((plan) => plan.id === state.importDrafts.selectedId);
+    if (!selectedStillExists) {
+      state.importDrafts.selectedId = null;
+      state.importDrafts.detail = null;
     }
-    const summary = payload.drafts
-      .map((draft) => `#${draft.id} ${draft.file_name} [${draft.status}] Δ空间${draft.summary.delta.spaces}, Δ实验室${draft.summary.delta.labs}, Δ方案${draft.summary.delta.plans}`)
-      .join("\n");
-    const command = window.prompt(`导入草稿列表：\n${summary}\n\n输入“P 空格 ID”发布，输入“D 空格 ID”丢弃。`);
-    if (!command) return;
-    const [action, rawId] = command.trim().split(/\s+/);
-    const draftId = Number(rawId);
-    if (!draftId) return;
-    if (String(action).toUpperCase() === "P") {
-      await fetchJson(`/api/imports/${draftId}/publish`, { method: "POST", body: JSON.stringify({}) });
-      await reloadDatasetFromServer("已发布导入草稿并替换当前正式数据");
-      return;
-    }
-    if (String(action).toUpperCase() === "D") {
-      await fetchJson(`/api/imports/${draftId}`, { method: "DELETE" });
-      updateStatus(`已丢弃导入草稿 #${draftId}`);
+    renderImportDrafts();
+    const firstPlan = state.importDrafts.drafts[0];
+    if (!state.importDrafts.selectedId && firstPlan) {
+      await selectImportDraft(firstPlan.id);
+    } else if (state.importDrafts.selectedId && !state.importDrafts.detail) {
+      await selectImportDraft(state.importDrafts.selectedId);
     }
   } catch (error) {
-    updateStatus(`草稿管理失败：${error.message}`);
+    els.importDraftsErrorText.textContent = `方案列表加载失败：${error.message}`;
+  } finally {
+    state.importDrafts.loadingList = false;
+    renderImportDrafts();
+  }
+}
+
+async function selectImportDraft(planId) {
+  if (!planId) return;
+  state.importDrafts.selectedId = planId;
+  state.importDrafts.detail = null;
+  state.importDrafts.loadingDetail = true;
+  renderImportDrafts();
+  try {
+    const payload = await fetchJson(`/api/manage/plans/${planId}`);
+    state.importDrafts.detail = {
+      ...payload.plan,
+      dataset: normalizeDataset(payload.dataset),
+    };
+    initializeImportPreviewState();
+    els.importDraftsErrorText.textContent = "";
+  } catch (error) {
+    els.importDraftsErrorText.textContent = `方案详情加载失败：${error.message}`;
+  } finally {
+    state.importDrafts.loadingDetail = false;
+    renderImportDrafts();
+  }
+}
+
+function initializeImportPreviewState() {
+  const dataset = state.importDrafts.detail?.dataset;
+  const detail = state.importDrafts.detail;
+  if (!dataset || !detail) return;
+  const building = dataset.buildings.slice().sort(compareBuildings)[0];
+  const floors = unique(dataset.floor_segments.filter((row) => row.building_code === building?.building_code).map((row) => row.floor_code)).sort(compare);
+  state.importDrafts.preview = {
+    buildingCode: building?.building_code || "",
+    floorCode: floors[0] || "",
+    planId: detail.planCode || dataset.plans[0]?.id || "",
+  };
+}
+
+function renderImportDrafts() {
+  renderImportDraftList();
+  renderImportDraftDetail();
+}
+
+function renderImportDraftList() {
+  if (state.importDrafts.loadingList) {
+    els.importDraftList.innerHTML = `<div class="empty">正在加载方案...</div>`;
+    return;
+  }
+  if (!state.importDrafts.drafts.length) {
+    els.importDraftList.innerHTML = `<div class="empty">当前没有可管理方案。</div>`;
+    return;
+  }
+  els.importDraftList.innerHTML = state.importDrafts.drafts.map((plan) => {
+    const selectedClass = plan.id === state.importDrafts.selectedId ? " is-active" : "";
+    return `
+      <button type="button" class="import-draft-item${selectedClass}" data-import-draft-id="${plan.id}">
+        <span class="import-draft-item-head">
+          <strong>#${plan.id} ${escapeHtml(plan.planName)}</strong>
+          <span class="status-pill ${plan.isBaseline ? "" : "is-disabled"}">${plan.isBaseline ? "基线" : "非基线"}</span>
+        </span>
+        <span>${escapeHtml(managedPlanSourceLabel(plan))} · ${plan.isMine ? "我创建" : escapeHtml(plan.ownerUsername || "-")}</span>
+        <span>${plan.isPublic ? "公开" : "私有"} · 更新于 ${escapeHtml(formatDateTime(plan.updatedAt))}</span>
+      </button>
+    `;
+  }).join("");
+  els.importDraftList.querySelectorAll("[data-import-draft-id]").forEach((button) => {
+    button.addEventListener("click", () => void selectImportDraft(Number(button.dataset.importDraftId)));
+  });
+}
+
+function renderImportDraftDetail() {
+  const detail = state.importDrafts.detail;
+  const canAct = Boolean(detail && !state.importDrafts.loadingDetail);
+  els.publishImportDraftBtn.disabled = !canAct || detail?.isBaseline;
+  els.discardImportDraftBtn.disabled = !canAct;
+  els.publishImportDraftBtn.textContent = detail?.isBaseline ? "已是基线" : "设为基线";
+  if (state.importDrafts.loadingDetail) {
+    els.importDraftDetail.innerHTML = `<div class="import-draft-detail-empty">正在打开方案详情...</div>`;
+    return;
+  }
+  if (!detail) {
+    els.importDraftDetail.innerHTML = `<div class="import-draft-detail-empty">请选择一个方案查看预览。</div>`;
+    return;
+  }
+
+  const dataset = detail.dataset;
+  els.importDraftDetail.innerHTML = `
+    <div class="import-detail-header">
+      <div>
+        <h4>#${detail.id} ${escapeHtml(detail.planName)}</h4>
+        <p>${escapeHtml(managedPlanSourceLabel(detail))} · ${detail.isMine ? "我创建" : escapeHtml(detail.ownerUsername || "-")} · ${detail.isPublic ? "公开" : "私有"}</p>
+      </div>
+      <span class="status-pill ${detail.isBaseline ? "" : "is-disabled"}">${detail.isBaseline ? "基线" : "非基线"}</span>
+    </div>
+    <div class="import-summary-grid">
+      ${managedSummaryCard("教学楼", dataset.buildings.length)}
+      ${managedSummaryCard("楼层骨架", dataset.floor_segments.length)}
+      ${managedSummaryCard("空间", dataset.spaces.length)}
+      ${managedSummaryCard("实验室", dataset.labs.length)}
+      ${managedSummaryCard("分配", dataset.plan_assignments.length)}
+      ${managedSummaryCard("修订", detail.revision || 1)}
+    </div>
+    <div class="managed-plan-form">
+      <label>方案名称<input id="managedPlanNameInput" type="text" value="${escapeHtml(detail.planName)}" maxlength="80" /></label>
+      <button id="renameManagedPlanBtn" type="button">保存名称</button>
+    </div>
+    <div class="import-preview-controls">
+      <label>楼栋<select id="importPreviewBuildingSelect"></select></label>
+      <label>楼层<select id="importPreviewFloorSelect"></select></label>
+      <label>方案<select id="importPreviewPlanSelect"></select></label>
+    </div>
+    <div class="import-preview-shell">
+      <div id="importPreviewPlanBadge" class="import-preview-badge">方案预览</div>
+      <div id="importPreviewCanvas" class="floorplan import-preview-canvas"></div>
+    </div>
+  `;
+  bindImportDraftDetailEvents(dataset);
+  renderImportPreviewCanvas();
+}
+
+function bindImportDraftDetailEvents(dataset) {
+  els.importDraftDetail.querySelector("#renameManagedPlanBtn")?.addEventListener("click", () => void renameSelectedManagedPlan());
+
+  const buildingSelect = els.importDraftDetail.querySelector("#importPreviewBuildingSelect");
+  const planSelect = els.importDraftDetail.querySelector("#importPreviewPlanSelect");
+  fillInlineSelect(buildingSelect, dataset.buildings.slice().sort(compareBuildings).map((row) => ({ value: row.building_code, label: row.building_name || row.building_code })), state.importDrafts.preview.buildingCode);
+  fillImportPreviewFloors(dataset);
+  fillInlineSelect(planSelect, dataset.plans.map((plan) => ({ value: plan.id, label: plan.plan_name || plan.plan_code })), state.importDrafts.preview.planId);
+
+  buildingSelect?.addEventListener("change", () => {
+    state.importDrafts.preview.buildingCode = buildingSelect.value;
+    const floors = unique(dataset.floor_segments.filter((row) => row.building_code === buildingSelect.value).map((row) => row.floor_code)).sort(compare);
+    state.importDrafts.preview.floorCode = floors[0] || "";
+    fillImportPreviewFloors(dataset);
+    renderImportPreviewCanvas();
+  });
+  els.importDraftDetail.querySelector("#importPreviewFloorSelect")?.addEventListener("change", (event) => {
+    state.importDrafts.preview.floorCode = event.target.value;
+    renderImportPreviewCanvas();
+  });
+  planSelect?.addEventListener("change", () => {
+    state.importDrafts.preview.planId = planSelect.value;
+    renderImportPreviewCanvas();
+  });
+}
+
+function managedSummaryCard(label, value) {
+  return `<div class="import-summary-card"><span>${escapeHtml(label)}</span><strong>${Number(value || 0)}</strong></div>`;
+}
+
+function managedPlanSourceLabel(plan) {
+  if (plan.sourceType === "import") return "admin 上传数据包";
+  if (plan.ownerRole === "admin") return "admin 创建方案";
+  if (plan.isPublic) return "editor 公开方案";
+  return "方案副本";
+}
+
+async function renameSelectedManagedPlan() {
+  const detail = state.importDrafts.detail;
+  const input = els.importDraftDetail.querySelector("#managedPlanNameInput");
+  const planName = input?.value.trim();
+  if (!detail || !planName) return;
+  try {
+    const payload = await fetchJson(`/api/manage/plans/${detail.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ planName }),
+    });
+    state.serverRevision = payload.revision;
+    state.planCopies = payload.planCopies || [];
+    state.data = normalizeDataset(payload.dataset);
+    updateStatus(`已重命名方案为 ${planName}`);
+    await loadImportDrafts();
+    await selectImportDraft(detail.id);
+    refreshStateAndRender(`已重命名方案为 ${planName}`, { stamp: false });
+  } catch (error) {
+    els.importDraftsErrorText.textContent = `方案重命名失败：${error.message}`;
+  }
+}
+
+async function publishSelectedImportDraft() {
+  const detail = state.importDrafts.detail;
+  if (!detail || detail.isBaseline) return;
+  if (!window.confirm(`确认将方案“${detail.planName}”设为基线？设为基线后，除管理员外其他用户不可修改。`)) return;
+  els.publishImportDraftBtn.disabled = true;
+  try {
+    const payload = await fetchJson(`/api/manage/plans/${detail.id}/baseline`, { method: "POST", body: JSON.stringify({}) });
+    state.serverRevision = payload.revision;
+    state.planCopies = payload.planCopies || [];
+    state.data = normalizeDataset(payload.dataset);
+    refreshStateAndRender(`已将 ${detail.planName} 设为基线`, { stamp: false, forceMoveReset: true });
+    await loadImportDrafts();
+    await selectImportDraft(detail.id);
+  } catch (error) {
+    els.importDraftsErrorText.textContent = `设置基线失败：${error.message}`;
+  }
+}
+
+async function discardSelectedImportDraft() {
+  const detail = state.importDrafts.detail;
+  if (!detail) return;
+  const risk = detail.isBaseline || !detail.isMine ? "此操作会删除基线或他人公开方案，" : "";
+  if (!window.confirm(`${risk}确认删除方案“${detail.planName}”？删除后该方案及其分配将不再显示。`)) return;
+  els.discardImportDraftBtn.disabled = true;
+  try {
+    const payload = await fetchJson(`/api/manage/plans/${detail.id}`, { method: "DELETE" });
+    state.serverRevision = payload.revision;
+    state.planCopies = payload.planCopies || [];
+    state.data = normalizeDataset(payload.dataset);
+    updateStatus(`已删除方案 ${detail.planName}`);
+    state.importDrafts.selectedId = null;
+    state.importDrafts.detail = null;
+    resetContextState();
+    await loadImportDrafts();
+  } catch (error) {
+    els.importDraftsErrorText.textContent = `方案删除失败：${error.message}`;
   }
 }
 
@@ -687,7 +951,7 @@ function activePlanCopyMeta() {
 }
 
 function canManageCopy(copy) {
-  return Boolean(copy && state.user && (copy.ownerUserId === state.user.id || state.permissions.canAdmin));
+  return Boolean(copy && state.user && (state.permissions.canAdmin || (!copy.isBaseline && copy.ownerUserId === state.user.id)));
 }
 
 function isOwnCopy(copy) {
