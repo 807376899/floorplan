@@ -72,6 +72,14 @@ function createDatasetService(db, config, audit) {
     return data;
   }
 
+  function firstText(row, fields) {
+    for (const field of fields) {
+      const value = row?.[field];
+      if (value !== undefined && value !== null && String(value).trim() !== "") return String(value).trim();
+    }
+    return "";
+  }
+
   /**
    * 服务端会再次规范化前端传入的数据，保证导入、编辑和恢复快照都落到同一套 id/引用规则。
    */
@@ -93,14 +101,15 @@ function createDatasetService(db, config, audit) {
     const spaces = dedupeById(data.spaces.map((row) => {
       const length = Number(row.length_m || 0);
       const width = Number(row.width_m || 0);
+      const spaceCode = firstText(row, ["space_code", "space_id", "id"]);
       return {
         ...row,
-        id: row.id || `${row.building_code}__${row.floor_code}__${row.space_code}`,
+        id: row.id || `${row.building_code}__${row.floor_code}__${spaceCode}`,
         building_code: String(row.building_code || "").trim(),
         floor_code: String(row.floor_code || "").trim(),
         segment_code: String(row.segment_code || "").trim(),
-        space_code: String(row.space_code || "").trim(),
-        front_door: String(row.front_door || row.space_code || "").trim(),
+        space_code: spaceCode,
+        front_door: String(row.front_door || spaceCode || "").trim(),
         rear_door: String(row.rear_door || "").trim(),
         length_m: Number.isFinite(length) ? length : 0,
         width_m: Number.isFinite(width) ? width : 0,
@@ -109,15 +118,15 @@ function createDatasetService(db, config, audit) {
     }));
     const labs = dedupeById(data.labs.map((row) => ({
       ...row,
-      id: row.id || row.lab_code,
-      lab_code: String(row.lab_code || "").trim(),
-      lab_name: String(row.lab_name || row.lab_code || "").trim(),
+      id: row.id || row.lab_code || row.lab_id,
+      lab_code: firstText(row, ["lab_code", "lab_id", "id"]),
+      lab_name: String(row.lab_name || row.lab_code || row.lab_id || row.id || "").trim(),
     })));
     const plans = dedupeById(data.plans.map((row) => ({
       ...row,
-      id: row.id || row.plan_code,
-      plan_code: String(row.plan_code || "").trim(),
-      plan_name: String(row.plan_name || row.plan_code || "").trim(),
+      id: row.id || row.plan_code || row.plan_id,
+      plan_code: firstText(row, ["plan_code", "plan_id", "id"]),
+      plan_name: String(row.plan_name || row.plan_code || row.plan_id || row.id || "").trim(),
       is_locked: toBoolean(row.is_locked),
       is_default_compare_before: toBoolean(row.is_default_compare_before),
       is_default_compare_after: toBoolean(row.is_default_compare_after),
@@ -126,17 +135,21 @@ function createDatasetService(db, config, audit) {
     const labsByCode = new Map(labs.map((row) => [row.lab_code, row]));
     const spacesByCode = new Map(spaces.map((row) => [row.space_code, row]));
     const assignments = dedupeById(data.plan_assignments.map((row) => {
-      const plan = plansByCode.get(String(row.plan_code || "").trim());
-      const lab = labsByCode.get(String(row.lab_code || "").trim());
-      const space = spacesByCode.get(String(row.space_code || "").trim());
-      const previousSpace = spacesByCode.get(String(row.previous_space_code || "").trim());
+      const planCode = firstText(row, ["plan_code", "plan_id"]);
+      const labCode = firstText(row, ["lab_code", "lab_id"]);
+      const spaceCode = firstText(row, ["space_code", "space_id"]);
+      const previousSpaceCode = firstText(row, ["previous_space_code", "previous_space_id"]);
+      const plan = plansByCode.get(planCode);
+      const lab = labsByCode.get(labCode);
+      const space = spacesByCode.get(spaceCode);
+      const previousSpace = spacesByCode.get(previousSpaceCode);
       return {
         ...row,
-        id: row.id || `${row.plan_code}__${row.lab_code}`,
-        plan_code: String(row.plan_code || "").trim(),
-        lab_code: String(row.lab_code || "").trim(),
-        space_code: String(row.space_code || "").trim(),
-        previous_space_code: String(row.previous_space_code || "").trim(),
+        id: row.id || `${planCode}__${labCode}`,
+        plan_code: planCode,
+        lab_code: labCode,
+        space_code: spaceCode,
+        previous_space_code: previousSpaceCode,
         plan_id: row.plan_id || plan?.id || "",
         lab_id: row.lab_id || lab?.id || "",
         space_id: row.space_id || space?.id || "",

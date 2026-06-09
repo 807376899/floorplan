@@ -16,14 +16,18 @@
     const width = Number(stage.dataset.layoutWidth);
     const height = Number(stage.dataset.layoutHeight);
     const bounds = els.floorplan.getBoundingClientRect();
-    const paddingAllowance = 72;
-    const fit = Math.max(0.1, Math.min(1, (bounds.width - paddingAllowance) / width, (bounds.height - paddingAllowance) / height));
+    const style = getComputedStyle(els.floorplan);
+    const horizontalPadding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+    const verticalPadding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    const viewportWidth = Math.max(1, bounds.width - horizontalPadding);
+    const viewportHeight = Math.max(1, bounds.height - verticalPadding);
+    const stagePadding = 52;
+    const fit = Math.max(0.1, Math.min(1, (viewportWidth - stagePadding) / width, (viewportHeight - stagePadding) / height));
     const scale = fit * state.zoom;
     const scaledWidth = width * scale;
     const scaledHeight = height * scale;
-    const stagePadding = 52;
-    const stageWidth = Math.max(scaledWidth + stagePadding, bounds.width - paddingAllowance);
-    const stageHeight = Math.max(scaledHeight + stagePadding, bounds.height - paddingAllowance);
+    const stageWidth = Math.max(scaledWidth + stagePadding, viewportWidth);
+    const stageHeight = Math.max(scaledHeight + stagePadding, viewportHeight);
 
     els.floorplan.classList.toggle("is-zoomed", state.zoom > 1);
     els.canvasModeText.textContent = state.zoom === 1 ? "适配显示" : `缩放 ${Math.round(state.zoom * 100)}%`;
@@ -34,8 +38,8 @@
     applyRoomLabelSizing(state, svg, scale);
 
     if (state.zoom > 1) {
-      els.floorplan.scrollLeft = Math.max(0, (stageWidth - bounds.width) / 2);
-      els.floorplan.scrollTop = Math.max(0, (stageHeight - bounds.height) / 2);
+      els.floorplan.scrollLeft = Math.max(0, (stageWidth - viewportWidth) / 2);
+      els.floorplan.scrollTop = Math.max(0, (stageHeight - viewportHeight) / 2);
     } else {
       els.floorplan.scrollLeft = 0;
       els.floorplan.scrollTop = 0;

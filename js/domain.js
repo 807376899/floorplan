@@ -125,7 +125,7 @@
       notes: ["notes", "备注"],
     },
     spaces: {
-      space_code: ["space_code", "空间编码", "房间编码"],
+      space_code: ["space_code", "space_id", "id", "空间编码", "房间编码"],
       building_code: ["building_code", "教学楼编码"],
       floor_code: ["floor_code", "楼层编码"],
       segment_code: ["segment_code", "走廊段编码"],
@@ -142,7 +142,7 @@
       notes: ["notes", "备注"],
     },
     labs: {
-      lab_code: ["lab_code", "实验室编码"],
+      lab_code: ["lab_code", "lab_id", "id", "实验室编码"],
       lab_name: ["lab_name", "实验室名称"],
       college: ["college", "所属学院"],
       major: ["major", "所属专业"],
@@ -154,7 +154,7 @@
       notes: ["notes", "备注"],
     },
     plans: {
-      plan_code: ["plan_code", "方案编码"],
+      plan_code: ["plan_code", "plan_id", "id", "方案编码"],
       plan_name: ["plan_name", "方案名称"],
       plan_type: ["plan_type", "方案类型"],
       source_plan_code: ["source_plan_code", "来源方案"],
@@ -164,9 +164,9 @@
       is_default_compare_after: ["is_default_compare_after", "默认搬迁后", "是否默认搬迁后"],
     },
     plan_assignments: {
-      plan_code: ["plan_code", "方案编码"],
-      lab_code: ["lab_code", "实验室编码"],
-      space_code: ["space_code", "当前空间编码"],
+      plan_code: ["plan_code", "plan_id", "方案编码"],
+      lab_code: ["lab_code", "lab_id", "实验室编码"],
+      space_code: ["space_code", "space_id", "当前空间编码"],
       previous_space_code: ["previous_space_code", "搬迁前空间编码"],
       assignment_status: ["assignment_status", "分配状态"],
       move_note: ["move_note", "搬迁说明"],

@@ -637,6 +637,7 @@ button:disabled {
 
 .floorplan {
   position: relative;
+  height: clamp(420px, calc(100vh - 280px), 920px);
   min-height: 420px;
   max-height: clamp(420px, calc(100vh - 280px), 920px);
   display: flex;
@@ -1169,6 +1170,179 @@ button:disabled {
   box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
 }
 
+.business-editor {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.85fr) minmax(320px, 1.15fr);
+  gap: 14px;
+  padding: 14px;
+}
+
+.business-editor-list,
+.business-assignment-form {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+
+.business-editor-list {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 10px;
+}
+
+.business-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.business-editor-heading span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.business-assignment-card {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  min-height: 62px;
+  border-radius: var(--radius-sm);
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.business-assignment-card.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.business-assignment-card strong {
+  color: var(--ink-soft);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.business-assignment-card span {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.business-assignment-card small {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.business-assignment-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px;
+}
+
+.business-assignment-form .business-editor-heading,
+.business-form-section,
+.business-conflict,
+.business-checkbox,
+.business-preview,
+.business-readonly {
+  grid-column: 1 / -1;
+}
+
+.business-form-section {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-soft);
+  padding: 12px;
+}
+
+.business-form-section > strong {
+  grid-column: 1 / -1;
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.business-assignment-form label,
+.business-form-section label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.business-assignment-form select,
+.business-assignment-form input[type="text"],
+.business-assignment-form input[type="date"],
+.business-assignment-form input[type="number"] {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  padding: 7px 9px;
+}
+
+.business-assignment-form input:disabled,
+.business-assignment-form select:disabled {
+  background: #f2f4f7;
+  color: #667085;
+}
+
+.business-checkbox {
+  display: flex !important;
+  align-items: center;
+  grid-template-columns: none !important;
+  gap: 8px !important;
+}
+
+.business-conflict {
+  border: 1px solid rgba(220, 38, 38, 0.24);
+  border-radius: var(--radius-sm);
+  background: rgba(220, 38, 38, 0.06);
+  color: #991b1b;
+  padding: 10px;
+  font-size: 13px;
+}
+
+.business-preview {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-soft);
+  color: var(--muted);
+  padding: 10px;
+  font-size: 12px;
+}
+
+.business-preview strong {
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.business-readonly {
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(248, 250, 252, 0.92);
+  color: var(--muted);
+  padding: 10px;
+  font-size: 13px;
+}
+
 .empty {
   color: var(--muted);
   padding: 24px;
@@ -1614,6 +1788,12 @@ button:disabled {
 
   .import-summary-grid,
   .import-preview-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .business-editor,
+  .business-assignment-form,
+  .business-form-section {
     grid-template-columns: 1fr;
   }
 }
