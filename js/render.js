@@ -221,6 +221,8 @@
       canEdit,
       onFocusRow,
       onOpenMove,
+      onPlanSpace,
+      onRenovateLab,
       onMoveFieldChange,
       onConfirmMove,
       onCancelMove,
@@ -239,16 +241,18 @@
       return;
     }
 
-    renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove);
+    renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove, onPlanSpace, onRenovateLab);
   }
 
-  function renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove) {
+  function renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove, onPlanSpace, onRenovateLab) {
     const { building, space, lab, assignment } = context;
-    const pageTitle = lab?.lab_name || space.front_door || space.space_code;
+    const pageTitle = lab?.lab_name || "未规划";
     const canMove = Boolean(canEdit && assignment && lab);
+    const canPlan = Boolean(canEdit && !lab);
+    const canRenovate = Boolean(canEdit && assignment && lab);
     const spaceActionLabel = canEdit ? "编辑此空间" : "查看此空间";
     const labActionLabel = canEdit ? "编辑此实验室" : "查看此实验室";
-    const detailRows = [detailLine("门牌", space.front_door || "未填写")];
+    const detailRows = [detailLine("门牌", doorRangeLabel(space) || "未填写")];
 
     if (lab) {
       detailRows.push(
@@ -285,7 +289,9 @@
               <h3>${escapeHtml(pageTitle)}</h3>
               <p>${escapeHtml(`${building?.building_name || building?.building_code || ""} · ${space.floor_code}`)}</p>
             </div>
+            ${lab ? "" : `<span class="details-status">未规划</span>`}
           </div>
+          ${lab ? "" : `<p class="details-empty-note">当前空间没有已分配实验室，可先规划所属学院，系统会生成默认未规划实验室。</p>`}
           <div class="details-info-list">
             ${detailRows.join("")}
           </div>
@@ -296,6 +302,8 @@
         <button type="button" class="link-button action-link" data-focus-key="spaces" data-focus-id="${escapeHtml(space.id)}">${spaceActionLabel}</button>
         <button type="button" class="link-button action-link" data-focus-key="labs" data-focus-id="${escapeHtml(lab?.id || "")}" ${lab ? "" : "disabled"}>${labActionLabel}</button>
         <button type="button" class="link-button action-link" data-focus-key="plan_assignments" data-focus-id="${escapeHtml(assignment?.id || "")}">${assignment ? "查看当前分配" : "去分配表处理"}</button>
+        ${canPlan ? `<button type="button" class="primary-button" data-action="plan-space">规划</button>` : ""}
+        ${canRenovate ? `<button type="button" class="link-button" data-action="renovate-lab">改建</button>` : ""}
         ${canEdit ? `<button type="button" class="primary-button" data-action="move" ${canMove ? "" : "disabled"}>搬迁实验室</button>` : ""}
       </div>
     </div>`;
@@ -304,6 +312,8 @@
       node.addEventListener("click", () => onFocusRow(node.dataset.focusKey, node.dataset.focusId));
     });
     detailsEl.querySelector('[data-action="move"]')?.addEventListener("click", onOpenMove);
+    detailsEl.querySelector('[data-action="plan-space"]')?.addEventListener("click", onPlanSpace);
+    detailsEl.querySelector('[data-action="renovate-lab"]')?.addEventListener("click", onRenovateLab);
   }
 
   function renderMovePanel(detailsEl, context, moveDraft, moveErrors, moveDirty, onMoveFieldChange, onConfirmMove, onCancelMove) {
@@ -329,7 +339,6 @@
           ${readonlyField("实验室名称", lab?.lab_name || "未分配实验室")}
           ${readonlyField("当前空间编码", assignment?.space_code || space.space_code)}
           ${readonlyField("搬迁前空间", assignment?.previous_space_code || "未填写")}
-          ${readonlyField("当前分配状态", assignment?.assignment_status || "未填写")}
         </div>
       </section>
 
@@ -360,6 +369,13 @@
 
   function detailLine(label, value) {
     return `<p><strong>${escapeHtml(label)}：</strong>${escapeHtml(value || "未填写")}</p>`;
+  }
+
+  function doorRangeLabel(space) {
+    const frontDoor = String(space?.front_door || "").trim();
+    const rearDoor = String(space?.rear_door || "").trim();
+    if (frontDoor && rearDoor && frontDoor !== rearDoor) return `${frontDoor}-${rearDoor}`;
+    return frontDoor || rearDoor || "";
   }
 
   function readonlyField(label, value) {

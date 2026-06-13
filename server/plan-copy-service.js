@@ -2,11 +2,13 @@ const { httpError, nowIso, toBoolean } = require("./http-utils");
 
 function createPlanCopyService(db, datasetService) {
   function visibleWhere(user) {
+    if (user?.role === "admin") return "deleted_at IS NULL";
     if (user) return "(deleted_at IS NULL AND (is_baseline = 1 OR visibility = 'public' OR owner_user_id = ?))";
     return "(deleted_at IS NULL AND (is_baseline = 1 OR visibility = 'public'))";
   }
 
   function visibleParams(user) {
+    if (user?.role === "admin") return [];
     return user ? [user.id] : [];
   }
 
@@ -71,6 +73,22 @@ function createPlanCopyService(db, datasetService) {
 
   function mergeCopyDataset(dataset, copy, latestBaselineCode) {
     if (copy.dataset) {
+      const deletedSpaceIds = new Set(copy.dataset.deleted_space_ids || []);
+      if (deletedSpaceIds.size) {
+        dataset.deleted_space_ids = [...new Set([...(dataset.deleted_space_ids || []), ...deletedSpaceIds])];
+        dataset.spaces = (dataset.spaces || []).filter((space) => !deletedSpaceIds.has(space.id));
+        dataset.plan_assignments = (dataset.plan_assignments || []).map((assignment) => {
+          if (!deletedSpaceIds.has(assignment.space_id)) return assignment;
+          return {
+            ...assignment,
+            previous_space_code: assignment.previous_space_code || assignment.space_code || "",
+            previous_space_id: assignment.previous_space_id || assignment.space_id || "",
+            space_code: "",
+            space_id: "",
+            assignment_status: "Invalid",
+          };
+        });
+      }
       for (const key of ["buildings", "floor_segments", "spaces", "labs", "file_assets"]) {
         dataset[key].push(...(copy.dataset[key] || []));
       }
@@ -302,6 +320,11 @@ function createPlanCopyService(db, datasetService) {
 
   function saveCopyDataset(copyId, body, user) {
     const row = getOwnedCopy(copyId, user);
+    if (Number(body.expectedRevision) !== row.revision) {
+      throw Object.assign(httpError(409, "revision_conflict", "当前方案已被更新，请刷新后重试"), {
+        payload: { copy: publicCopy(row) },
+      });
+    }
     const normalized = datasetService.normalizeIncomingDataset(body.dataset);
     const plan = normalized.plans.find((item) => item.plan_code === row.plan_code || item.id === row.plan_code) || JSON.parse(row.plan_json);
     const assignments = normalized.plan_assignments.filter((item) => item.plan_code === row.plan_code || item.plan_id === row.plan_code);

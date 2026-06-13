@@ -6,7 +6,7 @@ const repairFieldMap = {
   buildings: ["building_name", "campus_zone", "notes"],
   floor_segments: ["notes"],
   spaces: ["network_segment", "notes"],
-  labs: ["lab_name", "college", "major", "lab_type", "director", "notes"],
+  labs: ["lab_name", "college", "major", "lab_type", "director", "construction_time", "notes"],
   plans: ["plan_name", "description"],
   plan_assignments: ["move_note"],
 };
@@ -135,6 +135,7 @@ function createDatasetService(db, config, audit) {
       id: row.id || row.lab_code || row.lab_id,
       lab_code: firstText(row, ["lab_code", "lab_id", "id"]),
       lab_name: String(row.lab_name || row.lab_code || row.lab_id || row.id || "").trim(),
+      construction_time: String(row.construction_time || row["建设时间"] || "").trim(),
     })));
     const plans = dedupeById(data.plans.map((row) => ({
       ...row,
@@ -179,6 +180,7 @@ function createDatasetService(db, config, audit) {
       labs,
       plans,
       plan_assignments: assignments,
+      deleted_space_ids: data.deleted_space_ids || [],
     };
   }
 
@@ -196,6 +198,7 @@ function createDatasetService(db, config, audit) {
       plan_assignments: [],
       file_assets: [],
       imports: [],
+      deleted_space_ids: [],
     };
   }
 

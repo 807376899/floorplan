@@ -67,6 +67,7 @@
         ["major", "所属专业"],
         ["lab_type", "实验室类型"],
         ["director", "负责人"],
+        ["construction_time", "建设时间"],
         ["seat_count", "座位数"],
         ["computer_count", "电脑数"],
         ["status", "状态"],
@@ -148,6 +149,7 @@
       major: ["major", "所属专业"],
       lab_type: ["lab_type", "实验室类型"],
       director: ["director", "负责人", "实验室负责人"],
+      construction_time: ["construction_time", "建设时间"],
       seat_count: ["seat_count", "座位数"],
       computer_count: ["computer_count", "电脑数", "电脑数量"],
       status: ["status", "状态", "实验室状态"],
@@ -184,6 +186,7 @@
       plan_assignments: [],
       file_assets: [],
       imports: [],
+      deleted_space_ids: [],
     };
   }
 
@@ -356,10 +359,11 @@
       lab_name: row.lab_name || row.lab_code,
       college: row.college || "未设置学院",
       major: row.major || "",
-      lab_type: row.lab_type || "教学实验室",
+      lab_type: row.lab_type === undefined ? "教学实验室" : row.lab_type,
       director: row.director || "",
-      seat_count: numberValue(row.seat_count, 0),
-      computer_count: numberValue(row.computer_count, 0),
+      construction_time: row.construction_time || "",
+      seat_count: row.seat_count === "" ? "" : numberValue(row.seat_count, 0),
+      computer_count: row.computer_count === "" ? "" : numberValue(row.computer_count, 0),
       status: row.status || "active",
       notes: row.notes || "",
       created_at: row.created_at || now,
@@ -448,6 +452,7 @@
       plan_assignments: dedupeBy(planAssignments, "id"),
       file_assets: Array.isArray(raw.file_assets) ? raw.file_assets : [],
       imports: Array.isArray(raw.imports) ? raw.imports : [],
+      deleted_space_ids: Array.isArray(raw.deleted_space_ids) ? [...new Set(raw.deleted_space_ids.filter(Boolean))] : [],
     };
   }
 
@@ -483,7 +488,7 @@
         { space_code: "A-104", building_code: "B02", floor_code: "1", segment_code: "zig-3", offset_m: 5, side: "south", front_door: "A104", rear_door: "A106", length_m: 11, width_m: 7, network_segment: "10.10.20.0/24", current_status: "active" },
       ],
       labs: [
-        { lab_code: "LAB001", lab_name: "计算机组成原理实验室", college: "计算机学院", major: "计算机科学", lab_type: "教学实验室", director: "李老师", seat_count: 48, computer_count: 48, status: "active", notes: "" },
+        { lab_code: "LAB001", lab_name: "计算机组成原理实验室", college: "计算机学院", major: "计算机科学", lab_type: "教学实验室", director: "李老师", construction_time: "", seat_count: 48, computer_count: 48, status: "active", notes: "" },
         { lab_code: "LAB002", lab_name: "电子技术实验室", college: "电子信息学院", major: "电子工程", lab_type: "专业实验室", director: "周老师", seat_count: 52, computer_count: 30, status: "active", notes: "" },
         { lab_code: "LAB003", lab_name: "机器视觉实验室", college: "人工智能学院", major: "人工智能", lab_type: "科研实验室", director: "王老师", seat_count: 30, computer_count: 24, status: "active", notes: "" },
         { lab_code: "LAB004", lab_name: "数据结构实验室", college: "计算机学院", major: "软件工程", lab_type: "教学实验室", director: "陈老师", seat_count: 50, computer_count: 50, status: "active", notes: "" },
@@ -529,7 +534,7 @@
         { building_code: "B01", floor_code: "1", segment_code: "stairs-east", start_x_m: 28, start_y_m: 4, end_x_m: 28, end_y_m: 10, width_m: 4, element_type: "stairs", notes: "东侧楼梯" },
       ],
       spaces: [{ space_code: "101", building_code: "B01", floor_code: "1", segment_code: "main", offset_m: 0, side: "north", front_door: "101", rear_door: "", length_m: 9.6, width_m: 7.2, network_segment: "192.168.1.0/24", current_status: "active" }],
-      labs: [{ lab_code: "LAB001", lab_name: "计算机组成原理实验室", college: "计算机学院", major: "计算机科学", lab_type: "教学实验室", director: "李老师", seat_count: 48, computer_count: 48, status: "active", notes: "" }],
+      labs: [{ lab_code: "LAB001", lab_name: "计算机组成原理实验室", college: "计算机学院", major: "计算机科学", lab_type: "教学实验室", director: "李老师", construction_time: "", seat_count: 48, computer_count: 48, status: "active", notes: "" }],
       plans: defaultPlans(),
       plan_assignments: [{ plan_code: "baseline", lab_code: "LAB001", space_code: "101", previous_space_code: "", assignment_status: "assigned", move_note: "", effective_from: "" }],
     }[key] || [];
