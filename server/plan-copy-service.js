@@ -89,7 +89,7 @@ function createPlanCopyService(db, datasetService) {
           };
         });
       }
-      for (const key of ["buildings", "floor_segments", "spaces", "labs", "file_assets"]) {
+      for (const key of ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "file_assets"]) {
         dataset[key].push(...(copy.dataset[key] || []));
       }
     }

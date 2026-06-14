@@ -1522,6 +1522,12 @@ button:disabled {
   color: var(--danger);
 }
 
+.business-hint {
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 body,
 .topbar,
 .filters,
@@ -1625,6 +1631,12 @@ button,
   overflow: auto;
 }
 
+.modal-card-dictionaries {
+  width: min(1120px, calc(100vw - 32px));
+  max-height: min(860px, calc(100vh - 32px));
+  overflow: auto;
+}
+
 .modal-card-imports {
   width: min(1320px, calc(100vw - 28px));
   max-height: min(880px, calc(100vh - 28px));
@@ -1642,6 +1654,57 @@ button,
   display: grid;
   gap: 14px;
   margin-top: 16px;
+}
+
+.dictionary-layout {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.dictionary-layout section {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dictionary-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dictionary-rows {
+  display: grid;
+  gap: 10px;
+}
+
+.dictionary-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(214, 221, 232, 0.86);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.dictionary-row label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dictionary-row input,
+.dictionary-row select {
+  min-width: 0;
+  width: 100%;
 }
 
 .modal-field {

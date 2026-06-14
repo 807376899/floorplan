@@ -75,6 +75,43 @@
       ],
     },
     {
+      key: "colleges",
+      label: "学院",
+      sheet: "colleges",
+      columns: [
+        ["college_code", "学院编码"],
+        ["college_name", "学院名称"],
+        ["sort_order", "排序"],
+        ["status", "状态"],
+        ["notes", "备注"],
+      ],
+    },
+    {
+      key: "majors",
+      label: "专业",
+      sheet: "majors",
+      columns: [
+        ["major_code", "专业编码"],
+        ["major_name", "专业名称"],
+        ["college_code", "所属学院编码"],
+        ["sort_order", "排序"],
+        ["status", "状态"],
+        ["notes", "备注"],
+      ],
+    },
+    {
+      key: "lab_types",
+      label: "实验室类型",
+      sheet: "lab_types",
+      columns: [
+        ["type_code", "类型编码"],
+        ["type_name", "类型名称"],
+        ["sort_order", "排序"],
+        ["status", "状态"],
+        ["notes", "备注"],
+      ],
+    },
+    {
       key: "plans",
       label: "方案",
       sheet: "plans",
@@ -155,6 +192,28 @@
       status: ["status", "状态", "实验室状态"],
       notes: ["notes", "备注"],
     },
+    colleges: {
+      college_code: ["college_code", "学院编码"],
+      college_name: ["college_name", "所属学院", "学院名称", "college"],
+      sort_order: ["sort_order", "排序"],
+      status: ["status", "状态"],
+      notes: ["notes", "备注"],
+    },
+    majors: {
+      major_code: ["major_code", "专业编码"],
+      major_name: ["major_name", "所属专业", "专业名称", "major"],
+      college_code: ["college_code", "所属学院编码"],
+      sort_order: ["sort_order", "排序"],
+      status: ["status", "状态"],
+      notes: ["notes", "备注"],
+    },
+    lab_types: {
+      type_code: ["type_code", "类型编码"],
+      type_name: ["type_name", "实验室类型", "类型名称", "lab_type"],
+      sort_order: ["sort_order", "排序"],
+      status: ["status", "状态"],
+      notes: ["notes", "备注"],
+    },
     plans: {
       plan_code: ["plan_code", "plan_id", "id", "方案编码"],
       plan_name: ["plan_name", "方案名称"],
@@ -182,6 +241,9 @@
       floor_segments: [],
       spaces: [],
       labs: [],
+      colleges: [],
+      majors: [],
+      lab_types: [],
       plans: [],
       plan_assignments: [],
       file_assets: [],
@@ -371,6 +433,94 @@
     };
   }
 
+  function activeStatus(value) {
+    const raw = String(value ?? "").trim().toLowerCase();
+    if (["inactive", "disabled", "停用", "禁用", "0", "false"].includes(raw)) return "inactive";
+    return "active";
+  }
+
+  function normalizeDictionaryCode(value, fallbackPrefix) {
+    const raw = String(value ?? "").trim();
+    return raw || `${fallbackPrefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  }
+
+  function normalizeCollege(row) {
+    const now = isoNow();
+    const name = String(row.college_name || row.college || row.college_code || "").trim();
+    const code = normalizeDictionaryCode(row.college_code || name, "COLLEGE");
+    return {
+      id: code,
+      college_code: code,
+      college_name: name || code,
+      sort_order: numberValue(row.sort_order, 0),
+      status: activeStatus(row.status),
+      notes: row.notes || "",
+      created_at: row.created_at || now,
+      updated_at: now,
+    };
+  }
+
+  function normalizeMajor(row) {
+    const now = isoNow();
+    const name = String(row.major_name || row.major || row.major_code || "").trim();
+    const collegeCode = String(row.college_code || "").trim();
+    const code = normalizeDictionaryCode(row.major_code || (collegeCode && name ? `${collegeCode}-${name}` : name), "MAJOR");
+    return {
+      id: code,
+      major_code: code,
+      major_name: name || code,
+      college_code: collegeCode,
+      sort_order: numberValue(row.sort_order, 0),
+      status: activeStatus(row.status),
+      notes: row.notes || "",
+      created_at: row.created_at || now,
+      updated_at: now,
+    };
+  }
+
+  function normalizeLabType(row) {
+    const now = isoNow();
+    const name = String(row.type_name || row.lab_type || row.type_code || "").trim();
+    const code = normalizeDictionaryCode(row.type_code || name, "TYPE");
+    return {
+      id: code,
+      type_code: code,
+      type_name: name || code,
+      sort_order: numberValue(row.sort_order, 0),
+      status: activeStatus(row.status),
+      notes: row.notes || "",
+      created_at: row.created_at || now,
+      updated_at: now,
+    };
+  }
+
+  function deriveDictionaries(labs, colleges, majors, labTypes) {
+    const collegeRows = colleges.length ? colleges : unique(labs.map((row) => row.college))
+      .map((name, index) => normalizeCollege({ college_code: name, college_name: name, sort_order: index + 1 }));
+    const collegeByName = new Map(collegeRows.map((row) => [row.college_name, row]));
+    const majorRows = majors.length ? majors : unique(labs.map((row) => `${row.college || ""}:::${row.major || ""}`))
+      .map((key, index) => {
+        const [collegeName, majorName] = key.split(":::");
+        if (!majorName) return null;
+        const college = collegeByName.get(collegeName);
+        return normalizeMajor({
+          major_code: `${college?.college_code || collegeName}-${majorName}`,
+          major_name: majorName,
+          college_code: college?.college_code || collegeName,
+          sort_order: index + 1,
+        });
+      })
+      .filter(Boolean);
+    const typeRows = labTypes.length ? labTypes : unique(labs.map((row) => row.lab_type))
+      .map((name, index) => normalizeLabType({ type_code: name, type_name: name, sort_order: index + 1 }));
+    const byOrderThenName = (nameKey) => (a, b) => numberValue(a.sort_order, 0) - numberValue(b.sort_order, 0) || compare(a[nameKey], b[nameKey]);
+    return {
+      colleges: dedupeBy(collegeRows, "id").sort(byOrderThenName("college_name")),
+      majors: dedupeBy(majorRows, "id").sort(byOrderThenName("major_name")),
+      lab_types: dedupeBy(typeRows, "id").sort(byOrderThenName("type_name")),
+    };
+  }
+
   function normalizePlan(row) {
     const now = isoNow();
     return {
@@ -439,6 +589,12 @@
     const floorSegments = (raw.floor_segments || []).map((row) => normalizeSegment(projectRow("floor_segments", row)));
     const spaces = (raw.spaces || []).map((row) => normalizeSpace(projectRow("spaces", row)));
     const labs = (raw.labs || []).map((row) => normalizeLab(projectRow("labs", row)));
+    const dictionary = deriveDictionaries(
+      labs,
+      (raw.colleges || []).map((row) => normalizeCollege(projectRow("colleges", row))),
+      (raw.majors || []).map((row) => normalizeMajor(projectRow("majors", row))),
+      (raw.lab_types || []).map((row) => normalizeLabType(projectRow("lab_types", row)))
+    );
     const plansRaw = (raw.plans || []).map((row) => normalizePlan(projectRow("plans", row)));
     const plans = plansRaw.length ? plansRaw : defaultPlans().map(normalizePlan);
     const relation = relationMaps({ spaces, labs, plans });
@@ -448,6 +604,9 @@
       floor_segments: dedupeBy(floorSegments, "id"),
       spaces: dedupeBy(spaces, "id"),
       labs: dedupeBy(labs, "id"),
+      colleges: dictionary.colleges,
+      majors: dictionary.majors,
+      lab_types: dictionary.lab_types,
       plans: dedupeBy(plans, "id"),
       plan_assignments: dedupeBy(planAssignments, "id"),
       file_assets: Array.isArray(raw.file_assets) ? raw.file_assets : [],
@@ -496,6 +655,27 @@
         { lab_code: "LAB006", lab_name: "有机化学实验室", college: "化学学院", major: "应用化学", lab_type: "教学实验室", director: "孙老师", seat_count: 36, computer_count: 0, status: "active", notes: "" },
         { lab_code: "LAB007", lab_name: "细胞培养实验室", college: "生命科学学院", major: "生物技术", lab_type: "科研实验室", director: "吴老师", seat_count: 24, computer_count: 6, status: "active", notes: "" },
       ],
+      colleges: [
+        { college_code: "计算机学院", college_name: "计算机学院", sort_order: 1, status: "active", notes: "" },
+        { college_code: "电子信息学院", college_name: "电子信息学院", sort_order: 2, status: "active", notes: "" },
+        { college_code: "人工智能学院", college_name: "人工智能学院", sort_order: 3, status: "active", notes: "" },
+        { college_code: "化学学院", college_name: "化学学院", sort_order: 4, status: "active", notes: "" },
+        { college_code: "生命科学学院", college_name: "生命科学学院", sort_order: 5, status: "active", notes: "" },
+      ],
+      majors: [
+        { major_code: "计算机学院-计算机科学", major_name: "计算机科学", college_code: "计算机学院", sort_order: 1, status: "active", notes: "" },
+        { major_code: "计算机学院-软件工程", major_name: "软件工程", college_code: "计算机学院", sort_order: 2, status: "active", notes: "" },
+        { major_code: "电子信息学院-电子工程", major_name: "电子工程", college_code: "电子信息学院", sort_order: 1, status: "active", notes: "" },
+        { major_code: "人工智能学院-人工智能", major_name: "人工智能", college_code: "人工智能学院", sort_order: 1, status: "active", notes: "" },
+        { major_code: "人工智能学院-机器人工程", major_name: "机器人工程", college_code: "人工智能学院", sort_order: 2, status: "active", notes: "" },
+        { major_code: "化学学院-应用化学", major_name: "应用化学", college_code: "化学学院", sort_order: 1, status: "active", notes: "" },
+        { major_code: "生命科学学院-生物技术", major_name: "生物技术", college_code: "生命科学学院", sort_order: 1, status: "active", notes: "" },
+      ],
+      lab_types: [
+        { type_code: "教学实验室", type_name: "教学实验室", sort_order: 1, status: "active", notes: "" },
+        { type_code: "专业实验室", type_name: "专业实验室", sort_order: 2, status: "active", notes: "" },
+        { type_code: "科研实验室", type_name: "科研实验室", sort_order: 3, status: "active", notes: "" },
+      ],
       plans: defaultPlans(),
       plan_assignments: [
         { plan_code: "baseline", lab_code: "LAB001", space_code: "101", previous_space_code: "", assignment_status: "assigned", move_note: "", effective_from: "" },
@@ -520,7 +700,7 @@
     return [
       ["使用说明", "整套数据只需维护这一个 Excel 文件。"],
       ["导入方式", "上传本工作簿即可，系统会自动读取各工作表。"],
-      ["工作表", "buildings, floor_segments, spaces, labs, plans, plan_assignments"],
+      ["工作表", "buildings, floor_segments, spaces, labs, colleges, majors, lab_types, plans, plan_assignments"],
       ["字段约定", "编码字段保持唯一；side 使用 north/south/east/west；element_type 使用 corridor/stairs。"],
       ["方案分配", "plan_assignments 用 plan_code + lab_code 表示一条实验室落位关系。"],
     ];
@@ -535,6 +715,9 @@
       ],
       spaces: [{ space_code: "101", building_code: "B01", floor_code: "1", segment_code: "main", offset_m: 0, side: "north", front_door: "101", rear_door: "", length_m: 9.6, width_m: 7.2, network_segment: "192.168.1.0/24", current_status: "active" }],
       labs: [{ lab_code: "LAB001", lab_name: "计算机组成原理实验室", college: "计算机学院", major: "计算机科学", lab_type: "教学实验室", director: "李老师", construction_time: "", seat_count: 48, computer_count: 48, status: "active", notes: "" }],
+      colleges: [{ college_code: "计算机学院", college_name: "计算机学院", sort_order: 1, status: "active", notes: "" }],
+      majors: [{ major_code: "计算机学院-计算机科学", major_name: "计算机科学", college_code: "计算机学院", sort_order: 1, status: "active", notes: "" }],
+      lab_types: [{ type_code: "教学实验室", type_name: "教学实验室", sort_order: 1, status: "active", notes: "" }],
       plans: defaultPlans(),
       plan_assignments: [{ plan_code: "baseline", lab_code: "LAB001", space_code: "101", previous_space_code: "", assignment_status: "assigned", move_note: "", effective_from: "" }],
     }[key] || [];
@@ -565,6 +748,9 @@
     normalizeSegment,
     normalizeSpace,
     normalizeLab,
+    normalizeCollege,
+    normalizeMajor,
+    normalizeLabType,
     normalizePlan,
     normalizeAssignment,
     normalizeSide,

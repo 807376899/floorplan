@@ -7,6 +7,9 @@ const repairFieldMap = {
   floor_segments: ["notes"],
   spaces: ["network_segment", "notes"],
   labs: ["lab_name", "college", "major", "lab_type", "director", "construction_time", "notes"],
+  colleges: ["college_name", "notes"],
+  majors: ["major_name", "notes"],
+  lab_types: ["type_name", "notes"],
   plans: ["plan_name", "description"],
   plan_assignments: ["move_note"],
 };
@@ -93,6 +96,91 @@ function createDatasetService(db, config, audit) {
     return "active";
   }
 
+  function unique(values) {
+    return [...new Set(values.filter(Boolean))];
+  }
+
+  function activeStatus(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (["inactive", "disabled", "停用", "禁用", "0", "false"].includes(raw)) return "inactive";
+    return "active";
+  }
+
+  function normalizeDictionaryCode(value, fallbackPrefix) {
+    const raw = String(value || "").trim();
+    return raw || `${fallbackPrefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  }
+
+  function normalizeCollegeRow(row) {
+    const name = String(row.college_name || row.college || row.college_code || "").trim();
+    const code = normalizeDictionaryCode(row.college_code || name, "COLLEGE");
+    return {
+      ...row,
+      id: row.id || code,
+      college_code: code,
+      college_name: name || code,
+      sort_order: Number(row.sort_order || 0),
+      status: activeStatus(row.status),
+      notes: String(row.notes || ""),
+    };
+  }
+
+  function normalizeMajorRow(row) {
+    const name = String(row.major_name || row.major || row.major_code || "").trim();
+    const collegeCode = String(row.college_code || "").trim();
+    const code = normalizeDictionaryCode(row.major_code || (collegeCode && name ? `${collegeCode}-${name}` : name), "MAJOR");
+    return {
+      ...row,
+      id: row.id || code,
+      major_code: code,
+      major_name: name || code,
+      college_code: collegeCode,
+      sort_order: Number(row.sort_order || 0),
+      status: activeStatus(row.status),
+      notes: String(row.notes || ""),
+    };
+  }
+
+  function normalizeLabTypeRow(row) {
+    const name = String(row.type_name || row.lab_type || row.type_code || "").trim();
+    const code = normalizeDictionaryCode(row.type_code || name, "TYPE");
+    return {
+      ...row,
+      id: row.id || code,
+      type_code: code,
+      type_name: name || code,
+      sort_order: Number(row.sort_order || 0),
+      status: activeStatus(row.status),
+      notes: String(row.notes || ""),
+    };
+  }
+
+  function deriveDictionaries(labs, data) {
+    const colleges = data.colleges.length ? data.colleges.map(normalizeCollegeRow) : unique(labs.map((row) => row.college))
+      .map((name, index) => normalizeCollegeRow({ college_code: name, college_name: name, sort_order: index + 1 }));
+    const collegeByName = new Map(colleges.map((row) => [row.college_name, row]));
+    const majors = data.majors.length ? data.majors.map(normalizeMajorRow) : unique(labs.map((row) => `${row.college || ""}:::${row.major || ""}`))
+      .map((key, index) => {
+        const [collegeName, majorName] = key.split(":::");
+        if (!majorName) return null;
+        const college = collegeByName.get(collegeName);
+        return normalizeMajorRow({
+          major_code: `${college?.college_code || collegeName}-${majorName}`,
+          major_name: majorName,
+          college_code: college?.college_code || collegeName,
+          sort_order: index + 1,
+        });
+      })
+      .filter(Boolean);
+    const labTypes = data.lab_types.length ? data.lab_types.map(normalizeLabTypeRow) : unique(labs.map((row) => row.lab_type))
+      .map((name, index) => normalizeLabTypeRow({ type_code: name, type_name: name, sort_order: index + 1 }));
+    return {
+      colleges: dedupeById(colleges),
+      majors: dedupeById(majors),
+      lab_types: dedupeById(labTypes),
+    };
+  }
+
   /**
    * 服务端会再次规范化前端传入的数据，保证导入、编辑和恢复快照都落到同一套 id/引用规则。
    */
@@ -137,6 +225,7 @@ function createDatasetService(db, config, audit) {
       lab_name: String(row.lab_name || row.lab_code || row.lab_id || row.id || "").trim(),
       construction_time: String(row.construction_time || row["建设时间"] || "").trim(),
     })));
+    const dictionary = deriveDictionaries(labs, data);
     const plans = dedupeById(data.plans.map((row) => ({
       ...row,
       id: row.id || row.plan_code || row.plan_id,
@@ -178,6 +267,9 @@ function createDatasetService(db, config, audit) {
       floor_segments: floorSegments,
       spaces,
       labs,
+      colleges: dictionary.colleges,
+      majors: dictionary.majors,
+      lab_types: dictionary.lab_types,
       plans,
       plan_assignments: assignments,
       deleted_space_ids: data.deleted_space_ids || [],
@@ -194,6 +286,9 @@ function createDatasetService(db, config, audit) {
       floor_segments: [],
       spaces: [],
       labs: [],
+      colleges: [],
+      majors: [],
+      lab_types: [],
       plans: [],
       plan_assignments: [],
       file_assets: [],
@@ -301,7 +396,7 @@ function createDatasetService(db, config, audit) {
 
   function validateDataset(dataset) {
     const errors = [];
-    for (const key of config.datasetKeys.slice(0, 6)) {
+    for (const key of ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments"]) {
       if (!Array.isArray(dataset[key])) errors.push(`${key} 必须是数组`);
     }
     if (errors.length) return { ok: false, errors };
