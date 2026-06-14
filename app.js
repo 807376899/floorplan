@@ -1440,6 +1440,7 @@ function renderApp() {
     moveDraft: state.moveDraft,
     moveErrors: state.moveErrors,
     moveDirty: state.moveDirty,
+    moveTargetOptions: moveTargetSpaceOptions(context),
     canEdit: canEditActivePlan(),
     onFocusRow: focusRowFromDetails,
     onOpenMove: openMoveMode,
@@ -1449,8 +1450,191 @@ function renderApp() {
     onConfirmMove: confirmMoveAssignmentAction,
     onCancelMove: cancelMoveMode,
   });
+  renderPlanDiffPanel(beforePlan, afterPlan);
 
   Canvas.applyCanvasMode(state, els);
+}
+
+function renderPlanDiffPanel(beforePlan, afterPlan) {
+  if (!els.planDiffPanel) return;
+  const isCompare = state.planViewMode === "compare";
+  els.planDiffPanel.hidden = !isCompare;
+  if (!isCompare) {
+    els.planDiffPanel.innerHTML = "";
+    return;
+  }
+  if (!beforePlan || !afterPlan || beforePlan.id === afterPlan.id) {
+    els.planDiffPanel.innerHTML = `<div class="plan-diff-empty">请选择两套不同方案查看差异。</div>`;
+    return;
+  }
+  const diff = buildPlanDiff(beforePlan, afterPlan);
+  els.planDiffPanel.innerHTML = `
+    <div class="plan-diff-heading">
+      <div>
+        <h2>方案差异对比</h2>
+        <p>${escapeHtml(beforePlan.plan_name)} → ${escapeHtml(afterPlan.plan_name)}</p>
+      </div>
+      <div class="plan-diff-metrics">
+        ${diffMetric("变化实验室", diff.labChanges.length)}
+        ${diffMetric("变化空间", diff.spaceChanges.length)}
+        ${diffMetric("面积变化", signedNumber(diff.totalAreaDelta, " m²"))}
+        ${diffMetric("座位变化", signedNumber(diff.totalSeatDelta, " 席"))}
+      </div>
+    </div>
+    <div class="plan-diff-grid">
+      <section class="plan-diff-section">
+        <h3>学院汇总</h3>
+        ${diffTable(["学院", "新增", "取消", "迁移", "面积", "座位"], diff.collegeRows.map((row) => [
+          row.college,
+          row.added,
+          row.removed,
+          row.moved,
+          signedNumber(row.areaDelta, " m²"),
+          signedNumber(row.seatDelta, " 席"),
+        ]), "两套方案的学院维度没有差异。")}
+      </section>
+      <section class="plan-diff-section">
+        <h3>实验室变化</h3>
+        ${diffTable(["变化", "实验室", "左侧方案", "右侧方案", "面积", "座位"], diff.labChanges.map((row) => [
+          row.type,
+          row.labName,
+          row.beforeText,
+          row.afterText,
+          signedNumber(row.areaDelta, " m²"),
+          signedNumber(row.seatDelta, " 席"),
+        ]), "两套方案的实验室落位没有差异。")}
+      </section>
+      <section class="plan-diff-section">
+        <h3>空间变化</h3>
+        ${diffTable(["变化", "空间", "左侧实验室", "右侧实验室", "面积", "座位"], diff.spaceChanges.map((row) => [
+          row.type,
+          row.spaceText,
+          row.beforeLab,
+          row.afterLab,
+          signedNumber(row.areaDelta, " m²"),
+          signedNumber(row.seatDelta, " 席"),
+        ]), "两套方案的空间占用没有差异。")}
+      </section>
+    </div>
+  `;
+}
+
+function buildPlanDiff(beforePlan, afterPlan) {
+  const beforeByLab = assignedPlanRows(beforePlan).byLab;
+  const afterByLab = assignedPlanRows(afterPlan).byLab;
+  const beforeBySpace = assignedPlanRows(beforePlan).bySpace;
+  const afterBySpace = assignedPlanRows(afterPlan).bySpace;
+  const labCodes = [...new Set([...beforeByLab.keys(), ...afterByLab.keys()])].sort(compare);
+  const spaceIds = [...new Set([...beforeBySpace.keys(), ...afterBySpace.keys()])].sort(compare);
+  const collegeSummary = new Map();
+  const labChanges = [];
+  const spaceChanges = [];
+
+  for (const labCode of labCodes) {
+    const before = beforeByLab.get(labCode) || null;
+    const after = afterByLab.get(labCode) || null;
+    const beforeText = before ? diffSpaceLabel(before.space) : "未落位";
+    const afterText = after ? diffSpaceLabel(after.space) : "未落位";
+    const areaDelta = (after?.space?.area_m2 || 0) - (before?.space?.area_m2 || 0);
+    const seatDelta = numberOrZero(after?.lab?.seat_count) - numberOrZero(before?.lab?.seat_count);
+    const type = diffLabChangeType(before, after);
+    const labName = after?.lab?.lab_name || before?.lab?.lab_name || labCode;
+    if (type === "无变化" && areaDelta === 0 && seatDelta === 0) continue;
+    labChanges.push({ type, labName, beforeText, afterText, areaDelta, seatDelta });
+    const college = after?.lab?.college || before?.lab?.college || "未设置学院";
+    const summary = ensureCollegeSummary(collegeSummary, college);
+    if (type === "新增落位") summary.added += 1;
+    if (type === "取消落位") summary.removed += 1;
+    if (type === "空间变更") summary.moved += 1;
+    summary.areaDelta += areaDelta;
+    summary.seatDelta += seatDelta;
+  }
+
+  for (const spaceId of spaceIds) {
+    const before = beforeBySpace.get(spaceId) || null;
+    const after = afterBySpace.get(spaceId) || null;
+    const beforeLab = before?.lab?.lab_name || "未规划";
+    const afterLab = after?.lab?.lab_name || "未规划";
+    if ((before?.lab?.lab_code || "") === (after?.lab?.lab_code || "")) continue;
+    const space = after?.space || before?.space;
+    const areaDelta = (after?.space?.area_m2 || 0) - (before?.space?.area_m2 || 0);
+    const seatDelta = numberOrZero(after?.lab?.seat_count) - numberOrZero(before?.lab?.seat_count);
+    const type = before && after ? "实验室变更" : (after ? "新增落位" : "取消落位");
+    spaceChanges.push({ type, spaceText: diffSpaceLabel(space), beforeLab, afterLab, areaDelta, seatDelta });
+  }
+
+  const collegeRows = [...collegeSummary.values()]
+    .filter((row) => row.added || row.removed || row.moved || row.areaDelta || row.seatDelta)
+    .sort((a, b) => compare(a.college, b.college));
+
+  return {
+    labChanges,
+    spaceChanges,
+    collegeRows,
+    totalAreaDelta: labChanges.reduce((sum, row) => sum + row.areaDelta, 0),
+    totalSeatDelta: labChanges.reduce((sum, row) => sum + row.seatDelta, 0),
+  };
+}
+
+function assignedPlanRows(plan) {
+  const spacesById = new Map(state.data.spaces.map((row) => [row.id, row]));
+  const labsByCode = new Map(state.data.labs.map((row) => [row.lab_code, row]));
+  const byLab = new Map();
+  const bySpace = new Map();
+  for (const assignment of state.data.plan_assignments.filter((row) => row.plan_id === plan.id && row.assignment_status === "assigned")) {
+    const lab = labsByCode.get(assignment.lab_code) || null;
+    const space = spacesById.get(assignment.space_id) || null;
+    if (!lab || !space) continue;
+    const item = { assignment, lab, space };
+    byLab.set(assignment.lab_code, item);
+    bySpace.set(assignment.space_id, item);
+  }
+  return { byLab, bySpace };
+}
+
+function diffLabChangeType(before, after) {
+  if (!before && after) return "新增落位";
+  if (before && !after) return "取消落位";
+  if (before?.space?.id !== after?.space?.id) return "空间变更";
+  if ((before?.lab?.college || "") !== (after?.lab?.college || "") || (before?.lab?.lab_name || "") !== (after?.lab?.lab_name || "")) return "实验室信息变更";
+  if ((before?.space?.area_m2 || 0) !== (after?.space?.area_m2 || 0)) return "面积变化";
+  if (numberOrZero(before?.lab?.seat_count) !== numberOrZero(after?.lab?.seat_count)) return "座位数变化";
+  return "无变化";
+}
+
+function diffSpaceLabel(space) {
+  if (!space) return "未填写";
+  return `${spaceDisplayName(space)} · ${space.space_code}`;
+}
+
+function ensureCollegeSummary(summary, college) {
+  if (!summary.has(college)) {
+    summary.set(college, { college, added: 0, removed: 0, moved: 0, areaDelta: 0, seatDelta: 0 });
+  }
+  return summary.get(college);
+}
+
+function numberOrZero(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function signedNumber(value, suffix = "") {
+  const rounded = Math.round(Number(value || 0) * 10) / 10;
+  if (!rounded) return `0${suffix}`;
+  return `${rounded > 0 ? "+" : ""}${rounded}${suffix}`;
+}
+
+function diffMetric(label, value) {
+  return `<div class="plan-diff-metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+}
+
+function diffTable(headers, rows, emptyText) {
+  if (!rows.length) return `<div class="plan-diff-empty">${escapeHtml(emptyText)}</div>`;
+  return `<div class="plan-diff-table-wrap"><table class="plan-diff-table">
+    <thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("")}</tbody>
+  </table></div>`;
 }
 
 function getSelectedContext() {
@@ -1474,8 +1658,27 @@ function moveTargetKey(context) {
 function buildMoveDraft(context) {
   if (!context.space || !context.assignment || !context.lab) return null;
   return {
+    targetSpaceId: "",
     targetSpaceCode: "",
   };
+}
+
+function moveTargetSpaceOptions(context) {
+  if (!context.activePlan || !context.space) return [];
+  const occupiedSpaceIds = new Set(state.data.plan_assignments
+    .filter((row) => row.plan_id === context.activePlan.id && row.assignment_status === "assigned" && row.space_id)
+    .map((row) => row.space_id));
+  return state.data.spaces
+    .filter((space) => space.current_status !== "unavailable")
+    .filter((space) => space.id !== context.space.id)
+    .filter((space) => !occupiedSpaceIds.has(space.id))
+    .slice()
+    .sort((a, b) => compare(spaceDisplayName(a), spaceDisplayName(b)))
+    .map((space) => ({
+      value: space.id,
+      code: space.space_code,
+      label: `${spaceDisplayName(space)} · ${space.space_code} · ${(space.area_m2 || 0).toFixed(1)} m²`,
+    }));
 }
 
 function syncMoveDraft(force = false) {
@@ -1570,19 +1773,24 @@ function cancelMoveMode() {
 function validateMoveDraft() {
   const context = getSelectedContext();
   const errors = {};
+  const targetId = String(state.moveDraft?.targetSpaceId || "").trim();
   const targetCode = String(state.moveDraft?.targetSpaceCode || "").trim();
-  if (!targetCode) {
-    errors.targetSpaceCode = "请输入目标空间编码。";
+  if (!targetId && !targetCode) {
+    errors.targetSpaceCode = "请选择目标空间。";
     return { errors, targetSpace: null, conflictAssignment: null };
   }
 
-  const targetSpace = state.data.spaces.find((row) => row.space_code === targetCode) || null;
+  const targetSpace = state.data.spaces.find((row) => row.id === targetId || row.space_code === targetCode) || null;
   if (!targetSpace) {
-    errors.targetSpaceCode = "未找到对应的空间编码。";
+    errors.targetSpaceCode = "未找到对应的目标空间。";
     return { errors, targetSpace: null, conflictAssignment: null };
   }
   if (targetSpace.id === context.space?.id) {
     errors.targetSpaceCode = "目标空间不能与当前空间相同。";
+    return { errors, targetSpace, conflictAssignment: null };
+  }
+  if (targetSpace.current_status === "unavailable") {
+    errors.targetSpaceCode = "不可用空间不能作为搬迁目标。";
     return { errors, targetSpace, conflictAssignment: null };
   }
 
@@ -2056,22 +2264,58 @@ function renderBusinessAssignmentEditor() {
     ? assignments.find((row) => row.space_id === selectedSpace.id && row.assignment_status === "assigned" && row.lab_code !== selectedLabCode)
     : null;
   const canSaveAnything = canEditAssignment || canEditBase;
-  const hiddenAssignedLabCount = assignedLabCodesForOtherSpaces(assignments, selectedSpace?.id || "").size;
-
-  els.dataEditor.innerHTML = `
-    <div class="business-editor">
-      <div class="business-editor-list">
-        <div class="business-editor-heading">
-          <strong>${escapeHtml(building?.building_name || building?.building_code || "当前楼栋")} ${escapeHtml(els.floorSelect.value || "")}层</strong>
-          <span>${floorAssignments.length}/${floorSpaces.length} 已分配</span>
-        </div>
-        ${floorSpaces.length ? floorSpaces.map((space) => businessSpaceCard(space, assignments, selectedSpace?.id || "")).join("") : `<div class="empty">当前楼层还没有空间资料。</div>`}
-      </div>
-      <form id="businessAssignmentForm" class="business-assignment-form">
-        <div class="business-editor-heading">
-          <strong>${selectedSpace ? `编辑 ${businessDoorRangeLabel(selectedSpace) || selectedSpace.space_code}` : "当前楼层业务编辑"}</strong>
-          <span>${escapeHtml(activePlan.plan_name)}</span>
-        </div>
+  const labSection = selectedLab ? `
+        <div class="business-form-section business-form-section-lab">
+          <strong>实验室信息</strong>
+          <label>落位实验室
+            <select name="labCode" ${canEditAssignment && selectedSpace ? "" : "disabled"}>
+              <option value="" ${!selectedLabCode ? "selected" : ""}>未分配实验室</option>
+              ${businessLabOptions(selectedLabCode, selectedSpace?.id || "")}
+            </select>
+          </label>
+          <label>实验室名称
+            <input name="labName" type="text" value="${escapeHtml(selectedLab.lab_name || "")}" ${canEditBase ? "" : "disabled"} />
+          </label>
+          <label>类型
+            <select name="labType" ${canEditBase ? "" : "disabled"}>
+              ${selectOptionsWithBlank(activeLabTypeOptions().map((row) => row.type_name), selectedLab.lab_type || "", "未选择类型")}
+            </select>
+          </label>
+          <label>学院
+            <select name="college" ${canEditBase ? "" : "disabled"}>
+              ${selectOptionsWithBlank(activeCollegeOptions().map((row) => row.college_name), selectedLab.college || "", "未选择学院")}
+            </select>
+          </label>
+          <label>专业
+            <select name="major" ${canEditBase ? "" : "disabled"}>
+              ${majorOptionsForCollege(selectedLab.college || "", selectedLab.major || "")}
+            </select>
+          </label>
+          <label>负责人
+            <input name="director" type="text" value="${escapeHtml(selectedLab.director || "")}" ${canEditBase ? "" : "disabled"} />
+          </label>
+          <label>座位数
+            <input name="seatCount" type="number" step="1" min="0" value="${escapeHtml(selectedLab.seat_count ?? "")}" ${canEditBase ? "" : "disabled"} />
+          </label>
+          <label>电脑数
+            <input name="computerCount" type="number" step="1" min="0" value="${escapeHtml(selectedLab.computer_count ?? "")}" ${canEditBase ? "" : "disabled"} />
+          </label>
+          <label>备注
+            <input name="moveNote" type="text" value="${escapeHtml(selected?.move_note || "")}" ${canEditAssignment && selectedSpace ? "" : "disabled"} />
+          </label>
+          ${conflict ? `<div class="business-conflict">当前空间已被 ${escapeHtml(labNameByCode(conflict.lab_code))} 占用。勾选后保存会将原分配改为无效。</div>
+          <label class="business-checkbox"><input name="replaceConflict" type="checkbox" ${canEditAssignment ? "" : "disabled"} /> 替换当前占用</label>` : ""}
+          ${canEditAssignment ? `<div class="business-inline-actions"><button id="businessRenovateLabBtn" type="button">改建</button><span>解绑当前实验室，并为该空间生成同学院的未规划实验室。</span></div>` : ""}
+        </div>` : `
+        <div class="business-form-section business-form-section-lab">
+          <strong>实验室信息</strong>
+          <div class="business-preview business-unplanned-card">
+            <strong>未规划</strong>
+            <span>当前空间没有已分配实验室。</span>
+            ${canEditAssignment && selectedSpace ? `<button id="businessPlanSpaceBtn" type="button" class="primary-button">规划</button>` : ""}
+          </div>
+        </div>`;
+  const spaceSection = `
         <div class="business-form-section business-form-section-space">
           <strong>空间信息</strong>
           ${isNewSpace ? `<label>前门牌
@@ -2109,53 +2353,24 @@ function renderBusinessAssignmentEditor() {
           <label>网段
             <input name="networkSegment" type="text" value="${escapeHtml(selectedSpace?.network_segment || "")}" ${canEditBase && selectedSpace ? "" : "disabled"} />
           </label>
+        </div>`;
+
+  els.dataEditor.innerHTML = `
+    <div class="business-editor">
+      <div class="business-editor-list">
+        <div class="business-editor-heading">
+          <strong>${escapeHtml(building?.building_name || building?.building_code || "当前楼栋")} ${escapeHtml(els.floorSelect.value || "")}层</strong>
+          <span>${floorAssignments.length}/${floorSpaces.length} 已分配</span>
         </div>
-        <div class="business-form-section business-form-section-lab">
-          <strong>实验室信息</strong>
-          <label>落位实验室
-            <select name="labCode" ${canEditAssignment && selectedSpace ? "" : "disabled"}>
-              <option value="" ${!selectedLabCode ? "selected" : ""}>未分配实验室</option>
-              ${businessLabOptions(selectedLabCode, selectedSpace?.id || "")}
-            </select>
-          </label>
-          ${hiddenAssignedLabCount ? `<div class="business-hint">已隐藏 ${hiddenAssignedLabCount} 个已落位到其他空间的实验室。</div>` : ""}
-          <label>实验室名称
-            <input name="labName" type="text" value="${escapeHtml(selectedLab?.lab_name || "")}" ${canEditBase && selectedLab ? "" : "disabled"} />
-          </label>
-          <label>类型
-            <select name="labType" ${canEditBase && selectedLab ? "" : "disabled"}>
-              ${selectOptionsWithBlank(activeLabTypeOptions().map((row) => row.type_name), selectedLab?.lab_type || "", "未选择类型")}
-            </select>
-          </label>
-          <label>学院
-            <select name="college" ${canEditBase && selectedLab ? "" : "disabled"}>
-              ${selectOptionsWithBlank(activeCollegeOptions().map((row) => row.college_name), selectedLab?.college || "", "未选择学院")}
-            </select>
-          </label>
-          <label>专业
-            <select name="major" ${canEditBase && selectedLab ? "" : "disabled"}>
-              ${majorOptionsForCollege(selectedLab?.college || "", selectedLab?.major || "")}
-            </select>
-          </label>
-          <label>负责人
-            <input name="director" type="text" value="${escapeHtml(selectedLab?.director || "")}" ${canEditBase && selectedLab ? "" : "disabled"} />
-          </label>
-          <label>座位数
-            <input name="seatCount" type="number" step="1" min="0" value="${escapeHtml(selectedLab?.seat_count ?? "")}" ${canEditBase && selectedLab ? "" : "disabled"} />
-          </label>
-          <label>电脑数
-            <input name="computerCount" type="number" step="1" min="0" value="${escapeHtml(selectedLab?.computer_count ?? "")}" ${canEditBase && selectedLab ? "" : "disabled"} />
-          </label>
-          <label>备注
-            <input name="moveNote" type="text" value="${escapeHtml(selected?.move_note || "")}" ${canEditAssignment && selectedSpace ? "" : "disabled"} />
-          </label>
-          ${!selectedLab ? `<div class="business-preview business-unplanned-card">
-            <strong>未规划</strong>
-            <span>当前空间没有已分配实验室，可在右侧详情栏点击“规划”。</span>
-          </div>` : ""}
-          ${conflict ? `<div class="business-conflict">当前空间已被 ${escapeHtml(labNameByCode(conflict.lab_code))} 占用。勾选后保存会将原分配改为无效。</div>
-          <label class="business-checkbox"><input name="replaceConflict" type="checkbox" ${canEditAssignment ? "" : "disabled"} /> 替换当前占用</label>` : ""}
+        ${floorSpaces.length ? floorSpaces.map((space) => businessSpaceCard(space, assignments, selectedSpace?.id || "")).join("") : `<div class="empty">当前楼层还没有空间资料。</div>`}
+      </div>
+      <form id="businessAssignmentForm" class="business-assignment-form">
+        <div class="business-editor-heading">
+          <strong>${selectedSpace ? `编辑 ${businessDoorRangeLabel(selectedSpace) || selectedSpace.space_code}` : "当前楼层业务编辑"}</strong>
+          <span>${escapeHtml(activePlan.plan_name)}</span>
         </div>
+        ${labSection}
+        ${spaceSection}
         <div class="business-preview">
           <strong>系统自动维护</strong>
           <span>${selectedSpace ? escapeHtml(`${spaceDisplayName(selectedSpace)} · ${selectedLab?.lab_name || "未分配实验室"}`) : "请先在当前楼层选择一个空间"}</span>
@@ -2180,6 +2395,8 @@ function renderBusinessAssignmentEditor() {
   });
   els.dataEditor.querySelector('select[name="labCode"]')?.addEventListener("change", renderBusinessLabPreview);
   els.dataEditor.querySelector('select[name="college"]')?.addEventListener("change", renderBusinessMajorOptions);
+  els.dataEditor.querySelector("#businessPlanSpaceBtn")?.addEventListener("click", () => { void planSelectedSpaceAction(); });
+  els.dataEditor.querySelector("#businessRenovateLabBtn")?.addEventListener("click", () => { void renovateSelectedLabAction(); });
   els.dataEditor.querySelector("#businessDeleteSpaceBtn")?.addEventListener("click", () => { void markSelectedBusinessSpaceUnavailable(); });
   els.dataEditor.querySelector("#businessDeleteLabBtn")?.addEventListener("click", () => { void deleteSelectedBusinessLab(); });
 }

@@ -1522,10 +1522,145 @@ button:disabled {
   color: var(--danger);
 }
 
+.business-inline-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(240, 253, 250, 0.88);
+  color: #0f766e;
+  padding: 10px;
+  font-size: 13px;
+}
+
+.business-inline-actions button {
+  background: #fff;
+}
+
 .business-hint {
   color: #667085;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.business-unplanned-card .primary-button {
+  width: fit-content;
+  margin-top: 6px;
+}
+
+.plan-diff-panel {
+  display: grid;
+  gap: 14px;
+  border: 1px solid rgba(214, 221, 232, 0.84);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.05);
+  padding: 16px;
+}
+
+.plan-diff-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.plan-diff-heading h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.plan-diff-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.plan-diff-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(92px, 1fr));
+  gap: 8px;
+}
+
+.plan-diff-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid rgba(214, 221, 232, 0.86);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px 10px;
+}
+
+.plan-diff-metric span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.plan-diff-metric strong {
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.plan-diff-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.plan-diff-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plan-diff-section h3 {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+}
+
+.plan-diff-table-wrap {
+  overflow: auto;
+  border: 1px solid rgba(214, 221, 232, 0.84);
+  border-radius: 8px;
+}
+
+.plan-diff-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.plan-diff-table th,
+.plan-diff-table td {
+  border-bottom: 1px solid rgba(214, 221, 232, 0.7);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.plan-diff-table th {
+  background: #f8fafc;
+  color: var(--ink-soft);
+  font-weight: 800;
+}
+
+.plan-diff-table td {
+  color: var(--ink);
+}
+
+.plan-diff-empty {
+  border: 1px dashed rgba(148, 163, 184, 0.52);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--muted);
+  padding: 12px;
+  font-size: 13px;
 }
 
 body,

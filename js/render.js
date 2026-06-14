@@ -218,11 +218,10 @@
       moveDraft,
       moveErrors,
       moveDirty,
+      moveTargetOptions = [],
       canEdit,
       onFocusRow,
       onOpenMove,
-      onPlanSpace,
-      onRenovateLab,
       onMoveFieldChange,
       onConfirmMove,
       onCancelMove,
@@ -237,19 +236,17 @@
     }
 
     if (mode === "move") {
-      renderMovePanel(detailsEl, context, moveDraft, moveErrors, moveDirty, onMoveFieldChange, onConfirmMove, onCancelMove);
+      renderMovePanel(detailsEl, context, moveDraft, moveErrors, moveDirty, moveTargetOptions, onMoveFieldChange, onConfirmMove, onCancelMove);
       return;
     }
 
-    renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove, onPlanSpace, onRenovateLab);
+    renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove);
   }
 
-  function renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove, onPlanSpace, onRenovateLab) {
+  function renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove) {
     const { building, space, lab, assignment } = context;
     const pageTitle = lab?.lab_name || "未规划";
     const canMove = Boolean(canEdit && assignment && lab);
-    const canPlan = Boolean(canEdit && !lab);
-    const canRenovate = Boolean(canEdit && assignment && lab);
     const spaceActionLabel = canEdit ? "编辑此空间" : "查看此空间";
     const labActionLabel = canEdit ? "编辑此实验室" : "查看此实验室";
     const detailRows = [detailLine("门牌", doorRangeLabel(space) || "未填写")];
@@ -302,8 +299,6 @@
         <button type="button" class="link-button action-link" data-focus-key="spaces" data-focus-id="${escapeHtml(space.id)}">${spaceActionLabel}</button>
         <button type="button" class="link-button action-link" data-focus-key="labs" data-focus-id="${escapeHtml(lab?.id || "")}" ${lab ? "" : "disabled"}>${labActionLabel}</button>
         <button type="button" class="link-button action-link" data-focus-key="plan_assignments" data-focus-id="${escapeHtml(assignment?.id || "")}">${assignment ? "查看当前分配" : "去分配表处理"}</button>
-        ${canPlan ? `<button type="button" class="primary-button" data-action="plan-space">规划</button>` : ""}
-        ${canRenovate ? `<button type="button" class="link-button" data-action="renovate-lab">改建</button>` : ""}
         ${canEdit ? `<button type="button" class="primary-button" data-action="move" ${canMove ? "" : "disabled"}>搬迁实验室</button>` : ""}
       </div>
     </div>`;
@@ -312,13 +307,15 @@
       node.addEventListener("click", () => onFocusRow(node.dataset.focusKey, node.dataset.focusId));
     });
     detailsEl.querySelector('[data-action="move"]')?.addEventListener("click", onOpenMove);
-    detailsEl.querySelector('[data-action="plan-space"]')?.addEventListener("click", onPlanSpace);
-    detailsEl.querySelector('[data-action="renovate-lab"]')?.addEventListener("click", onRenovateLab);
   }
 
-  function renderMovePanel(detailsEl, context, moveDraft, moveErrors, moveDirty, onMoveFieldChange, onConfirmMove, onCancelMove) {
+  function renderMovePanel(detailsEl, context, moveDraft, moveErrors, moveDirty, moveTargetOptions, onMoveFieldChange, onConfirmMove, onCancelMove) {
     const { activePlan, building, space, lab, assignment } = context;
     const errorText = moveErrors.targetSpaceCode || "";
+    const selectedTarget = moveDraft?.targetSpaceId || "";
+    const targetOptionsHtml = moveTargetOptions.length
+      ? `<option value="">请选择未规划空间</option>${moveTargetOptions.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === selectedTarget ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}`
+      : `<option value="">当前没有可搬迁的未规划空间</option>`;
     detailsEl.innerHTML = `<div class="details-panel is-move ${moveDirty ? "is-dirty" : ""}">
       <div class="details-header">
         <div>
@@ -332,7 +329,7 @@
         <div class="details-card-head">
           <div>
             <h3>当前落位</h3>
-            <p>确认实验室与原空间后，再填写目标空间编码。</p>
+            <p>确认实验室与原空间后，再选择目标未规划空间。</p>
           </div>
         </div>
         <div class="details-meta-grid">
@@ -346,23 +343,29 @@
         <div class="details-card-head">
           <div>
             <h3>目标空间</h3>
-            <p>输入目标空间编码。目标空间若已有 assigned 占用，将阻止本次搬迁。</p>
+            <p>仅显示全校范围内可用且未规划的空间。</p>
           </div>
         </div>
         <label class="detail-field ${errorText ? "has-error" : ""}">
-          <span>目标空间编码</span>
-          <input type="text" data-move-field="targetSpaceCode" value="${escapeHtml(moveDraft?.targetSpaceCode || "")}" placeholder="例如 201 或 A-101" />
+          <span>目标空间</span>
+          <select data-move-field="targetSpaceId" ${moveTargetOptions.length ? "" : "disabled"}>
+            ${targetOptionsHtml}
+          </select>
           <small>${escapeHtml(errorText)}</small>
         </label>
       </section>
 
       <div class="details-actions">
-        <button type="button" class="primary-button" data-action="confirm-move">确认搬迁</button>
+        <button type="button" class="primary-button" data-action="confirm-move" ${moveTargetOptions.length ? "" : "disabled"}>确认搬迁</button>
         <button type="button" data-action="cancel-move">取消</button>
       </div>
     </div>`;
 
-    detailsEl.querySelector('[data-move-field="targetSpaceCode"]')?.addEventListener("input", (event) => onMoveFieldChange("targetSpaceCode", event.target.value));
+    detailsEl.querySelector('[data-move-field="targetSpaceId"]')?.addEventListener("change", (event) => {
+      const option = moveTargetOptions.find((item) => item.value === event.target.value);
+      onMoveFieldChange("targetSpaceId", event.target.value);
+      onMoveFieldChange("targetSpaceCode", option?.code || "");
+    });
     detailsEl.querySelector('[data-action="confirm-move"]')?.addEventListener("click", onConfirmMove);
     detailsEl.querySelector('[data-action="cancel-move"]')?.addEventListener("click", onCancelMove);
   }
