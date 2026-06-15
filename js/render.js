@@ -247,8 +247,6 @@
     const { building, space, lab, assignment } = context;
     const pageTitle = lab?.lab_name || "未规划";
     const canMove = Boolean(canEdit && assignment && lab);
-    const spaceActionLabel = canEdit ? "编辑此空间" : "查看此空间";
-    const labActionLabel = canEdit ? "编辑此实验室" : "查看此实验室";
     const detailRows = [detailLine("门牌", doorRangeLabel(space) || "未填写")];
 
     if (lab) {
@@ -296,16 +294,9 @@
       </div>
 
       <div class="details-actions">
-        <button type="button" class="link-button action-link" data-focus-key="spaces" data-focus-id="${escapeHtml(space.id)}">${spaceActionLabel}</button>
-        <button type="button" class="link-button action-link" data-focus-key="labs" data-focus-id="${escapeHtml(lab?.id || "")}" ${lab ? "" : "disabled"}>${labActionLabel}</button>
-        <button type="button" class="link-button action-link" data-focus-key="plan_assignments" data-focus-id="${escapeHtml(assignment?.id || "")}">${assignment ? "查看当前分配" : "去分配表处理"}</button>
         ${canEdit ? `<button type="button" class="primary-button" data-action="move" ${canMove ? "" : "disabled"}>搬迁实验室</button>` : ""}
       </div>
     </div>`;
-
-    detailsEl.querySelectorAll("[data-focus-key]").forEach((node) => {
-      node.addEventListener("click", () => onFocusRow(node.dataset.focusKey, node.dataset.focusId));
-    });
     detailsEl.querySelector('[data-action="move"]')?.addEventListener("click", onOpenMove);
   }
 

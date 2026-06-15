@@ -58,7 +58,7 @@ function createPlanCopyService(db, datasetService) {
 
   function buildVisibleDataset(user) {
     const active = datasetService.getActiveDataset();
-    const dataset = clone(active.dataset);
+    const dataset = datasetService.normalizeIncomingDataset(active.dataset);
     const copies = listVisibleCopies(user);
     const latestBaselineCode = copies.find((copy) => copy.isBaseline)?.planCode || "";
     for (const copy of copies.slice().reverse()) mergeCopyDataset(dataset, copy, latestBaselineCode);
@@ -73,7 +73,8 @@ function createPlanCopyService(db, datasetService) {
 
   function mergeCopyDataset(dataset, copy, latestBaselineCode) {
     if (copy.dataset) {
-      const deletedSpaceIds = new Set(copy.dataset.deleted_space_ids || []);
+      const copyDataset = datasetService.normalizeIncomingDataset(copy.dataset);
+      const deletedSpaceIds = new Set(copyDataset.deleted_space_ids || []);
       if (deletedSpaceIds.size) {
         dataset.deleted_space_ids = [...new Set([...(dataset.deleted_space_ids || []), ...deletedSpaceIds])];
         dataset.spaces = (dataset.spaces || []).filter((space) => !deletedSpaceIds.has(space.id));
@@ -90,9 +91,12 @@ function createPlanCopyService(db, datasetService) {
         });
       }
       for (const key of ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "file_assets"]) {
-        dataset[key].push(...(copy.dataset[key] || []));
+        if (!Array.isArray(dataset[key])) dataset[key] = [];
+        dataset[key].push(...(copyDataset[key] || []));
       }
     }
+    if (!Array.isArray(dataset.plans)) dataset.plans = [];
+    if (!Array.isArray(dataset.plan_assignments)) dataset.plan_assignments = [];
     dataset.plans.push(asVisiblePlan(copy.plan, copy, latestBaselineCode));
     dataset.plan_assignments.push(...copy.assignments);
   }

@@ -6,7 +6,7 @@ const repairFieldMap = {
   buildings: ["building_name", "campus_zone", "notes"],
   floor_segments: ["notes"],
   spaces: ["network_segment", "notes"],
-  labs: ["lab_name", "college", "major", "lab_type", "director", "construction_time", "notes"],
+  labs: ["lab_name", "college", "major", "lab_type", "director", "notes"],
   colleges: ["college_name", "notes"],
   majors: ["major_name", "notes"],
   lab_types: ["type_name", "notes"],
@@ -223,7 +223,6 @@ function createDatasetService(db, config, audit) {
       id: row.id || row.lab_code || row.lab_id,
       lab_code: firstText(row, ["lab_code", "lab_id", "id"]),
       lab_name: String(row.lab_name || row.lab_code || row.lab_id || row.id || "").trim(),
-      construction_time: String(row.construction_time || row["建设时间"] || "").trim(),
     })));
     const dictionary = deriveDictionaries(labs, data);
     const plans = dedupeById(data.plans.map((row) => ({

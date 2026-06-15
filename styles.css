@@ -1422,19 +1422,39 @@ button:disabled {
   grid-column: span 6;
 }
 
-.business-form-section label:has(input[name="college"]),
-.business-form-section label:has(input[name="major"]),
-.business-form-section label:has(input[name="labType"]) {
+.business-form-section label:has(select[name="college"]),
+.business-form-section label:has(select[name="major"]),
+.business-form-section label:has(select[name="labType"]),
+.business-form-section label:has(input[name="director"]) {
   grid-column: span 4;
 }
 
 .business-form-section label:has(input[name="networkSegment"]) {
-  grid-column: span 9;
+  grid-column: span 3;
 }
 
-.business-form-section label:has(input[name="director"]),
+.business-form-section label:has(input[name="spaceNotes"]),
 .business-form-section label:has(input[name="moveNote"]) {
   grid-column: span 6;
+}
+
+.data-editor .row-actions {
+  min-width: 72px;
+  text-align: center;
+}
+
+.row-delete-button {
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff1f2;
+  color: #be123c;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 6px 10px;
+}
+
+.row-delete-button:hover {
+  background: #ffe4e6;
 }
 
 .business-assignment-form select,
@@ -1578,6 +1598,42 @@ button:disabled {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 13px;
+}
+
+.plan-diff-toggle,
+.plan-diff-section-toggle {
+  border: 1px solid rgba(42, 84, 148, 0.18);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.plan-diff-toggle {
+  padding: 8px 12px;
+  white-space: nowrap;
+}
+
+.plan-diff-section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.plan-diff-toggle:hover,
+.plan-diff-section-toggle:hover {
+  background: #eef4ff;
+  border-color: rgba(42, 84, 148, 0.32);
+}
+
+.plan-diff-section-toggle strong {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .plan-diff-metrics {
