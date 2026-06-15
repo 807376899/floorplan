@@ -122,11 +122,17 @@
             <h2>数据编辑</h2>
             <p>右侧适合高频查看当前选中对象；底部表格保留为批量修正和结构性调整入口。</p>
           </div>
-          <div id="editorTabs" class="editor-tabs"></div>
-          <div class="editor-actions">
-            <button id="addRowBtn" type="button">新增行</button>
-            <button id="applyTableBtn" type="button">应用修改</button>
-            <button id="downloadSheetBtn" type="button">导出当前表</button>
+          <div class="editor-toolbar">
+            <div class="editor-control-group editor-view-group" aria-label="切换编辑视图">
+              <div id="editorTabs" class="editor-tabs"></div>
+            </div>
+            <div class="editor-control-group editor-action-group" aria-label="当前视图操作">
+              <div class="editor-actions">
+                <button id="addRowBtn" type="button">新增行</button>
+                <button id="applyTableBtn" type="button">应用修改</button>
+                <button id="downloadSheetBtn" type="button">导出当前表</button>
+              </div>
+            </div>
           </div>
         </div>
         <div id="dataEditor" class="data-editor"></div>

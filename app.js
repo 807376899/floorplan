@@ -2345,11 +2345,6 @@ function renderBusinessAssignmentEditor() {
           <label>实验室名称
             <input name="labName" type="text" value="${escapeHtml(selectedLab.lab_name || "")}" ${canEditBase ? "" : "disabled"} />
           </label>
-          <label>类型
-            <select name="labType" ${canEditBase ? "" : "disabled"}>
-              ${selectOptionsWithBlank(activeLabTypeOptions().map((row) => row.type_name), selectedLab.lab_type || "", "未选择类型")}
-            </select>
-          </label>
           ${canViewCollegeMajor ? `<label>学院
             <select name="college" ${canEditBase ? "" : "disabled"}>
               ${selectOptionsWithBlank(activeCollegeOptions().map((row) => row.college_name), selectedLab.college || "", "未选择学院")}
@@ -2364,20 +2359,23 @@ function renderBusinessAssignmentEditor() {
           <label>负责人
             <input name="director" type="text" value="${escapeHtml(selectedLab.director || "")}" ${canEditBase ? "" : "disabled"} />
           </label>
-          <label>实验室状态
-            <select name="labStatus" ${canEditBase ? "" : "disabled"}>
-              ${["active", "planning", "inactive"].map((status) => `<option value="${status}" ${status === selectedLab.status ? "selected" : ""}>${labStatusLabel(status)}</option>`).join("")}
-            </select>
-          </label>
           <label>座位数
             <input name="seatCount" type="number" step="1" min="0" value="${escapeHtml(selectedLab.seat_count ?? "")}" ${canEditBase ? "" : "disabled"} />
           </label>
           <label>电脑数
             <input name="computerCount" type="number" step="1" min="0" value="${escapeHtml(selectedLab.computer_count ?? "")}" ${canEditBase ? "" : "disabled"} />
           </label>
-          <label>实验室备注
-            <input name="labNotes" type="text" value="${escapeHtml(selectedLab.notes || "")}" ${canEditBase ? "" : "disabled"} />
+           <label>类型
+            <select name="labType" ${canEditBase ? "" : "disabled"}>
+              ${selectOptionsWithBlank(activeLabTypeOptions().map((row) => row.type_name), selectedLab.lab_type || "", "未选择类型")}
+            </select>
           </label>
+          <label>实验室状态
+            <select name="labStatus" ${canEditBase ? "" : "disabled"}>
+              ${["active", "planning", "inactive"].map((status) => `<option value="${status}" ${status === selectedLab.status ? "selected" : ""}>${labStatusLabel(status)}</option>`).join("")}
+            </select>
+          </label>
+          
           <label>生效时间
             <input name="effectiveFrom" type="date" value="${escapeHtml(selected?.effective_from || "")}" ${canEditAssignment && selectedSpace ? "" : "disabled"} />
           </label>
@@ -2608,11 +2606,10 @@ function renderBusinessLabPreview() {
     ["labStatus", lab?.status || "active"],
     ["seatCount", lab?.seat_count ?? ""],
     ["computerCount", lab?.computer_count ?? ""],
-    ["labNotes", lab?.notes || ""],
   ].forEach(([name, value]) => {
     if (form[name]) {
       form[name].value = value;
-      if (["labName", "college", "major", "labType", "director", "labStatus", "seatCount", "computerCount", "labNotes"].includes(name)) {
+      if (["labName", "college", "major", "labType", "director", "labStatus", "seatCount", "computerCount"].includes(name)) {
         form[name].disabled = !canEditLab;
       }
     }
@@ -2990,7 +2987,6 @@ async function applyBusinessAssignmentForm() {
         status: String(formData.get("labStatus") || lab.status || "active").trim(),
         seat_count: formData.get("seatCount") || lab.seat_count,
         computer_count: formData.get("computerCount") || lab.computer_count,
-        notes: String(formData.get("labNotes") || "").trim(),
       }));
     }
   }

@@ -1091,6 +1091,7 @@ button:disabled {
 .panel-heading {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 14px;
   min-height: 68px;
   border-bottom: 1px solid var(--line);
@@ -1115,6 +1116,25 @@ button:disabled {
   line-height: 1.45;
 }
 
+.editor-toolbar {
+  display: flex;
+  gap: 10px;
+  margin-left: auto;
+  /*min-width: min(780px, 100%);*/
+}
+
+/*.editor-control-group {
+  display: grid;
+  gap: 6px;
+}*/
+
+.editor-control-group > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
 .editor-tabs,
 .editor-actions {
   display: flex;
@@ -1123,14 +1143,54 @@ button:disabled {
 }
 
 .editor-tabs {
-  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 4px;
+}
+
+.editor-tabs button {
+  border-color: transparent;
+  background: transparent;
+  color: #475467;
+  min-height: 32px;
 }
 
 .editor-tabs button.is-active {
   border-color: var(--accent);
-  background: var(--accent-soft);
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
   color: var(--accent);
   font-weight: 700;
+}
+
+.editor-action-group {
+  /*border: 1px solid rgba(15, 118, 110, 0.18);*/
+  border-radius: 12px;
+  /*background: #f0fdfa;*/
+  padding: 8px;
+}
+
+.editor-action-group > span {
+  color: #0f766e;
+}
+
+.editor-actions button {
+  background: #fff;
+  border-color: rgba(15, 118, 110, 0.28);
+  color: #0f766e;
+  font-weight: 800;
+}
+
+.editor-actions #applyTableBtn {
+  background: var(--accent);
+  border-color: var(--line);
+  color: ##475467;
+}
+
+.editor-actions #downloadSheetBtn {
+  border-color: var(--line);
+  color: #475467;
 }
 
 .data-editor {
@@ -1424,7 +1484,6 @@ button:disabled {
 
 .business-form-section label:has(select[name="college"]),
 .business-form-section label:has(select[name="major"]),
-.business-form-section label:has(select[name="labType"]),
 .business-form-section label:has(input[name="director"]) {
   grid-column: span 4;
 }
@@ -2485,8 +2544,9 @@ button,
     justify-content: flex-start;
   }
 
-  .editor-tabs {
+  .editor-toolbar {
     margin-left: 0;
+    min-width: 100%;
   }
 
   .plan-filter-group {
