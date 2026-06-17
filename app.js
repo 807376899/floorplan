@@ -14,9 +14,18 @@ const {
   normalizeCollege,
   normalizeMajor,
   normalizeLabType,
+  canonicalizeLabTypes,
   normalizePlan,
   normalizeAssignment,
   relationMaps,
+  generateBuildingCode,
+  generateSpaceCode,
+  generateSegmentCode,
+  generateUnitCode,
+  generatePlanCode,
+  generateUseTypeCode,
+  normalizeElementType,
+  isAssignableSegment,
   templateInstructions,
   templateRows,
   sampleDataset,
@@ -55,6 +64,7 @@ const state = {
     selectedAssignmentId: "",
     selectedSpaceId: "",
     newSpaceId: "",
+    spaceCorrectionId: "",
   },
   activePlanId: null,
   planViewMode: "single",
@@ -71,7 +81,7 @@ const state = {
     users: [],
     loading: false,
   },
-  dictionaryManagement: {
+  planSpace: {
     planningSpaceId: "",
   },
   importDrafts: {
@@ -122,7 +132,7 @@ function bindEvents() {
   els.discardImportDraftBtn.addEventListener("click", () => void discardSelectedImportDraft());
   els.manageSnapshotsBtn.addEventListener("click", () => void manageSnapshots());
   els.manageUsersBtn.addEventListener("click", () => void manageUsers());
-  els.manageDictionariesBtn.addEventListener("click", openDictionaryManagementModal);
+  els.normalizeNumberingBtn.addEventListener("click", () => void normalizeNumberingAction());
   els.repairTextBtn.addEventListener("click", () => void repairCorruptedText());
   els.loginBtn.addEventListener("click", openLoginModal);
   els.logoutBtn.addEventListener("click", () => void logoutFlow());
@@ -176,11 +186,6 @@ function bindEvents() {
   });
   els.closeUserManagementBtn.addEventListener("click", closeUserManagementModal);
   els.refreshUsersBtn.addEventListener("click", () => void loadManagedUsers());
-  els.closeDictionaryManagementBtn.addEventListener("click", closeDictionaryManagementModal);
-  els.dictionarySaveBtn.addEventListener("click", () => void saveDictionariesAction());
-  els.addCollegeBtn.addEventListener("click", addDictionaryCollegeRow);
-  els.addMajorBtn.addEventListener("click", addDictionaryMajorRow);
-  els.addLabTypeBtn.addEventListener("click", addDictionaryLabTypeRow);
   els.cancelPlanSpaceBtn.addEventListener("click", closePlanSpaceModal);
   els.planSpaceForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -252,7 +257,7 @@ function applyAuthUi() {
   els.manageImportsBtn.hidden = !state.permissions.canAdmin;
   els.manageSnapshotsBtn.hidden = !state.permissions.canAdmin;
   els.manageUsersBtn.hidden = !state.permissions.canAdmin;
-  els.manageDictionariesBtn.hidden = !state.permissions.canAdmin;
+  els.normalizeNumberingBtn.hidden = !state.permissions.canAdmin;
   els.repairTextBtn.hidden = !(state.permissions.canAdmin && state.maintenance.textRepairAvailable);
   els.loadSampleBtn.hidden = state.serverMode;
   els.addRowBtn.hidden = !state.permissions.canEdit;
@@ -351,7 +356,7 @@ async function saveDatasetToServer(changeNote) {
   const payload = await fetchJson("/api/dataset/active", {
     method: "PUT",
     body: JSON.stringify({
-      dataset: state.data,
+      dataset: datasetForActiveSave(state.data),
       expectedRevision: state.serverRevision,
       changeNote,
     }),
@@ -412,6 +417,28 @@ async function repairCorruptedText() {
     refreshStateAndRender("已修复当前正式数据中的中文文本。", { stamp: false, forceMoveReset: true });
   } catch (error) {
     updateStatus(`修复中文文本失败：${error.message}`);
+  }
+}
+
+async function normalizeNumberingAction() {
+  if (!state.permissions.canAdmin) {
+    updateStatus("只有管理员可以规范编号。");
+    return;
+  }
+  if (!window.confirm("确认规范全量编号？系统会先创建快照，然后同步修复教学楼、骨架、空间、方案和用途类型编码。")) return;
+  try {
+    const payload = await fetchJson("/api/dataset/normalize-numbering", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    state.serverRevision = payload.revision;
+    state.planCopies = payload.planCopies || [];
+    state.data = normalizeDataset(payload.dataset);
+    state.maintenance = payload.maintenance || state.maintenance;
+    resetContextState();
+    refreshStateAndRender("已完成全量编号规范化，系统已创建迁移前快照。", { stamp: false, forceMoveReset: true });
+  } catch (error) {
+    updateStatus(`规范编号失败：${error.message}`);
   }
 }
 
@@ -513,7 +540,7 @@ async function loadImportDrafts() {
     const payload = await fetchJson("/api/manage/plans");
     state.importDrafts.drafts = payload.plans || [];
     els.importDraftsErrorText.textContent = "";
-    const selectedStillExists = state.importDrafts.drafts.some((plan) => plan.id === state.importDrafts.selectedId);
+    const selectedStillExists = state.importDrafts.drafts.some((plan) => String(plan.id) === String(state.importDrafts.selectedId));
     if (!selectedStillExists) {
       state.importDrafts.selectedId = null;
       state.importDrafts.detail = null;
@@ -540,7 +567,8 @@ async function selectImportDraft(planId) {
   state.importDrafts.loadingDetail = true;
   renderImportDrafts();
   try {
-    const payload = await fetchJson(`/api/manage/plans/${planId}`);
+    const draft = state.importDrafts.drafts.find((plan) => String(plan.id) === String(planId));
+    const payload = await fetchJson(managedPlanEndpoint(draft || { id: planId }));
     state.importDrafts.detail = {
       ...payload.plan,
       dataset: normalizeDataset(payload.dataset),
@@ -583,7 +611,7 @@ function renderImportDraftList() {
     return;
   }
   els.importDraftList.innerHTML = state.importDrafts.drafts.map((plan) => {
-    const selectedClass = plan.id === state.importDrafts.selectedId ? " is-active" : "";
+    const selectedClass = String(plan.id) === String(state.importDrafts.selectedId) ? " is-active" : "";
     return `
       <button type="button" class="import-draft-item${selectedClass}" data-import-draft-id="${plan.id}">
         <span class="import-draft-item-head">
@@ -596,7 +624,7 @@ function renderImportDraftList() {
     `;
   }).join("");
   els.importDraftList.querySelectorAll("[data-import-draft-id]").forEach((button) => {
-    button.addEventListener("click", () => void selectImportDraft(Number(button.dataset.importDraftId)));
+    button.addEventListener("click", () => void selectImportDraft(button.dataset.importDraftId));
   });
 }
 
@@ -604,7 +632,7 @@ function renderImportDraftDetail() {
   const detail = state.importDrafts.detail;
   const canAct = Boolean(detail && !state.importDrafts.loadingDetail);
   els.publishImportDraftBtn.disabled = !canAct || detail?.isBaseline;
-  els.discardImportDraftBtn.disabled = !canAct;
+  els.discardImportDraftBtn.disabled = !canAct || detail?.canDelete === false;
   els.publishImportDraftBtn.textContent = detail?.isBaseline ? "已是基线" : "设为基线";
   if (state.importDrafts.loadingDetail) {
     els.importDraftDetail.innerHTML = `<div class="import-draft-detail-empty">正在打开方案详情...</div>`;
@@ -628,7 +656,7 @@ function renderImportDraftDetail() {
       ${managedSummaryCard("教学楼", dataset.buildings.length)}
       ${managedSummaryCard("楼层骨架", dataset.floor_segments.length)}
       ${managedSummaryCard("空间", dataset.spaces.length)}
-      ${managedSummaryCard("实验室", dataset.labs.length)}
+      ${managedSummaryCard("用途单元", dataset.labs.length)}
       ${managedSummaryCard("分配", dataset.plan_assignments.length)}
       ${managedSummaryCard("修订", detail.revision || 1)}
     </div>
@@ -747,10 +775,19 @@ function renderImportPreviewCanvas() {
 }
 
 function managedPlanSourceLabel(plan) {
+  if (plan.kind === "active") return "正式数据方案";
   if (plan.sourceType === "import") return "admin 上传数据包";
   if (plan.ownerRole === "admin") return "admin 创建方案";
   if (plan.isPublic) return "editor 公开方案";
   return "方案副本";
+}
+
+function managedPlanEndpoint(plan, suffix = "") {
+  if (plan?.kind === "active" || String(plan?.id || "").startsWith("active:")) {
+    const code = plan.planCode || String(plan.id || "").replace(/^active:/, "");
+    return `/api/manage/active-plans/${encodeURIComponent(code)}${suffix}`;
+  }
+  return `/api/manage/plans/${encodeURIComponent(plan.id)}${suffix}`;
 }
 
 async function renameSelectedManagedPlan() {
@@ -759,7 +796,7 @@ async function renameSelectedManagedPlan() {
   const planName = input?.value.trim();
   if (!detail || !planName) return;
   try {
-    const payload = await fetchJson(`/api/manage/plans/${detail.id}`, {
+    const payload = await fetchJson(managedPlanEndpoint(detail), {
       method: "PATCH",
       body: JSON.stringify({ planName }),
     });
@@ -781,7 +818,7 @@ async function publishSelectedImportDraft() {
   if (!window.confirm(`确认将方案“${detail.planName}”设为基线？设为基线后，除管理员外其他用户不可修改。`)) return;
   els.publishImportDraftBtn.disabled = true;
   try {
-    const payload = await fetchJson(`/api/manage/plans/${detail.id}/baseline`, { method: "POST", body: JSON.stringify({}) });
+    const payload = await fetchJson(managedPlanEndpoint(detail, "/baseline"), { method: "POST", body: JSON.stringify({}) });
     state.serverRevision = payload.revision;
     state.planCopies = payload.planCopies || [];
     state.data = normalizeDataset(payload.dataset);
@@ -800,7 +837,7 @@ async function discardSelectedImportDraft() {
   if (!window.confirm(`${risk}确认删除方案“${detail.planName}”？删除后该方案及其分配将不再显示。`)) return;
   els.discardImportDraftBtn.disabled = true;
   try {
-    const payload = await fetchJson(`/api/manage/plans/${detail.id}`, { method: "DELETE" });
+    const payload = await fetchJson(managedPlanEndpoint(detail), { method: "DELETE" });
     state.serverRevision = payload.revision;
     state.planCopies = payload.planCopies || [];
     state.data = normalizeDataset(payload.dataset);
@@ -838,124 +875,6 @@ async function manageSnapshots() {
   } catch (error) {
     updateStatus(`快照恢复失败：${error.message}`);
   }
-}
-
-function openDictionaryManagementModal() {
-  if (!state.permissions.canAdmin) {
-    updateStatus("只有管理员可以维护基础信息。");
-    return;
-  }
-  els.dictionaryManagementErrorText.textContent = "";
-  renderDictionaryManagement();
-  els.dictionaryManagementModal.classList.remove("is-hidden");
-  els.dictionaryManagementModal.setAttribute("aria-hidden", "false");
-}
-
-function closeDictionaryManagementModal() {
-  els.dictionaryManagementModal.classList.add("is-hidden");
-  els.dictionaryManagementModal.setAttribute("aria-hidden", "true");
-  els.dictionaryManagementErrorText.textContent = "";
-}
-
-function renderDictionaryManagement() {
-  const collegeOptions = activeCollegeOptions();
-  els.collegeDictionaryRows.innerHTML = dictionaryRowsHtml("college", state.data.colleges || [], [
-    ["college_code", "编码"],
-    ["college_name", "学院名称"],
-    ["sort_order", "排序", "number"],
-    ["status", "状态", "status"],
-    ["notes", "备注"],
-  ]);
-  els.majorDictionaryRows.innerHTML = (state.data.majors || []).map((row, index) => `
-    <div class="dictionary-row" data-dictionary-kind="major" data-index="${index}">
-      <label>编码<input data-field="major_code" value="${escapeHtml(row.major_code || "")}" /></label>
-      <label>专业名称<input data-field="major_name" value="${escapeHtml(row.major_name || "")}" /></label>
-      <label>所属学院<select data-field="college_code">
-        ${collegeOptions.map((college) => `<option value="${escapeHtml(college.college_code)}" ${college.college_code === row.college_code ? "selected" : ""}>${escapeHtml(college.college_name)}</option>`).join("")}
-      </select></label>
-      <label>排序<input data-field="sort_order" type="number" value="${escapeHtml(row.sort_order ?? 0)}" /></label>
-      <label>状态${statusSelectHtml(row.status)}</label>
-      <label>备注<input data-field="notes" value="${escapeHtml(row.notes || "")}" /></label>
-    </div>
-  `).join("") || `<div class="empty">暂无专业。</div>`;
-  els.labTypeDictionaryRows.innerHTML = dictionaryRowsHtml("lab_type", state.data.lab_types || [], [
-    ["type_code", "编码"],
-    ["type_name", "类型名称"],
-    ["sort_order", "排序", "number"],
-    ["status", "状态", "status"],
-    ["notes", "备注"],
-  ]);
-}
-
-function dictionaryRowsHtml(kind, rows, fields) {
-  if (!rows.length) return `<div class="empty">暂无数据。</div>`;
-  return rows.map((row, index) => `
-    <div class="dictionary-row" data-dictionary-kind="${kind}" data-index="${index}">
-      ${fields.map(([field, label, type]) => {
-        if (type === "status") return `<label>${label}${statusSelectHtml(row[field])}</label>`;
-        return `<label>${label}<input data-field="${field}" type="${type || "text"}" value="${escapeHtml(row[field] ?? "")}" /></label>`;
-      }).join("")}
-    </div>
-  `).join("");
-}
-
-function statusSelectHtml(value) {
-  return `<select data-field="status">
-    <option value="active" ${value !== "inactive" ? "selected" : ""}>启用</option>
-    <option value="inactive" ${value === "inactive" ? "selected" : ""}>停用</option>
-  </select>`;
-}
-
-function addDictionaryCollegeRow() {
-  state.data.colleges.push(normalizeCollege({ college_code: `学院-${Date.now()}`, college_name: "新增学院", sort_order: (state.data.colleges || []).length + 1, status: "active" }));
-  renderDictionaryManagement();
-}
-
-function addDictionaryMajorRow() {
-  const college = activeCollegeOptions()[0] || state.data.colleges[0] || normalizeCollege({ college_code: "未设置学院", college_name: "未设置学院" });
-  if (!state.data.colleges.length) state.data.colleges.push(college);
-  state.data.majors.push(normalizeMajor({ major_code: `${college.college_code}-专业-${Date.now()}`, major_name: "新增专业", college_code: college.college_code, sort_order: (state.data.majors || []).length + 1, status: "active" }));
-  renderDictionaryManagement();
-}
-
-function addDictionaryLabTypeRow() {
-  state.data.lab_types.push(normalizeLabType({ type_code: `类型-${Date.now()}`, type_name: "新增类型", sort_order: (state.data.lab_types || []).length + 1, status: "active" }));
-  renderDictionaryManagement();
-}
-
-async function saveDictionariesAction() {
-  if (!state.permissions.canAdmin) {
-    updateStatus("只有管理员可以维护基础信息。");
-    return;
-  }
-  const previousData = cloneDataset(state.data);
-  const previousRevision = state.serverRevision;
-  const next = cloneDataset(state.data);
-  next.colleges = collectDictionaryRows("college").map(normalizeCollege);
-  next.majors = collectDictionaryRows("major").map(normalizeMajor);
-  next.lab_types = collectDictionaryRows("lab_type").map(normalizeLabType);
-  const collegeCodes = new Set(next.colleges.map((row) => row.college_code));
-  const invalidMajor = next.majors.find((row) => row.college_code && !collegeCodes.has(row.college_code));
-  if (invalidMajor) {
-    els.dictionaryManagementErrorText.textContent = `专业“${invalidMajor.major_name}”选择了不存在的学院。`;
-    return;
-  }
-  state.data = normalizeDataset(next);
-  const saveOk = await saveWithRollback(previousData, previousRevision, "维护基础信息", "基础信息保存失败");
-  if (saveOk) {
-    renderDictionaryManagement();
-    refreshStateAndRender("已保存基础信息。", { stamp: false, forceMoveReset: true });
-  }
-}
-
-function collectDictionaryRows(kind) {
-  return [...els.dictionaryManagementModal.querySelectorAll(`[data-dictionary-kind="${kind}"]`)].map((row) => {
-    const next = {};
-    row.querySelectorAll("[data-field]").forEach((input) => {
-      next[input.dataset.field] = input.value;
-    });
-    return next;
-  });
 }
 
 async function manageUsers() {
@@ -1154,8 +1073,24 @@ function persistDataset() {
 }
 
 function copyIdFromPlan(plan) {
+  const explicit = Number(plan?.copy_id || plan?.copyId || 0);
+  if (explicit) return explicit;
   const match = String(plan?.plan_code || "").match(/^copy-(\d+)$/);
   return match ? Number(match[1]) : null;
+}
+
+function datasetForActiveSave(dataset) {
+  const copyCodes = new Set(state.planCopies.map((copy) => String(copy.planCode || "")));
+  const copyIds = new Set(state.planCopies.map((copy) => String(copy.id || "")));
+  const next = cloneDataset(dataset);
+  next.plans = (next.plans || []).filter((plan) => {
+    const copyId = String(plan.copy_id || plan.copyId || "").trim();
+    const code = String(plan.plan_code || "").trim();
+    return !copyId && !copyIds.has(copyId) && !copyCodes.has(code) && !code.startsWith("copy-");
+  });
+  const activePlanCodes = new Set(next.plans.map((plan) => plan.plan_code));
+  next.plan_assignments = (next.plan_assignments || []).filter((assignment) => activePlanCodes.has(assignment.plan_code));
+  return next;
 }
 
 function copyMetaForPlan(plan) {
@@ -1954,7 +1889,7 @@ async function planSelectedSpaceAction() {
     updateStatus("请先由管理员维护学院信息。");
     return;
   }
-  state.dictionaryManagement.planningSpaceId = context.space.id;
+  state.planSpace.planningSpaceId = context.space.id;
   fillInlineSelect(els.planSpaceCollegeSelect, colleges.map((row) => ({ value: row.college_name, label: row.college_name })), colleges[0]?.college_name || "");
   els.planSpaceErrorText.textContent = "";
   els.planSpaceModal.classList.remove("is-hidden");
@@ -1963,14 +1898,14 @@ async function planSelectedSpaceAction() {
 }
 
 function closePlanSpaceModal() {
-  state.dictionaryManagement.planningSpaceId = "";
+  state.planSpace.planningSpaceId = "";
   els.planSpaceModal.classList.add("is-hidden");
   els.planSpaceModal.setAttribute("aria-hidden", "true");
   els.planSpaceErrorText.textContent = "";
 }
 
 async function confirmPlanSpaceAction() {
-  const space = state.data.spaces.find((row) => row.id === state.dictionaryManagement.planningSpaceId) || null;
+  const space = state.data.spaces.find((row) => row.id === state.planSpace.planningSpaceId) || null;
   const college = String(els.planSpaceCollegeSelect.value || "").trim();
   if (!space) {
     els.planSpaceErrorText.textContent = "请选择需要规划的空间。";
@@ -2266,22 +2201,133 @@ function renderEditor() {
     const emptyText = state.editorKey === "plan_assignments"
       ? "当前方案下暂无分配记录，可点击“新增行”开始录入。"
       : "当前筛选下暂无数据，可点击“新增行”开始录入。";
-    els.dataEditor.innerHTML = `<div class="empty">${emptyText}</div>`;
+    els.dataEditor.innerHTML = `${numberingToolbarHtml()}${rawEditorHelperHtml()}${rawEditorNoticeHtml()}<div class="empty">${emptyText}</div>`;
+    bindRawEditorTools();
     return;
   }
 
   const inputDisabled = canEditEditorKey(state.editorKey) ? "" : "disabled";
   const canDeleteRows = canDeleteEditorRows(state.editorKey);
   const actionHeader = canDeleteRows ? `<th>操作</th>` : "";
-  els.dataEditor.innerHTML = `<table><thead><tr>${definition.columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}${actionHeader}</tr></thead><tbody>${rows.map((row, rowIndex) => `<tr data-row-id="${escapeHtml(row.id || "")}" class="${highlightRowId && row.id === highlightRowId ? "is-highlight" : ""}">${definition.columns.map(([key]) => `<td data-key="${key}"><input data-row="${rowIndex}" data-key="${key}" value="${escapeHtml(row[key] ?? "")}" ${inputDisabled}></td>`).join("")}${canDeleteRows ? `<td class="row-actions"><button type="button" class="row-delete-button" data-delete-row="${rowIndex}">删除</button></td>` : ""}</tr>`).join("")}</tbody></table>`;
+  els.dataEditor.innerHTML = `${numberingToolbarHtml()}${rawEditorNoticeHtml()}<table><thead><tr>${definition.columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}${actionHeader}</tr></thead><tbody>${rows.map((row, rowIndex) => `<tr data-row-id="${escapeHtml(row.id || "")}" class="${highlightRowId && row.id === highlightRowId ? "is-highlight" : ""}">${definition.columns.map(([key]) => `<td data-key="${key}"><input data-row="${rowIndex}" data-key="${key}" value="${escapeHtml(row[key] ?? "")}" ${inputDisabled}></td>`).join("")}${canDeleteRows ? `<td class="row-actions"><button type="button" class="row-delete-button" data-delete-row="${rowIndex}">删除</button></td>` : ""}</tr>`).join("")}</tbody></table>`;
+  bindRawEditorTools();
   els.dataEditor.querySelectorAll("[data-delete-row]").forEach((button) => {
-    button.addEventListener("click", () => { void deleteEditorRow(Number(button.dataset.deleteRow)); });
+    button.addEventListener("click", () => { void deleteEditorRow(Number(button.dataset.deleteRow), button); });
   });
 
   if (highlightRowId) {
     const highlightedRow = [...els.dataEditor.querySelectorAll("tr")].find((row) => row.dataset.rowId === highlightRowId);
     highlightedRow?.scrollIntoView({ block: "nearest" });
   }
+}
+
+function numberingToolbarHtml() {
+  if (!state.permissions.canAdmin || !canEditEditorKey(state.editorKey)) return "";
+  if (!["buildings", "floor_segments", "labs", "lab_types", "plans"].includes(state.editorKey)) return "";
+  if (state.editorKey === "floor_segments") {
+    return `<div class="raw-editor-tools raw-editor-tools-stack">
+      <div><button type="button" data-regenerate-editor-codes>补全/刷新编号</button><button type="button" data-add-segment-type="stairs">新增楼梯</button><button type="button" data-add-segment-type="elevator">新增电梯</button></div>
+      <span>走廊可绑定空间；楼梯和电梯只作为图面结构标识，不能作为空间落位骨架。新增后可调整起止坐标、宽度和备注。</span>
+    </div>`;
+  }
+  return `<div class="raw-editor-tools"><button type="button" data-regenerate-editor-codes>补全/刷新编号</button><span>编号只写入当前表单，点击“应用修改”后保存。</span></div>`;
+}
+
+function bindRawEditorTools() {
+  els.dataEditor.querySelector("[data-regenerate-editor-codes]")?.addEventListener("click", regenerateEditorCodes);
+  els.dataEditor.querySelectorAll("[data-add-segment-type]").forEach((button) => {
+    button.addEventListener("click", () => addFloorSegmentRow(button.dataset.addSegmentType || "corridor"));
+  });
+}
+
+function rawEditorHelperHtml() {
+  return "";
+}
+
+function rawEditorNoticeHtml() {
+  return `<div class="raw-editor-notice" data-raw-editor-notice aria-live="polite" hidden></div>`;
+}
+
+function setRawEditorNotice(message, type = "error") {
+  const notice = els.dataEditor.querySelector("[data-raw-editor-notice]");
+  if (!notice) return;
+  notice.textContent = message || "";
+  notice.hidden = !message;
+  notice.classList.toggle("is-error", type === "error");
+  notice.classList.toggle("is-info", type !== "error");
+}
+
+function regenerateEditorCodes() {
+  if (state.serverMode && state.permissions.canAdmin) {
+    void normalizeNumberingAction();
+    return;
+  }
+  const rows = collectEditorInputRows();
+  if (!rows.length) {
+    setRawEditorNotice("当前没有可刷新编号的行。", "info");
+    return;
+  }
+  if (state.editorKey === "buildings") {
+    rows.forEach((row, index) => {
+      setEditorInputValue(index, "building_code", generateBuildingCode(row));
+    });
+    setRawEditorNotice("已按校区和楼号刷新教学楼编号，请确认后应用修改。", "info");
+    return;
+  }
+  if (state.editorKey === "floor_segments") {
+    const generated = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      const building = buildingByCode(row.building_code);
+      const nextCode = generateSegmentCode(row, building || { building_code: row.building_code }, [
+        ...state.data.floor_segments.filter((segment) => !rows.some((item) => item.__original && segmentKey(item.__original) === segmentKey(segment))),
+        ...generated,
+      ]);
+      if (!nextCode) {
+        setRawEditorNotice("当前分组骨架编号超过 99 条，无法继续生成。");
+        return;
+      }
+      const nextRow = { ...row, segment_code: nextCode };
+      generated.push(nextRow);
+      setEditorInputValue(index, "segment_code", nextCode);
+    }
+    setRawEditorNotice("已刷新当前楼层骨架编号，请确认后应用修改。", "info");
+    return;
+  }
+  if (state.editorKey === "labs") {
+    const prefixRows = state.data.labs.filter((lab) => !rows.some((row) => row.__original?.id === lab.id));
+    rows.forEach((row, index) => {
+      const nextCode = generateUnitCode([...prefixRows, ...rows.slice(0, index)]);
+      row.lab_code = nextCode;
+      setEditorInputValue(index, "lab_code", nextCode);
+    });
+    setRawEditorNotice("已刷新用途单元编号，请确认后应用修改。", "info");
+    return;
+  }
+  if (state.editorKey === "lab_types") {
+    const prefixRows = state.data.lab_types.filter((type) => !rows.some((row) => row.__original?.id === type.id));
+    rows.forEach((row, index) => {
+      const nextCode = generateUseTypeCode([...prefixRows, ...rows.slice(0, index)]);
+      row.type_code = nextCode;
+      setEditorInputValue(index, "type_code", nextCode);
+    });
+    setRawEditorNotice("已刷新用途类型编码，请确认后应用修改。", "info");
+    return;
+  }
+  if (state.editorKey === "plans") {
+    const prefixRows = state.data.plans.filter((plan) => !rows.some((row) => row.__original?.id === plan.id));
+    rows.forEach((row, index) => {
+      const nextCode = generatePlanCode([...prefixRows, ...rows.slice(0, index)]);
+      row.plan_code = nextCode;
+      setEditorInputValue(index, "plan_code", nextCode);
+    });
+    setRawEditorNotice("已刷新方案编码，请确认后应用修改。", "info");
+  }
+}
+
+function setEditorInputValue(rowIndex, key, value) {
+  const input = els.dataEditor.querySelector(`input[data-row="${rowIndex}"][data-key="${key}"]`);
+  if (input) input.value = value;
 }
 
 function syncEditorActionButtons() {
@@ -2323,26 +2369,33 @@ function renderBusinessAssignmentEditor() {
   const isNewSpace = Boolean(selectedSpace && state.businessEditor.newSpaceId === selectedSpace.id);
   const building = buildingByCode(els.buildingSelect.value);
   const segments = currentFloorSegments();
+  const assignableSegments = currentAssignableSegments();
+  const segmentOptions = selectedSpace && !assignableSegments.some((row) => row.segment_code === selectedSpace.segment_code)
+    ? [...assignableSegments, segments.find((row) => row.segment_code === selectedSpace.segment_code)].filter(Boolean)
+    : assignableSegments;
   const segment = selectedSpace
     ? segments.find((row) => row.segment_code === selectedSpace.segment_code) || segments[0] || null
     : segments[0] || null;
   const canEditAssignment = canEditActivePlan();
   const canEditBase = canEditBusinessBaseData();
   const canViewCollegeMajor = state.permissions.canAdmin;
+  const isCorrectingSpaceCode = Boolean(selectedSpace && state.businessEditor.spaceCorrectionId === selectedSpace.id);
+  const canCorrectSpaceCode = Boolean(canEditBase && state.permissions.canAdmin && selectedSpace && !isNewSpace);
+  const previewSpaceCode = selectedSpace ? generateSpaceCode(selectedSpace, building || buildingByCode(selectedSpace.building_code)) : "";
   const conflict = selectedSpace && selectedLabCode
     ? assignments.find((row) => row.space_id === selectedSpace.id && row.assignment_status === "assigned" && row.lab_code !== selectedLabCode)
     : null;
   const canSaveAnything = canEditAssignment || canEditBase;
   const labSection = selectedLab ? `
         <div class="business-form-section business-form-section-lab">
-          <strong>实验室信息</strong>
-          <label>落位实验室
+          <strong>用途信息</strong>
+          <label>落位用途
             <select name="labCode" ${canEditAssignment && selectedSpace ? "" : "disabled"}>
-              <option value="" ${!selectedLabCode ? "selected" : ""}>未分配实验室</option>
+              <option value="" ${!selectedLabCode ? "selected" : ""}>未分配用途</option>
               ${businessLabOptions(selectedLabCode, selectedSpace?.id || "")}
             </select>
           </label>
-          <label>实验室名称
+          <label>用途名称
             <input name="labName" type="text" value="${escapeHtml(selectedLab.lab_name || "")}" ${canEditBase ? "" : "disabled"} />
           </label>
           ${canViewCollegeMajor ? `<label>学院
@@ -2370,7 +2423,7 @@ function renderBusinessAssignmentEditor() {
               ${selectOptionsWithBlank(activeLabTypeOptions().map((row) => row.type_name), selectedLab.lab_type || "", "未选择类型")}
             </select>
           </label>
-          <label>实验室状态
+          <label>用途状态
             <select name="labStatus" ${canEditBase ? "" : "disabled"}>
               ${["active", "planning", "inactive"].map((status) => `<option value="${status}" ${status === selectedLab.status ? "selected" : ""}>${labStatusLabel(status)}</option>`).join("")}
             </select>
@@ -2384,17 +2437,17 @@ function renderBusinessAssignmentEditor() {
           </label>
           ${conflict ? `<div class="business-conflict">当前空间已被 ${escapeHtml(labNameByCode(conflict.lab_code))} 占用。勾选后保存会将原分配改为无效。</div>
           <label class="business-checkbox"><input name="replaceConflict" type="checkbox" ${canEditAssignment ? "" : "disabled"} /> 替换当前占用</label>` : ""}
-          ${canEditAssignment ? `<div class="business-inline-actions"><button id="businessRenovateLabBtn" type="button">改建</button><span>解绑当前实验室，并为该空间生成同学院的未规划实验室。</span></div>` : ""}
+          ${canEditAssignment ? `<div class="business-inline-actions"><button id="businessRenovateLabBtn" type="button">改建</button><span>解绑当前用途单元，并为该空间生成同学院的未规划用途。</span></div>` : ""}
         </div>` : `
         <div class="business-form-section business-form-section-lab">
-          <strong>实验室信息</strong>
+          <strong>用途信息</strong>
           <div class="business-preview business-unplanned-card">
             <strong>未规划</strong>
             <span>当前空间未规划建设。</span>
             ${canEditAssignment && state.permissions.canAdmin && selectedSpace ? `<button id="businessPlanSpaceBtn" type="button" class="primary-button">规划</button>` : ""}
           </div>
         </div>`;
-  const spaceSection = `
+  const legacySpaceSection = `
         <div class="business-form-section business-form-section-space">
           <strong>空间信息</strong>
           ${isNewSpace ? `<label>前门牌
@@ -2405,9 +2458,143 @@ function renderBusinessAssignmentEditor() {
           </label>
           <label>骨架段
             <select name="segmentCode" ${canEditBase && selectedSpace ? "" : "disabled"}>
-              ${segments.map((item) => `<option value="${escapeHtml(item.segment_code)}" ${item.segment_code === selectedSpace?.segment_code ? "selected" : ""}>${escapeHtml(item.segment_code)} · ${segmentTypeLabel(item.element_type)}</option>`).join("")}
+              ${segmentOptions.map((item) => `<option value="${escapeHtml(item.segment_code)}" ${item.segment_code === selectedSpace?.segment_code ? "selected" : ""}>${escapeHtml(item.segment_code)} · ${segmentTypeLabel(item.element_type)}</option>`).join("")}
             </select>
           </label>` : `<input name="frontDoor" type="hidden" value="${escapeHtml(selectedSpace?.front_door || "")}" />
+          <input name="rearDoor" type="hidden" value="${escapeHtml(selectedSpace?.rear_door || "")}" />
+          <input name="segmentCode" type="hidden" value="${escapeHtml(selectedSpace?.segment_code || "")}" />`}
+          ${canEditBase && selectedSpace ? `<label class="business-checkbox business-code-refresh"><input name="refreshSpaceCode" type="checkbox" ${isNewSpace ? "checked disabled" : ""} /> ${isNewSpace ? "保存时生成空间编号" : "保存时刷新空间编号"}</label>` : ""}
+          <label>所在侧
+            <select name="spaceSide" ${canEditBase && selectedSpace ? "" : "disabled"}>
+              ${["north", "south", "east", "west"].map((side) => `<option value="${side}" ${side === selectedSpace?.side ? "selected" : ""}>${sideLabel(side)}</option>`).join("")}
+            </select>
+          </label>
+          <label>沿段偏移
+            <input name="offsetM" type="number" step="0.1" min="0" value="${escapeHtml(selectedSpace?.offset_m ?? "")}" ${canEditBase && selectedSpace ? "" : "disabled"} />
+          </label>
+          <label>长度
+            <input name="lengthM" type="number" step="0.1" min="0.1" value="${escapeHtml(selectedSpace?.length_m ?? "")}" ${canEditBase && selectedSpace ? "" : "disabled"} />
+          </label>
+          <label>宽度
+            <input name="widthM" type="number" step="0.1" min="0.1" value="${escapeHtml(selectedSpace?.width_m ?? "")}" ${canEditBase && selectedSpace ? "" : "disabled"} />
+          </label>
+          <label>物理状态
+            <select name="spaceStatus" ${canEditBase && selectedSpace ? "" : "disabled"}>
+              ${["active", "unavailable"].map((status) => `<option value="${status}" ${status === selectedSpace?.current_status ? "selected" : ""}>${spaceStatusLabel(status)}</option>`).join("")}
+            </select>
+          </label>
+          <label>网段
+            <input name="networkSegment" type="text" value="${escapeHtml(selectedSpace?.network_segment || "")}" ${canEditBase && selectedSpace ? "" : "disabled"} />
+          </label>
+          <label>空间备注
+            <input name="spaceNotes" type="text" value="${escapeHtml(selectedSpace?.notes || "")}" ${canEditBase && selectedSpace ? "" : "disabled"} />
+          </label>
+        </div>`;
+
+  const improvedSpaceSection = businessSpaceSectionHtml({
+    selectedSpace,
+    segmentOptions,
+    canEditBase,
+    isNewSpace,
+    isCorrectingSpaceCode,
+    canCorrectSpaceCode,
+    previewSpaceCode,
+  });
+
+  els.dataEditor.innerHTML = `
+    <div class="business-editor">
+      <div class="business-editor-list">
+        <div class="business-editor-heading">
+          <strong>${escapeHtml(building?.building_name || building?.building_code || "当前楼栋")} ${escapeHtml(els.floorSelect.value || "")}层</strong>
+          <span>${floorAssignments.length}/${floorSpaces.length} 已分配</span>
+        </div>
+        ${floorSpaces.length ? floorSpaces.map((space) => businessSpaceCard(space, assignments, selectedSpace?.id || "")).join("") : `<div class="empty">当前楼层还没有空间资料。</div>`}
+      </div>
+      <form id="businessAssignmentForm" class="business-assignment-form">
+        <div class="business-editor-heading">
+          <strong>${selectedSpace ? `编辑 ${businessDoorRangeLabel(selectedSpace) || selectedSpace.space_code}` : "当前楼层业务编辑"}</strong>
+          <span>${escapeHtml(activePlan.plan_name)}</span>
+        </div>
+        ${labSection}
+        ${improvedSpaceSection}
+        <div class="business-preview">
+          <strong>系统自动维护</strong>
+          <span>${selectedSpace ? escapeHtml(`${spaceDisplayName(selectedSpace)} · ${selectedLab?.lab_name || "未分配用途"}`) : "请先在当前楼层选择一个空间"}</span>
+        </div>
+        ${canDeleteSpaceInActivePlan() && selectedSpace && !isNewSpace ? `<div class="business-danger-row"><button id="businessDeleteSpaceBtn" type="button">删除空间</button><span>从当前非基线方案中删除该空间，并将相关分配标记为无效。</span></div>` : ""}
+        ${canDeleteLabInActivePlan(selectedLab, selectedSpace) ? `<div class="business-danger-row"><button id="businessDeleteLabBtn" type="button">删除用途单元</button><span>仅删除当前方案中未被其他空间占用的用途单元，并同步解绑当前空间。</span></div>` : ""}
+        ${canSaveAnything ? "" : `<div class="business-readonly">当前账号只能查看业务信息，不能保存修改。</div>`}
+        <input name="selectedSpaceId" type="hidden" value="${escapeHtml(selectedSpace?.id || "")}" />
+        <input name="currentAssignmentId" type="hidden" value="${escapeHtml(selected?.id || "")}" />
+      </form>
+    </div>
+  `;
+  els.dataEditor.querySelectorAll("[data-business-space-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.businessEditor.selectedSpaceId = button.dataset.businessSpaceId;
+      state.selectedSpaceId = button.dataset.businessSpaceId;
+      const assignment = assignments.find((row) => row.space_id === button.dataset.businessSpaceId && row.assignment_status === "assigned") || null;
+      state.businessEditor.selectedAssignmentId = assignment?.id || "";
+      renderEditor();
+      renderApp();
+    });
+  });
+  els.dataEditor.querySelector('select[name="labCode"]')?.addEventListener("change", renderBusinessLabPreview);
+  els.dataEditor.querySelector('select[name="college"]')?.addEventListener("change", renderBusinessMajorOptions);
+  els.dataEditor.querySelector("#spaceCodeCorrectionToggle")?.addEventListener("click", () => {
+    state.businessEditor.spaceCorrectionId = isCorrectingSpaceCode ? "" : (selectedSpace?.id || "");
+    renderEditor();
+  });
+  els.dataEditor.querySelectorAll('input[name="frontDoor"], input[name="rearDoor"]').forEach((input) => {
+    input.addEventListener("input", updateSpaceCodePreview);
+  });
+  els.dataEditor.querySelector("#businessPlanSpaceBtn")?.addEventListener("click", () => { void planSelectedSpaceAction(); });
+  els.dataEditor.querySelector("#businessRenovateLabBtn")?.addEventListener("click", () => { void renovateSelectedLabAction(); });
+  els.dataEditor.querySelector("#businessDeleteSpaceBtn")?.addEventListener("click", () => { void markSelectedBusinessSpaceUnavailable(); });
+  els.dataEditor.querySelector("#businessDeleteLabBtn")?.addEventListener("click", () => { void deleteSelectedBusinessLab(); });
+}
+
+function businessSpaceSectionHtml(options) {
+  const {
+    selectedSpace,
+    segmentOptions,
+    canEditBase,
+    isNewSpace,
+    isCorrectingSpaceCode,
+    canCorrectSpaceCode,
+    previewSpaceCode,
+  } = options;
+  const editDoors = isNewSpace || isCorrectingSpaceCode;
+  return `
+        <div class="business-form-section business-form-section-space">
+          <div class="business-section-title">
+            <strong>空间信息</strong>
+            ${canCorrectSpaceCode ? `<button id="spaceCodeCorrectionToggle" type="button">${isCorrectingSpaceCode ? "取消修正" : "修正门牌/编号"}</button>` : ""}
+          </div>
+          ${selectedSpace ? `<div class="space-code-summary">
+            <div><span>前门牌</span><strong>${escapeHtml(selectedSpace.front_door || "-")}</strong></div>
+            <div><span>后门牌</span><strong>${escapeHtml(selectedSpace.rear_door || selectedSpace.front_door || "-")}</strong></div>
+            <div><span>空间编号</span><strong>${escapeHtml(selectedSpace.space_code || "-")}</strong></div>
+            <div><span>骨架段</span><strong>${escapeHtml(selectedSpace.segment_code || "-")}</strong></div>
+          </div>` : ""}
+          ${editDoors ? `<label>前门牌
+            <input name="frontDoor" type="text" value="${escapeHtml(selectedSpace?.front_door || "")}" ${canEditBase && selectedSpace ? "" : "disabled"} />
+          </label>
+          <label>后门牌
+            <input name="rearDoor" type="text" value="${escapeHtml(selectedSpace?.rear_door || "")}" ${canEditBase && selectedSpace ? "" : "disabled"} />
+          </label>
+          <label>骨架段
+            <select name="segmentCode" ${canEditBase && selectedSpace && isNewSpace ? "" : "disabled"}>
+              ${segmentOptions.map((item) => `<option value="${escapeHtml(item.segment_code)}" ${item.segment_code === selectedSpace?.segment_code ? "selected" : ""}>${escapeHtml(item.segment_code)} · ${segmentTypeLabel(item.element_type)}</option>`).join("")}
+            </select>
+          </label>
+          ${!isNewSpace ? `<input name="segmentCode" type="hidden" value="${escapeHtml(selectedSpace?.segment_code || "")}" />` : ""}
+          <input name="spaceCodeCorrection" type="hidden" value="on" />
+          <div class="space-code-preview" data-space-code-preview>
+            <span>${isNewSpace ? "保存时生成空间编号" : "保存后编号"}</span>
+            <strong>${isNewSpace ? escapeHtml(previewSpaceCode || "填写门牌后生成") : `${escapeHtml(selectedSpace?.space_code || "-")} -> ${escapeHtml(previewSpaceCode || "无法生成")}`}</strong>
+            <small>编号由校区、楼号、楼层和门牌末两位生成；单门空间后门牌可留空。</small>
+          </div>` : `<input name="frontDoor" type="hidden" value="${escapeHtml(selectedSpace?.front_door || "")}" />
           <input name="rearDoor" type="hidden" value="${escapeHtml(selectedSpace?.rear_door || "")}" />
           <input name="segmentCode" type="hidden" value="${escapeHtml(selectedSpace?.segment_code || "")}" />`}
           <label>所在侧
@@ -2436,51 +2623,24 @@ function renderBusinessAssignmentEditor() {
             <input name="spaceNotes" type="text" value="${escapeHtml(selectedSpace?.notes || "")}" ${canEditBase && selectedSpace ? "" : "disabled"} />
           </label>
         </div>`;
+}
 
-  els.dataEditor.innerHTML = `
-    <div class="business-editor">
-      <div class="business-editor-list">
-        <div class="business-editor-heading">
-          <strong>${escapeHtml(building?.building_name || building?.building_code || "当前楼栋")} ${escapeHtml(els.floorSelect.value || "")}层</strong>
-          <span>${floorAssignments.length}/${floorSpaces.length} 已分配</span>
-        </div>
-        ${floorSpaces.length ? floorSpaces.map((space) => businessSpaceCard(space, assignments, selectedSpace?.id || "")).join("") : `<div class="empty">当前楼层还没有空间资料。</div>`}
-      </div>
-      <form id="businessAssignmentForm" class="business-assignment-form">
-        <div class="business-editor-heading">
-          <strong>${selectedSpace ? `编辑 ${businessDoorRangeLabel(selectedSpace) || selectedSpace.space_code}` : "当前楼层业务编辑"}</strong>
-          <span>${escapeHtml(activePlan.plan_name)}</span>
-        </div>
-        ${labSection}
-        ${spaceSection}
-        <div class="business-preview">
-          <strong>系统自动维护</strong>
-          <span>${selectedSpace ? escapeHtml(`${spaceDisplayName(selectedSpace)} · ${selectedLab?.lab_name || "未分配实验室"}`) : "请先在当前楼层选择一个空间"}</span>
-        </div>
-        ${canDeleteSpaceInActivePlan() && selectedSpace && !isNewSpace ? `<div class="business-danger-row"><button id="businessDeleteSpaceBtn" type="button">删除空间</button><span>从当前非基线方案中删除该空间，并将相关分配标记为无效。</span></div>` : ""}
-        ${canDeleteLabInActivePlan(selectedLab, selectedSpace) ? `<div class="business-danger-row"><button id="businessDeleteLabBtn" type="button">删除实验室</button><span>仅删除当前方案中未被其他空间占用的实验室，并同步解绑当前空间。</span></div>` : ""}
-        ${canSaveAnything ? "" : `<div class="business-readonly">当前账号只能查看业务信息，不能保存修改。</div>`}
-        <input name="selectedSpaceId" type="hidden" value="${escapeHtml(selectedSpace?.id || "")}" />
-        <input name="currentAssignmentId" type="hidden" value="${escapeHtml(selected?.id || "")}" />
-      </form>
-    </div>
-  `;
-  els.dataEditor.querySelectorAll("[data-business-space-id]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.businessEditor.selectedSpaceId = button.dataset.businessSpaceId;
-      state.selectedSpaceId = button.dataset.businessSpaceId;
-      const assignment = assignments.find((row) => row.space_id === button.dataset.businessSpaceId && row.assignment_status === "assigned") || null;
-      state.businessEditor.selectedAssignmentId = assignment?.id || "";
-      renderEditor();
-      renderApp();
-    });
-  });
-  els.dataEditor.querySelector('select[name="labCode"]')?.addEventListener("change", renderBusinessLabPreview);
-  els.dataEditor.querySelector('select[name="college"]')?.addEventListener("change", renderBusinessMajorOptions);
-  els.dataEditor.querySelector("#businessPlanSpaceBtn")?.addEventListener("click", () => { void planSelectedSpaceAction(); });
-  els.dataEditor.querySelector("#businessRenovateLabBtn")?.addEventListener("click", () => { void renovateSelectedLabAction(); });
-  els.dataEditor.querySelector("#businessDeleteSpaceBtn")?.addEventListener("click", () => { void markSelectedBusinessSpaceUnavailable(); });
-  els.dataEditor.querySelector("#businessDeleteLabBtn")?.addEventListener("click", () => { void deleteSelectedBusinessLab(); });
+function updateSpaceCodePreview() {
+  const form = els.dataEditor.querySelector("#businessAssignmentForm");
+  const selectedSpace = state.data.spaces.find((row) => row.id === state.businessEditor.selectedSpaceId) || null;
+  const preview = form?.querySelector("[data-space-code-preview]");
+  if (!form || !selectedSpace || !preview) return;
+  const next = {
+    ...selectedSpace,
+    front_door: String(form.querySelector('input[name="frontDoor"]')?.value || "").trim(),
+    rear_door: String(form.querySelector('input[name="rearDoor"]')?.value || "").trim(),
+  };
+  const nextCode = generateSpaceCode(next, buildingByCode(next.building_code));
+  const title = preview.querySelector("strong");
+  if (!title) return;
+  title.textContent = state.businessEditor.newSpaceId === selectedSpace.id
+    ? (nextCode || "填写门牌后生成")
+    : `${selectedSpace.space_code || "-"} -> ${nextCode || "无法生成"}`;
 }
 
 function currentFloorSpaces() {
@@ -2499,6 +2659,64 @@ function currentFloorSegments() {
     .filter((row) => row.building_code === buildingCode && row.floor_code === floorCode)
     .slice()
     .sort((a, b) => compare(a.segment_code, b.segment_code));
+}
+
+function currentAssignableSegments() {
+  return currentFloorSegments().filter((segment) => isAssignableSegment(segment));
+}
+
+function firstAssignableSegmentCode(buildingCode, floorCode) {
+  return state.data.floor_segments.find((row) =>
+    row.building_code === buildingCode &&
+    row.floor_code === floorCode &&
+    isAssignableSegment(row)
+  )?.segment_code || "";
+}
+
+function nextBuildingNumber() {
+  return state.data.buildings.reduce((max, building) => Math.max(max, Number(building.building_number) || 0), 0) + 1;
+}
+
+function nextGeneratedBuildingDraft() {
+  const buildingNumber = nextBuildingNumber();
+  const draft = {
+    building_code: "",
+    building_name: "新增教学楼",
+    campus_zone: "下沙校区",
+    building_number: buildingNumber,
+    notes: "",
+  };
+  draft.building_code = generateBuildingCode(draft);
+  return draft;
+}
+
+function nextSegmentCodeForDraft(draft, building = buildingByCode(draft.building_code)) {
+  return generateSegmentCode(draft, building || { building_code: draft.building_code }, state.data.floor_segments);
+}
+
+function nextUnitCode() {
+  return generateUnitCode(state.data.labs);
+}
+
+function applySpaceCodeRefresh(space, nextCode) {
+  const oldId = space.id;
+  const oldCode = space.space_code;
+  Object.assign(space, normalizeSpace({ ...space, space_code: nextCode }));
+  const relation = relationMaps(state.data);
+  state.data.plan_assignments = state.data.plan_assignments.map((assignment) => {
+    if (assignment.space_id !== oldId && assignment.space_code !== oldCode) return assignment;
+    return normalizeAssignment({ ...assignment, space_code: nextCode }, relation);
+  });
+}
+
+function refreshSpaceCode(space) {
+  const building = buildingByCode(space.building_code);
+  const nextCode = generateSpaceCode(space, building);
+  if (!nextCode) return { ok: false, message: "无法生成空间编号：请先填写有效前门牌。" };
+  const duplicate = state.data.spaces.find((row) => row.id !== space.id && row.space_code === nextCode);
+  if (duplicate) return { ok: false, message: `空间编号 ${nextCode} 已存在，请检查门牌或楼层。` };
+  applySpaceCodeRefresh(space, nextCode);
+  return { ok: true, code: nextCode };
 }
 
 function ensureBusinessSpaceSelection(floorSpaces) {
@@ -2523,7 +2741,7 @@ function businessSpaceCard(space, assignments, selectedSpaceId) {
   const status = deriveBusinessSpaceStatus(space, assignment);
   return `<button type="button" class="business-assignment-card ${space.id === selectedSpaceId ? "is-active" : ""}" data-business-space-id="${escapeHtml(space.id)}">
     <strong>${escapeHtml(businessDoorRangeLabel(space) || space.space_code)}</strong>
-    <span><b class="business-status-pill is-${status.key}">${status.label}</b>${escapeHtml(lab?.lab_name || "未分配实验室")}</span>
+    <span><b class="business-status-pill is-${status.key}">${status.label}</b>${escapeHtml(lab?.lab_name || "未分配用途")}</span>
     <small>${escapeHtml(sideLabel(space.side))}侧 · ${escapeHtml((space.area_m2 || 0).toFixed(1))} m²</small>
   </button>`;
 }
@@ -2671,7 +2889,12 @@ function deriveBusinessSpaceStatus(space, assignment) {
 }
 
 function segmentTypeLabel(type) {
-  return type === "stairs" ? "楼梯" : "走廊";
+  return {
+    corridor: "走廊",
+    stairs: "楼梯",
+    elevator: "电梯",
+    other: "其他",
+  }[type] || "走廊";
 }
 
 function spaceStatusLabel(status) {
@@ -2722,7 +2945,7 @@ function canDeleteEditorRows(key) {
 }
 
 function collectEditorInputRows() {
-  const rows = editorRows().map(() => ({}));
+  const rows = editorRows().map((row) => ({ ...row, __original: { ...row } }));
   els.dataEditor.querySelectorAll("input[data-row][data-key]").forEach((input) => {
     rows[Number(input.dataset.row)][input.dataset.key] = input.value;
   });
@@ -2738,21 +2961,139 @@ function normalizeEditorRowsForKey(key, rows) {
   return rows;
 }
 
+function applyBuildingEditorRows(rows) {
+  const normalizedRows = rows.map((row) => normalizeBuilding(row));
+  const nextCodes = new Set();
+  for (const building of normalizedRows) {
+    const code = String(building.building_code || "").trim();
+    if (!code) return { ok: false, message: "教学楼编码不能为空。" };
+    if (nextCodes.has(code)) return { ok: false, message: `教学楼编码“${code}”重复，请修改后再保存。` };
+    nextCodes.add(code);
+  }
+  rows.forEach((row, index) => {
+    const originalCode = String(row.__original?.building_code || row.building_code || "").trim();
+    const nextCode = String(normalizedRows[index].building_code || "").trim();
+    if (!originalCode || originalCode === nextCode) return;
+    state.data.floor_segments = state.data.floor_segments.map((segment) =>
+      String(segment.building_code || "").trim() === originalCode
+        ? normalizeSegment({ ...segment, building_code: nextCode })
+        : segment
+    );
+    state.data.spaces = state.data.spaces.map((space) =>
+      String(space.building_code || "").trim() === originalCode
+        ? normalizeSpace({ ...space, building_code: nextCode })
+        : space
+    );
+  });
+  state.data.buildings = normalizedRows;
+  return { ok: true };
+}
+
+function applyPlanEditorRows(rows) {
+  const normalizedRows = rows.map((row, index) => {
+    const normalized = normalizePlan(row);
+    if (!normalized.plan_code) {
+      normalized.plan_code = generatePlanCode([
+        ...state.data.plans.filter((plan) => !rows.some((item) => item.__original?.id === plan.id)),
+        ...rows.slice(0, index),
+      ]);
+    }
+    return normalizePlan(normalized);
+  });
+  const nextCodes = new Set();
+  for (const plan of normalizedRows) {
+    const code = String(plan.plan_code || "").trim();
+    if (!/^[A-Z][A-Z0-9_-]*$/i.test(code)) return { ok: false, message: "方案编码只能使用英文字母、数字、下划线或短横线。" };
+    if (nextCodes.has(code)) return { ok: false, message: `方案编码“${code}”重复，请修改后再保存。` };
+    nextCodes.add(code);
+  }
+  rows.forEach((row, index) => {
+    const originalCode = String(row.__original?.plan_code || row.plan_code || "").trim();
+    const nextCode = String(normalizedRows[index].plan_code || "").trim();
+    if (!originalCode || originalCode === nextCode) return;
+    state.data.plans = state.data.plans.map((plan) =>
+      String(plan.source_plan_code || "").trim() === originalCode
+        ? normalizePlan({ ...plan, source_plan_code: nextCode })
+        : plan
+    );
+    const relation = relationMaps({ ...state.data, plans: normalizedRows });
+    state.data.plan_assignments = state.data.plan_assignments.map((assignment) =>
+      String(assignment.plan_code || "").trim() === originalCode
+        ? normalizeAssignment({ ...assignment, plan_code: nextCode }, relation)
+        : assignment
+    );
+  });
+  state.data.plans = normalizedRows;
+  return { ok: true };
+}
+
+function normalizeLabTypeEditorRows(rows) {
+  const existing = state.data.lab_types.filter((type) => !rows.some((row) => row.__original?.id === type.id));
+  const normalizedRows = rows.map((row, index) => {
+    const normalized = normalizeLabType(row);
+    if (!normalized.type_code) {
+      normalized.type_code = generateUseTypeCode([
+        ...existing,
+        ...rows.slice(0, index),
+      ]);
+      normalized.id = normalized.id || normalized.type_code;
+    }
+    return normalizeLabType(normalized);
+  });
+  return canonicalizeLabTypes([...existing, ...normalizedRows], state.data.labs);
+}
+
+function applyFloorSegmentEditorRows(rows) {
+  const normalizedRows = rows.map((row) => normalizeSegment(row));
+  const originalKeys = new Set(rows.map((row) => segmentKey(row.__original || row)));
+  const nextKeys = new Set();
+  for (const segment of normalizedRows) {
+    const key = segmentKey(segment);
+    if (nextKeys.has(key)) {
+      return { ok: false, message: `楼层骨架“${segment.building_code} ${segment.floor_code}层 ${segment.segment_code}”重复，请修改后再保存。` };
+    }
+    nextKeys.add(key);
+    const existing = state.data.floor_segments.find((item) => segmentKey(item) === key);
+    if (existing && !originalKeys.has(segmentKey(existing))) {
+      return { ok: false, message: `目标楼层骨架“${segment.building_code} ${segment.floor_code}层 ${segment.segment_code}”已存在，不能覆盖。` };
+    }
+  }
+
+  const moveBySpaceId = new Map();
+  rows.forEach((row, index) => {
+    const original = row.__original || row;
+    const next = normalizedRows[index];
+    state.data.spaces.forEach((space) => {
+      if (!spaceMatchesSegment(space, original)) return;
+      if (!isAssignableSegment(next)) {
+        moveBySpaceId.set(space.id, { blocked: true, segment: next });
+        return;
+      }
+      moveBySpaceId.set(space.id, {
+        building_code: next.building_code,
+        floor_code: next.floor_code,
+        segment_code: next.segment_code,
+      });
+    });
+  });
+  const blockedMove = [...moveBySpaceId.values()].find((move) => move.blocked);
+  if (blockedMove) {
+    const segment = blockedMove.segment;
+    return { ok: false, message: `楼层骨架“${segment.segment_code}”已绑定空间，不能改为${segmentTypeLabel(segment.element_type)}。` };
+  }
+
+  state.data.floor_segments = [
+    ...state.data.floor_segments.filter((segment) => !originalKeys.has(segmentKey(segment))),
+    ...normalizedRows,
+  ];
+  state.data.spaces = state.data.spaces.map((space) => {
+    const move = moveBySpaceId.get(space.id);
+    return move ? normalizeSpace({ ...space, ...move }) : space;
+  });
+  return { ok: true, movedSpaces: moveBySpaceId.size };
+}
+
 function editorRowDeleteBlocker(key, row) {
-  if (key === "buildings") {
-    const code = String(row.building_code || "").trim();
-    if (state.data.floor_segments.some((item) => item.building_code === code) || state.data.spaces.some((item) => item.building_code === code)) {
-      return "该教学楼仍被楼层骨架或空间引用，不能删除。";
-    }
-  }
-  if (key === "floor_segments") {
-    const buildingCode = String(row.building_code || "").trim();
-    const floorCode = String(row.floor_code || "").trim();
-    const segmentCode = String(row.segment_code || "").trim();
-    if (state.data.spaces.some((item) => item.building_code === buildingCode && item.floor_code === floorCode && item.segment_code === segmentCode)) {
-      return "该楼层骨架仍被空间引用，不能删除。";
-    }
-  }
   if (key === "colleges") {
     const code = String(row.college_code || "").trim();
     const name = String(row.college_name || "").trim();
@@ -2770,6 +3111,10 @@ function editorRowDeleteBlocker(key, row) {
   if (key === "lab_types") {
     const code = String(row.type_code || "").trim();
     const name = String(row.type_name || "").trim();
+    const hasSameType = state.data.lab_types.some((item) =>
+      item.id !== row.id && String(item.type_name || "").trim() === name
+    );
+    if (hasSameType) return "";
     if (state.data.labs.some((item) => item.lab_type === name || item.lab_type === code)) {
       return "该实验室类型仍被实验室引用，不能删除。";
     }
@@ -2777,8 +3122,78 @@ function editorRowDeleteBlocker(key, row) {
   return "";
 }
 
-async function deleteEditorRow(rowIndex) {
+function segmentKey(row) {
+  return [row?.building_code, row?.floor_code, row?.segment_code].map((value) => String(value || "").trim()).join("__");
+}
+
+function spaceMatchesSegment(space, segment) {
+  return String(space.building_code || "").trim() === String(segment.building_code || "").trim()
+    && String(space.floor_code || "").trim() === String(segment.floor_code || "").trim()
+    && String(space.segment_code || "").trim() === String(segment.segment_code || "").trim();
+}
+
+function spacesForBuilding(buildingCode) {
+  return state.data.spaces.filter((space) => String(space.building_code || "").trim() === String(buildingCode || "").trim());
+}
+
+function spacesForSegment(segment) {
+  return state.data.spaces.filter((space) => spaceMatchesSegment(space, segment));
+}
+
+function invalidateAssignmentsForSpaces(spaceIds, spaceCodes) {
+  const ids = new Set(spaceIds);
+  const codes = new Set(spaceCodes);
+  const relation = relationMaps(state.data);
+  state.data.plan_assignments = state.data.plan_assignments.map((row) => {
+    if (!ids.has(row.space_id) && !codes.has(row.space_code)) return row;
+    return normalizeAssignment({
+      ...row,
+      previous_space_code: row.space_code || row.previous_space_code,
+      space_code: "",
+      assignment_status: "Invalid",
+    }, relation);
+  });
+}
+
+function cascadeDeleteBuilding(row) {
+  const buildingCode = String(row.__original?.building_code || row.building_code || "").trim();
+  const spaces = spacesForBuilding(buildingCode);
+  const spaceIds = spaces.map((space) => space.id).filter(Boolean);
+  const spaceCodes = spaces.map((space) => space.space_code).filter(Boolean);
+  const segmentsCount = state.data.floor_segments.filter((segment) => String(segment.building_code || "").trim() === buildingCode).length;
+  const assignmentCount = state.data.plan_assignments.filter((assignment) => spaceIds.includes(assignment.space_id) || spaceCodes.includes(assignment.space_code)).length;
+  const label = row.__original?.building_name || row.building_name || buildingCode;
+  const message = `确认删除教学楼“${label}”？将同时删除 ${segmentsCount} 条楼层骨架、${spaces.length} 个空间，并将 ${assignmentCount} 条相关分配标记为无效；实验室资料会保留。`;
+  if (!window.confirm(message)) return false;
+  state.data.buildings = state.data.buildings.filter((building) => String(building.building_code || "").trim() !== buildingCode);
+  state.data.floor_segments = state.data.floor_segments.filter((segment) => String(segment.building_code || "").trim() !== buildingCode);
+  state.data.spaces = state.data.spaces.filter((space) => String(space.building_code || "").trim() !== buildingCode);
+  state.data.deleted_space_ids = [...new Set([...(state.data.deleted_space_ids || []), ...spaceIds])];
+  invalidateAssignmentsForSpaces(spaceIds, spaceCodes);
+  return `已删除教学楼 ${label}，并清理其骨架与空间。`;
+}
+
+function cascadeDeleteFloorSegment(row) {
+  const original = row.__original || row;
+  const spaces = spacesForSegment(original);
+  const spaceIds = spaces.map((space) => space.id).filter(Boolean);
+  const spaceCodes = spaces.map((space) => space.space_code).filter(Boolean);
+  const assignmentCount = state.data.plan_assignments.filter((assignment) => spaceIds.includes(assignment.space_id) || spaceCodes.includes(assignment.space_code)).length;
+  const label = `${original.building_code || "-"} ${original.floor_code || "-"}层 ${original.segment_code || "-"}`;
+  const message = `确认删除楼层骨架“${label}”？将同时删除 ${spaces.length} 个绑定空间，并将 ${assignmentCount} 条相关分配标记为无效；实验室资料会保留。`;
+  if (!window.confirm(message)) return false;
+  const originalKey = segmentKey(original);
+  state.data.floor_segments = state.data.floor_segments.filter((segment) => segmentKey(segment) !== originalKey);
+  state.data.spaces = state.data.spaces.filter((space) => !spaceMatchesSegment(space, original));
+  state.data.deleted_space_ids = [...new Set([...(state.data.deleted_space_ids || []), ...spaceIds])];
+  invalidateAssignmentsForSpaces(spaceIds, spaceCodes);
+  return `已删除楼层骨架 ${label}，并清理绑定空间。`;
+}
+
+async function deleteEditorRow(rowIndex, button = null) {
+  setRawEditorNotice("");
   if (!canDeleteEditorRows(state.editorKey)) {
+    setRawEditorNotice("只有管理员可以删除基础表行。");
     updateStatus("只有管理员可以删除基础表行。");
     return;
   }
@@ -2789,21 +3204,63 @@ async function deleteEditorRow(rowIndex) {
   if (!row) return;
   const blocker = editorRowDeleteBlocker(state.editorKey, row);
   if (blocker) {
+    setRawEditorNotice(blocker);
     updateStatus(blocker);
     return;
   }
-  if (!window.confirm("确认删除当前行？删除后会立即保存。")) return;
-  const nextRows = normalizeEditorRowsForKey(state.editorKey, rows.filter((_, index) => index !== rowIndex));
-  if (state.editorKey === "floor_segments") {
-    replaceFilteredRows("floor_segments", nextRows);
+  let successMessage = "已删除当前行。";
+  if (state.editorKey === "buildings") {
+    const result = cascadeDeleteBuilding(row);
+    if (!result) return;
+    successMessage = result;
+  } else if (state.editorKey === "floor_segments") {
+    const result = cascadeDeleteFloorSegment(row);
+    if (!result) return;
+    successMessage = result;
   } else {
+    if (!window.confirm("确认删除当前行？删除后会立即保存。")) return;
+    const nextRows = normalizeEditorRowsForKey(state.editorKey, rows.filter((_, index) => index !== rowIndex));
     state.data[state.editorKey] = nextRows;
+  }
+  if (button) {
+    button.disabled = true;
+    button.textContent = "删除中";
   }
   state.data = normalizeDataset(state.data);
   const saveOk = await saveWithRollback(previousData, previousRevision, `删除 ${state.editorKey} 行`, "删除行失败");
   if (saveOk) {
-    refreshStateAndRender("已删除当前行。", { stamp: false, forceMoveReset: true });
+    refreshStateAndRender(successMessage, { stamp: false, forceMoveReset: true });
+  } else if (button) {
+    button.disabled = false;
+    button.textContent = "删除";
   }
+}
+
+function addFloorSegmentRow(elementType = "corridor") {
+  if (state.editorKey !== "floor_segments" || !canEditEditorKey("floor_segments")) return;
+  const now = isoNow();
+  const buildingCode = els.buildingSelect.value || "B01";
+  const floorCode = els.floorSelect.value || "1";
+  const type = normalizeElementType(elementType);
+  const isVertical = type === "stairs" || type === "elevator";
+  const width = type === "corridor" ? 2.4 : 4;
+  const draft = {
+    building_code: buildingCode,
+    floor_code: floorCode,
+    start_x_m: isVertical ? 4 : 0,
+    start_y_m: isVertical ? 2 : 0,
+    end_x_m: isVertical ? 4 : 18,
+    end_y_m: isVertical ? 8 : 0,
+    width_m: width,
+    element_type: type,
+    notes: type === "stairs" ? "楼梯" : (type === "elevator" ? "电梯" : "走廊"),
+    created_at: now,
+  };
+  const segment = normalizeSegment({ ...draft, segment_code: nextSegmentCodeForDraft(draft) || `segment-${Date.now()}` });
+  state.data.floor_segments.push(segment);
+  state.data = normalizeDataset(state.data);
+  state.editorHighlight = { key: "floor_segments", rowId: segment.id };
+  refreshStateAndRender(`已新增${segmentTypeLabel(type)}骨架，请调整起止坐标后应用修改。`, { stamp: false, forceMoveReset: true });
 }
 
 function addEditorRow() {
@@ -2815,11 +3272,16 @@ function addEditorRow() {
     const now = isoNow();
     const buildingCode = els.buildingSelect.value || state.data.buildings[0]?.building_code || "B01";
     const floorCode = els.floorSelect.value || "1";
+    const segmentCode = firstAssignableSegmentCode(buildingCode, floorCode);
+    if (!segmentCode) {
+      updateStatus("当前楼层没有可绑定空间的走廊段，请先新增走廊骨架。");
+      return;
+    }
     const space = normalizeSpace({
-      space_code: `S-${Date.now()}`,
+      space_code: `PENDING-${Date.now()}`,
       building_code: buildingCode,
       floor_code: floorCode,
-      segment_code: currentFloorSegments()[0]?.segment_code || "main",
+      segment_code: segmentCode,
       offset_m: 0,
       side: "south",
       front_door: "新空间",
@@ -2846,13 +3308,20 @@ function addEditorRow() {
   const buildingCode = els.buildingSelect.value || "B01";
   const floorCode = els.floorSelect.value || "1";
   if (state.editorKey === "buildings") {
-    state.data.buildings.push(normalizeBuilding({ building_code: `B${String(state.data.buildings.length + 1).padStart(2, "0")}`, building_name: "新增教学楼", campus_zone: "本部", building_number: state.data.buildings.length + 1, notes: "", created_at: now }));
+    state.data.buildings.push(normalizeBuilding({ ...nextGeneratedBuildingDraft(), created_at: now }));
   } else if (state.editorKey === "floor_segments") {
-    state.data.floor_segments.push(normalizeSegment({ building_code: buildingCode, floor_code: floorCode, segment_code: `segment-${Date.now()}`, start_x_m: 0, start_y_m: 0, end_x_m: 18, end_y_m: 0, width_m: 2.4, element_type: "corridor", notes: "", created_at: now }));
+    addFloorSegmentRow("corridor");
+    return;
   } else if (state.editorKey === "spaces") {
-    state.data.spaces.push(normalizeSpace({ space_code: `S-${Date.now()}`, building_code: buildingCode, floor_code: floorCode, segment_code: state.data.floor_segments.find((row) => row.building_code === buildingCode && row.floor_code === floorCode)?.segment_code || "main", offset_m: 0, side: "north", front_door: "000", rear_door: "", length_m: 8, width_m: 6, network_segment: "", current_status: "active", created_at: now }));
+    const segmentCode = firstAssignableSegmentCode(buildingCode, floorCode);
+    if (!segmentCode) {
+      updateStatus("当前楼层没有可绑定空间的走廊段，请先新增走廊骨架。");
+      return;
+    }
+    const draft = { building_code: buildingCode, floor_code: floorCode, front_door: "000", rear_door: "" };
+    state.data.spaces.push(normalizeSpace({ space_code: generateSpaceCode(draft, buildingByCode(buildingCode)) || `PENDING-${Date.now()}`, building_code: buildingCode, floor_code: floorCode, segment_code: segmentCode, offset_m: 0, side: "north", front_door: "000", rear_door: "", length_m: 8, width_m: 6, network_segment: "", current_status: "active", created_at: now }));
   } else if (state.editorKey === "labs") {
-    state.data.labs.push(normalizeLab({ lab_code: `LAB-${Date.now()}`, lab_name: "新增实验室", college: "未设置学院", major: "", lab_type: "教学实验室", director: "", seat_count: 0, computer_count: 0, status: "planning", notes: "", created_at: now }));
+    state.data.labs.push(normalizeLab({ lab_code: nextUnitCode(), lab_name: "新增用途单元", college: "未设置学院", major: "", lab_type: "教学实验室", director: "", seat_count: 0, computer_count: 0, status: "planning", notes: "", created_at: now }));
   } else if (state.editorKey === "colleges") {
     state.data.colleges.push(normalizeCollege({ college_code: `学院-${Date.now()}`, college_name: "新增学院", sort_order: state.data.colleges.length + 1, status: "active", notes: "", created_at: now }));
   } else if (state.editorKey === "majors") {
@@ -2860,9 +3329,9 @@ function addEditorRow() {
     if (!state.data.colleges.length) state.data.colleges.push(college);
     state.data.majors.push(normalizeMajor({ major_code: `${college.college_code}-专业-${Date.now()}`, major_name: "新增专业", college_code: college.college_code, sort_order: state.data.majors.length + 1, status: "active", notes: "", created_at: now }));
   } else if (state.editorKey === "lab_types") {
-    state.data.lab_types.push(normalizeLabType({ type_code: `类型-${Date.now()}`, type_name: "新增类型", sort_order: state.data.lab_types.length + 1, status: "active", notes: "", created_at: now }));
+    state.data.lab_types.push(normalizeLabType({ type_code: generateUseTypeCode(state.data.lab_types), type_name: "新增类型", sort_order: state.data.lab_types.length + 1, status: "active", notes: "", created_at: now }));
   } else if (state.editorKey === "plans") {
-    state.data.plans.push(normalizePlan({ plan_code: `plan-${Date.now()}`, plan_name: "新增方案", plan_type: "draft", source_plan_code: "", description: "", is_locked: false, is_default_compare_before: false, is_default_compare_after: false, created_at: now }));
+    state.data.plans.push(normalizePlan({ plan_code: generatePlanCode(state.data.plans), plan_name: "新增方案", plan_type: "draft", source_plan_code: "", description: "", is_locked: false, is_default_compare_before: false, is_default_compare_after: false, created_at: now }));
   } else if (state.editorKey === "plan_assignments") {
     const relation = relationMaps(state.data);
     state.data.plan_assignments.push(normalizeAssignment({
@@ -2893,13 +3362,34 @@ async function applyEditorRows() {
   const previousRevision = state.serverRevision;
   const rows = collectEditorInputRows();
 
-  if (state.editorKey === "buildings") state.data.buildings = rows.map((row) => normalizeBuilding(row));
+  if (state.editorKey === "buildings") {
+    const result = applyBuildingEditorRows(rows);
+    if (!result.ok) {
+      setRawEditorNotice(result.message);
+      updateStatus(result.message);
+      return;
+    }
+  }
   if (state.editorKey === "labs") state.data.labs = rows.map((row) => normalizeLab(row));
   if (state.editorKey === "colleges") state.data.colleges = rows.map((row) => normalizeCollege(row));
   if (state.editorKey === "majors") state.data.majors = rows.map((row) => normalizeMajor(row));
-  if (state.editorKey === "lab_types") state.data.lab_types = rows.map((row) => normalizeLabType(row));
-  if (state.editorKey === "plans") state.data.plans = rows.map((row) => normalizePlan(row));
-  if (state.editorKey === "floor_segments") replaceFilteredRows("floor_segments", rows.map((row) => normalizeSegment(row)));
+  if (state.editorKey === "lab_types") state.data.lab_types = normalizeLabTypeEditorRows(rows);
+  if (state.editorKey === "plans") {
+    const result = applyPlanEditorRows(rows);
+    if (!result.ok) {
+      setRawEditorNotice(result.message);
+      updateStatus(result.message);
+      return;
+    }
+  }
+  if (state.editorKey === "floor_segments") {
+    const result = applyFloorSegmentEditorRows(rows);
+    if (!result.ok) {
+      setRawEditorNotice(result.message);
+      updateStatus(result.message);
+      return;
+    }
+  }
   if (state.editorKey === "spaces") replaceFilteredRows("spaces", rows.map((row) => normalizeSpace(row)));
   if (state.editorKey === "plan_assignments") replaceFilteredAssignments(rows.map((row) => normalizeAssignment(row, relationMaps(state.data))));
 
@@ -2934,6 +3424,8 @@ async function applyBusinessAssignmentForm() {
   const moveNote = String(formData.get("moveNote") || "").trim();
   const effectiveFrom = String(formData.get("effectiveFrom") || "").trim();
   const replaceConflict = formData.get("replaceConflict") === "on";
+  const wasNewSpace = state.businessEditor.newSpaceId === selectedSpace.id;
+  const shouldRefreshSpaceCode = formData.get("spaceCodeCorrection") === "on" || wasNewSpace;
   const previousData = cloneDataset(state.data);
   const previousRevision = state.serverRevision;
   const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
@@ -2956,6 +3448,13 @@ async function applyBusinessAssignmentForm() {
       row.floor_code === selectedSpace.floor_code &&
       row.segment_code === nextSegmentCode
     );
+    if (!segment || !isAssignableSegment(segment)) {
+      state.data = normalizeDataset(previousData);
+      state.serverRevision = previousRevision;
+      state.planCopies = previousCopies;
+      updateStatus("空间只能绑定到走廊骨架，不能绑定楼梯、电梯或其他骨架。");
+      return;
+    }
     if (segment) {
       Object.assign(segment, normalizeSegment({
         ...segment,
@@ -2975,6 +3474,16 @@ async function applyBusinessAssignmentForm() {
       network_segment: String(formData.get("networkSegment") || "").trim(),
       notes: String(formData.get("spaceNotes") || "").trim(),
     }));
+    if (shouldRefreshSpaceCode) {
+      const refreshResult = refreshSpaceCode(selectedSpace);
+      if (!refreshResult.ok) {
+        state.data = normalizeDataset(previousData);
+        state.serverRevision = previousRevision;
+        state.planCopies = previousCopies;
+        updateStatus(refreshResult.message);
+        return;
+      }
+    }
     const lab = labCode ? state.data.labs.find((row) => row.lab_code === labCode) || null : null;
     if (lab) {
       Object.assign(lab, normalizeLab({
@@ -3072,7 +3581,8 @@ async function applyBusinessAssignmentForm() {
     return;
   }
   state.businessEditor.selectedSpaceId = selectedSpace.id;
-  if (state.businessEditor.newSpaceId === selectedSpace.id) state.businessEditor.newSpaceId = "";
+  if (wasNewSpace || state.businessEditor.newSpaceId === selectedSpace.id) state.businessEditor.newSpaceId = "";
+  if (state.businessEditor.spaceCorrectionId === selectedSpace.id) state.businessEditor.spaceCorrectionId = "";
   state.selectedSpaceId = selectedSpace.id;
   refreshStateAndRender(`已保存 ${selectedSpace.front_door || selectedSpace.space_code} 的业务信息。`, { stamp: false, forceMoveReset: true });
 }
@@ -3093,17 +3603,17 @@ async function deleteSelectedBusinessLab() {
   const assignment = activePlan && selectedSpace ? assignedAssignmentForSpace(assignmentRowsForPlan(activePlan.id), selectedSpace) : null;
   const lab = assignment ? state.data.labs.find((row) => row.lab_code === assignment.lab_code) || null : null;
   if (!canDeleteLabInActivePlan(lab, selectedSpace)) {
-    updateStatus("只能删除当前非基线方案中未被其他空间占用的实验室。");
+    updateStatus("只能删除当前非基线方案中未被其他空间占用的用途单元。");
     return;
   }
-  if (!window.confirm(`确认删除实验室“${lab.lab_name || lab.lab_code}”？当前空间会同步解绑。`)) return;
+  if (!window.confirm(`确认删除用途单元“${lab.lab_name || lab.lab_code}”？当前空间会同步解绑。`)) return;
   const previousData = cloneDataset(state.data);
   const previousRevision = state.serverRevision;
   const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
   state.data.plan_assignments = state.data.plan_assignments.filter((row) => row.plan_id !== activePlan.id || row.lab_code !== lab.lab_code);
   state.data.labs = state.data.labs.filter((row) => row.lab_code !== lab.lab_code);
   state.data = normalizeDataset(state.data);
-  const saveOk = await saveWithRollback(previousData, previousRevision, "删除实验室", "删除实验室失败");
+  const saveOk = await saveWithRollback(previousData, previousRevision, "删除用途单元", "删除用途单元失败");
   if (!saveOk) {
     state.data = normalizeDataset(previousData);
     state.serverRevision = previousRevision;
@@ -3112,7 +3622,7 @@ async function deleteSelectedBusinessLab() {
   }
   state.businessEditor.selectedSpaceId = selectedSpace.id;
   state.selectedSpaceId = selectedSpace.id;
-  refreshStateAndRender(`已删除实验室 ${lab.lab_name || lab.lab_code}。`, { stamp: false, forceMoveReset: true });
+  refreshStateAndRender(`已删除用途单元 ${lab.lab_name || lab.lab_code}。`, { stamp: false, forceMoveReset: true });
 }
 
 async function markSelectedBusinessSpaceUnavailable() {
@@ -3292,7 +3802,7 @@ function planById(id) {
 
 function updateDatasetSummary(text) {
   const assignedCount = state.data.plan_assignments.filter((row) => row.space_id).length;
-  updateStatus(`${text}，${state.data.buildings.length} 栋楼，${state.data.spaces.length} 个空间，${state.data.labs.length} 个实验室，${assignedCount} 条已落位分配。`);
+  updateStatus(`${text}，${state.data.buildings.length} 栋楼，${state.data.spaces.length} 个空间，${state.data.labs.length} 个用途单元，${assignedCount} 条已落位分配。`);
 }
 
 function updateStatus(text) {

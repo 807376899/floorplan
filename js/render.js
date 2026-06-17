@@ -86,7 +86,10 @@
   }
 
   function structureSvg(item, compact) {
-    const base = `<line x1="${item.x1}" y1="${item.y1}" x2="${item.x2}" y2="${item.y2}" stroke="#e8edf3" stroke-width="${item.width}" stroke-linecap="square"></line>`;
+    const isElevator = item.element_type === "elevator";
+    const baseStroke = isElevator ? "#d1d5db" : "#e8edf3";
+    const base = `<line x1="${item.x1}" y1="${item.y1}" x2="${item.x2}" y2="${item.y2}" stroke="${baseStroke}" stroke-width="${item.width}" stroke-linecap="square"></line>`;
+    if (isElevator) return `${base}${elevatorSvg(item, compact)}`;
     if (item.element_type !== "stairs") return base;
 
     const horizontal = item.y1 === item.y2;
@@ -102,6 +105,21 @@
     }
     const label = compact ? "" : `<text x="${(item.x1 + item.x2) / 2}" y="${(item.y1 + item.y2) / 2 + 4}" text-anchor="middle" font-size="12" fill="#475467">楼梯</text>`;
     return `${base}${steps.join("")}${label}`;
+  }
+
+  function elevatorSvg(item, compact) {
+    const cx = (item.x1 + item.x2) / 2;
+    const cy = (item.y1 + item.y2) / 2;
+    const size = compact ? Math.max(7, item.width * 1.3) : Math.max(22, item.width * 1.35);
+    const half = size / 2;
+    const strokeWidth = compact ? 0.8 : 1.8;
+    const label = compact ? "" : `<text x="${cx}" y="${cy + half + 14}" text-anchor="middle" font-size="12" fill="#475467">电梯</text>`;
+    return `<g class="structure-elevator" aria-label="电梯">
+      <rect x="${cx - half}" y="${cy - half}" width="${size}" height="${size}" rx="${compact ? 2 : 4}" fill="#f3f4f6" stroke="#6b7280" stroke-width="${strokeWidth}"></rect>
+      <path d="M ${cx - size * 0.18} ${cy - size * 0.18} L ${cx} ${cy - size * 0.34} L ${cx + size * 0.18} ${cy - size * 0.18}" fill="none" stroke="#6b7280" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path d="M ${cx - size * 0.18} ${cy + size * 0.18} L ${cx} ${cy + size * 0.34} L ${cx + size * 0.18} ${cy + size * 0.18}" fill="none" stroke="#6b7280" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"></path>
+      <line x1="${cx}" y1="${cy - size * 0.08}" x2="${cx}" y2="${cy + size * 0.08}" stroke="#9ca3af" stroke-width="${strokeWidth}"></line>
+    </g>${label}`;
   }
 
   function colorMap(labs) {

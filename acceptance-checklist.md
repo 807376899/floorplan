@@ -40,6 +40,7 @@
 - [ ] 中屏或窄屏下缩略图区位于顶部时，每组缩略图的 compare-title 在左、floor-thumbs 在右横向并列且高度一致；每栋楼缩略图只占一行，数量变多时通过同一个横向滚动条一起滚动，不换行、不被固定高度裁切，也不出现纵向滚轮隐藏。
 - [ ] 详细信息栏宽度足够时，行式信息可以矩阵排列；宽度不足时保持单列且文字不重叠。
 - [ ] `floor_segments.element_type = stairs` 的楼层骨架在主图和缩略图中显示楼梯标识，且不作为实验室可分配空间。
+- [ ] `floor_segments.element_type = elevator` 的楼层骨架在主图和缩略图中显示灰色独立电梯图标，且不作为用途单元可分配空间。
 - [ ] 已运行与本轮改动风险匹配的检查或测试；如未运行，必须说明原因。
 - [ ] 本轮迭代出现的长期需求已更新到 `codex-requirements.md` 和 `acceptance-checklist.md`。
 - [ ] 已将更新同步到 GitHub。
@@ -77,8 +78,9 @@
 - [ ] 除教学楼和楼层骨架信息维护之外，业务编辑可替代物理空间、实验室、方案分配三张原始表的日常编辑；这三张原始表不再作为可见编辑入口。
 - [ ] 业务编辑中实验室信息位于空间信息之前；未规划空间的实验室信息区只显示 `business-preview business-unplanned-card` 未规划卡片和可用操作。
 - [ ] “规划”和“改建”按钮位于业务编辑实验室信息区；详情信息栏不再显示规划和改建按钮。
-- [ ] admin 可维护学院、专业和实验室类型基础信息；专业按学院联动过滤，停用项不出现在业务编辑下拉候选中。
-- [ ] admin 可在教学楼、楼层骨架、学院、专业、实验室类型原始表删除未被引用的行；非 admin 不显示删除入口，被引用的行删除时给出明确阻止提示。
+- [ ] admin 通过数据编辑中的学院、专业和实验室类型原始表维护基础信息，顶部不再显示重复的“基础信息”独立弹窗入口；专业按学院联动过滤，停用项不出现在业务编辑下拉候选中。
+- [ ] admin 可在教学楼、楼层骨架、学院、专业、实验室类型原始表删除行；删除教学楼级联删除该楼骨架和空间，删除楼层骨架级联删除绑定空间，相关方案分配变为 `Invalid` 且实验室资料保留；非 admin 不显示删除入口，学院/专业/实验室类型被引用时在当前表格附近给出明确阻止提示。
+- [ ] admin 修改楼层骨架的教学楼编码、楼层编码或走廊段编码时，绑定空间同步迁移，分配引用刷新；目标骨架键已存在时保存被阻止，不会把原骨架复制成另一楼层的重复数据。
 - [ ] 数据编辑中的学院和专业信息只有 admin 可见可编辑；editor/viewer 不显示学院、专业原始表，也不显示业务编辑中的学院和专业字段。
 - [ ] 点击“规划”未规划空间时，所属学院使用下拉单选，并生成对应学院的“未规划实验室+门牌号”实验室和 `assigned` 分配。
 - [ ] 业务编辑中的类型、学院、专业均为下拉单选；从未规划空间选择实验室后，具备权限的用户可立即编辑实验室资料。
@@ -92,5 +94,30 @@
 - [ ] admin 可删除任意非基线方案中的空间；editor 只能删除自己创建且非基线方案中的空间；基线方案空间不可删除。
 - [ ] editor 只能在自己创建且非基线的方案中保存业务编辑；admin 可保存基线方案业务编辑。
 - [ ] viewer/游客不可保存业务编辑。
+- [ ] 新增教学楼、空间、楼层骨架和用途单元时按配置化编号规则生成编号；单门空间后门牌为空时使用前门牌生成后两位编号。
+- [ ] admin 显式执行“补全/刷新编号”后才更新已有教学楼、楼层骨架或用途单元编号；刷新教学楼或楼层骨架编号时相关空间和分配引用同步迁移。
+- [ ] 空间只能绑定到走廊骨架；楼梯、电梯和其他骨架不能作为空间落位骨架。
+- [ ] `labs` 底层表可作为用途单元承载实验室、教室、办公室、公共空间等类型；旧 `LAB...` 编号兼容，新建用途单元使用 `UNIT...` 编号。
 - [ ] 主图放大时，`.floorplan` 和 `.floorplan-stage` 不会在垂直方向无意义撑高；只有真实超出时出现滚动。
 - [ ] 业务编辑和主要工作区不显示渐变背景，状态配色清晰区分已建设、已规划、未规划和不可用。
+## Numbering Acceptance
+
+- [ ] Admin can run explicit numbering normalization after upload; a snapshot is created before the write.
+- [ ] Normalization preserves stable row `id` values and migrates building, floor segment, space, and plan assignment references instead of creating duplicate old/new rows.
+- [ ] If a building code is normalized, bound floor segments and spaces use the normalized building code after refresh and save.
+- [ ] Active plans and all non-deleted plan copies receive globally unique `PLAN000001` style codes with no Chinese text.
+- [ ] Use types receive `USE0001` style codes with no Chinese text.
+- [ ] Use types are displayed and saved as a reusable dictionary by `type_name`; repeated "实验室" or "教室" rows collapse to one active row each, and duplicate rows can be removed without being blocked by references to the remaining canonical row.
+- [ ] Admin manage plans lists both active dataset plans and non-deleted plan copies, and rename/delete/baseline actions target the correct active plan code or copy id.
+- [ ] Deleting plans is blocked when it would leave the system with no manageable plan.
+- [ ] Reopening visible data after normalization does not show the stale pre-normalization building row from plan-copy payloads.
+- [ ] Saving active data after viewing a merged copy dataset does not write copy-specific buildings, floor segments, spaces, labs, plans, or assignments into `active_dataset`.
+- [ ] Admin manage plans lists every non-deleted plan copy even after its `plan_code` is normalized to `PLAN...`, and delete/rename/baseline actions still target the correct copy id.
+
+## Admin Correction Acceptance
+
+- [ ] Existing spaces in business editing show door/code summary fields and no longer show the old "refresh space code on save" checkbox.
+- [ ] Admin can open an explicit door/code correction panel, edit `front_door` and `rear_door`, see a live `space_code` preview, and save the corrected code only through that action.
+- [ ] When the correction panel leaves `rear_door` blank, the generated space code uses the final two digits from `front_door` for both door positions.
+- [ ] Floor skeleton raw editing exposes clear controls for adding stairs and elevators, plus guidance that only corridors can bind spaces.
+- [ ] Clicking add elevator creates an editable `floor_segments` row with `element_type = elevator` and an `EV...` segment code without saving until the admin applies changes.

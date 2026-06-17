@@ -6,6 +6,25 @@
   const DETAIL_SCALE = 28;
   const THUMB_SCALE = 6;
   const COLORS = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#0891b2", "#be123c", "#4d7c0f"];
+  const NUMBERING_RULES = {
+    campusCodes: [
+      { code: "01", names: ["下沙校区", "下沙"] },
+      { code: "02", names: ["绍兴校区", "绍兴"] },
+    ],
+    fallbackCampusCode: "00",
+    buildingPrefix: "B",
+    spacePrefix: "0",
+    unitPrefix: "UNIT",
+    planPrefix: "PLAN",
+    useTypePrefix: "USE",
+    segmentPrefixes: {
+      eastWest: "EW",
+      northSouth: "NS",
+      stairs: "ST",
+      elevator: "EV",
+      other: "OT",
+    },
+  };
 
   const DATASETS = [
     {
@@ -58,14 +77,14 @@
     },
     {
       key: "labs",
-      label: "实验室",
+      label: "用途单元",
       sheet: "labs",
       columns: [
-        ["lab_code", "实验室编码"],
-        ["lab_name", "实验室名称"],
+        ["lab_code", "用途编码"],
+        ["lab_name", "用途名称"],
         ["college", "所属学院"],
         ["major", "所属专业"],
-        ["lab_type", "实验室类型"],
+        ["lab_type", "用途类型"],
         ["director", "负责人"],
         ["seat_count", "座位数"],
         ["computer_count", "电脑数"],
@@ -100,7 +119,7 @@
     },
     {
       key: "lab_types",
-      label: "实验室类型",
+      label: "用途类型",
       sheet: "lab_types",
       columns: [
         ["type_code", "类型编码"],
@@ -179,15 +198,15 @@
       notes: ["notes", "备注"],
     },
     labs: {
-      lab_code: ["lab_code", "lab_id", "id", "实验室编码"],
-      lab_name: ["lab_name", "实验室名称"],
+      lab_code: ["lab_code", "lab_id", "id", "用途编码", "实验室编码"],
+      lab_name: ["lab_name", "用途名称", "实验室名称"],
       college: ["college", "所属学院"],
       major: ["major", "所属专业"],
-      lab_type: ["lab_type", "实验室类型"],
+      lab_type: ["lab_type", "用途类型", "实验室类型"],
       director: ["director", "负责人", "实验室负责人"],
       seat_count: ["seat_count", "座位数"],
       computer_count: ["computer_count", "电脑数", "电脑数量"],
-      status: ["status", "状态", "实验室状态"],
+      status: ["status", "状态", "用途状态", "实验室状态"],
       notes: ["notes", "备注"],
     },
     colleges: {
@@ -207,7 +226,7 @@
     },
     lab_types: {
       type_code: ["type_code", "类型编码"],
-      type_name: ["type_name", "实验室类型", "类型名称", "lab_type"],
+      type_name: ["type_name", "用途类型", "实验室类型", "类型名称", "lab_type"],
       sort_order: ["sort_order", "排序"],
       status: ["status", "状态"],
       notes: ["notes", "备注"],
@@ -224,7 +243,7 @@
     },
     plan_assignments: {
       plan_code: ["plan_code", "plan_id", "方案编码"],
-      lab_code: ["lab_code", "lab_id", "实验室编码"],
+      lab_code: ["lab_code", "lab_id", "用途编码", "实验室编码"],
       space_code: ["space_code", "space_id", "当前空间编码"],
       previous_space_code: ["previous_space_code", "搬迁前空间编码"],
       assignment_status: ["assignment_status", "分配状态"],
@@ -287,7 +306,10 @@
 
   function normalizeElementType(value) {
     const raw = String(value ?? "").trim().toLowerCase();
-    return ["stairs", "楼梯"].includes(raw) ? "stairs" : "corridor";
+    if (["stairs", "stair", "楼梯"].includes(raw)) return "stairs";
+    if (["elevator", "lift", "ev", "电梯"].includes(raw)) return "elevator";
+    if (["other", "ot", "其他"].includes(raw)) return "other";
+    return "corridor";
   }
 
   function normalizeAssignmentStatus(value, hasSpace = false) {
@@ -301,6 +323,108 @@
     const raw = String(value ?? "").trim().toLowerCase();
     if (["unavailable", "不可用", "disabled", "inactive"].includes(raw)) return "unavailable";
     return "active";
+  }
+
+  function pad2(value) {
+    return String(Math.max(0, Math.trunc(numberValue(value, 0)))).padStart(2, "0").slice(-2);
+  }
+
+  function campusCodeFromName(campusName) {
+    const raw = String(campusName ?? "").trim();
+    const match = NUMBERING_RULES.campusCodes.find((item) => item.names.some((name) => raw.includes(name)));
+    return match?.code || NUMBERING_RULES.fallbackCampusCode;
+  }
+
+  function campusCodeForBuilding(building) {
+    const mapped = campusCodeFromName(building?.campus_zone);
+    if (mapped !== NUMBERING_RULES.fallbackCampusCode) return mapped;
+    const codeMatch = String(building?.building_code || "").trim().match(/^B(\d{2})\d{2}$/i);
+    return codeMatch?.[1] || mapped;
+  }
+
+  function buildingNumberCode(building) {
+    if (building && Number(building.building_number) > 0) return pad2(building.building_number);
+    const codeMatch = String(building?.building_code || "").trim().match(/^B(?:\d{2})?(\d{2})$/i);
+    return codeMatch?.[1] || pad2(0);
+  }
+
+  function floorCodeForNumbering(floorCode) {
+    const raw = String(floorCode ?? "").trim().toUpperCase();
+    if (/^B\d$/.test(raw)) return raw;
+    const parsed = parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed < 0) return `B${Math.min(9, Math.abs(parsed))}`;
+    if (Number.isFinite(parsed)) return pad2(parsed);
+    const digitMatch = raw.match(/\d+/);
+    return digitMatch ? pad2(digitMatch[0]) : "00";
+  }
+
+  function doorCode(doorText) {
+    const digits = String(doorText ?? "").replace(/\D/g, "");
+    if (!digits) return "";
+    return digits.slice(-2).padStart(2, "0");
+  }
+
+  function generateBuildingCode(building) {
+    return `${NUMBERING_RULES.buildingPrefix}${campusCodeForBuilding(building)}${buildingNumberCode(building)}`;
+  }
+
+  function generateSpaceCode(space, building) {
+    const frontDoor = doorCode(space?.front_door);
+    if (!frontDoor) return "";
+    const rearDoor = doorCode(space?.rear_door) || frontDoor;
+    return `${NUMBERING_RULES.spacePrefix}${campusCodeForBuilding(building)}${buildingNumberCode(building)}${floorCodeForNumbering(space?.floor_code)}${frontDoor}${rearDoor}`;
+  }
+
+  function segmentElementPrefix(segment) {
+    const type = normalizeElementType(segment?.element_type);
+    if (type === "stairs") return NUMBERING_RULES.segmentPrefixes.stairs;
+    if (type === "elevator") return NUMBERING_RULES.segmentPrefixes.elevator;
+    if (type === "other") return NUMBERING_RULES.segmentPrefixes.other;
+    const dx = Math.abs(numberValue(segment?.end_x_m, 0) - numberValue(segment?.start_x_m, 0));
+    const dy = Math.abs(numberValue(segment?.end_y_m, 0) - numberValue(segment?.start_y_m, 0));
+    return dx >= dy ? NUMBERING_RULES.segmentPrefixes.eastWest : NUMBERING_RULES.segmentPrefixes.northSouth;
+  }
+
+  function generateSegmentCode(segment, building, existingSegments = []) {
+    const prefix = `${segmentElementPrefix(segment)}${campusCodeForBuilding(building)}${buildingNumberCode(building)}${floorCodeForNumbering(segment?.floor_code)}`;
+    const maxSequence = existingSegments.reduce((max, item) => {
+      const code = String(item.segment_code || "");
+      if (!code.startsWith(prefix)) return max;
+      const sequence = parseInt(code.slice(prefix.length), 10);
+      return Number.isFinite(sequence) ? Math.max(max, sequence) : max;
+    }, 0);
+    const nextSequence = maxSequence + 1;
+    return nextSequence > 99 ? "" : `${prefix}${String(nextSequence).padStart(2, "0")}`;
+  }
+
+  function generateUnitCode(labs = []) {
+    const prefix = NUMBERING_RULES.unitPrefix;
+    const maxSequence = labs.reduce((max, lab) => {
+      const match = String(lab.lab_code || "").match(new RegExp(`^${prefix}(\\d+)$`));
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0);
+    const nextSequence = maxSequence + 1;
+    return `${prefix}${String(nextSequence).padStart(6, "0")}`;
+  }
+
+  function generateSequentialCode(rows = [], field, prefix, width = 6) {
+    const maxSequence = rows.reduce((max, row) => {
+      const match = String(row?.[field] || "").match(new RegExp(`^${prefix}(\\d+)$`, "i"));
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0);
+    return `${prefix}${String(maxSequence + 1).padStart(width, "0")}`;
+  }
+
+  function generatePlanCode(plans = []) {
+    return generateSequentialCode(plans, "plan_code", NUMBERING_RULES.planPrefix, 6);
+  }
+
+  function generateUseTypeCode(types = []) {
+    return generateSequentialCode(types, "type_code", NUMBERING_RULES.useTypePrefix, 4);
+  }
+
+  function isAssignableSegment(segment) {
+    return normalizeElementType(segment?.element_type) === "corridor";
   }
 
   function csv(value) {
@@ -355,10 +479,11 @@
 
   function normalizeBuilding(row) {
     const now = isoNow();
+    const code = String(row.building_code || "").trim();
     return {
-      id: row.building_code || `building-${Date.now()}`,
-      building_code: row.building_code,
-      building_name: row.building_name || row.building_code,
+      id: row.id || code || `building-${Date.now()}`,
+      building_code: code,
+      building_name: row.building_name || code,
       campus_zone: row.campus_zone || "未分区",
       building_number: numberValue(row.building_number, 0),
       notes: row.notes || "",
@@ -369,11 +494,14 @@
 
   function normalizeSegment(row) {
     const now = isoNow();
+    const buildingCode = String(row.building_code || "").trim();
+    const floorCode = String(row.floor_code || "").trim();
+    const segmentCode = String(row.segment_code || "").trim();
     return {
-      id: `${row.building_code}__${row.floor_code}__${row.segment_code}`,
-      building_code: row.building_code,
-      floor_code: row.floor_code,
-      segment_code: row.segment_code,
+      id: row.id || `${buildingCode}__${floorCode}__${segmentCode}`,
+      building_code: buildingCode,
+      floor_code: floorCode,
+      segment_code: segmentCode,
       start_x_m: numberValue(row.start_x_m, 0),
       start_y_m: numberValue(row.start_y_m, 0),
       end_x_m: numberValue(row.end_x_m, 0),
@@ -390,12 +518,15 @@
     const now = isoNow();
     const length = numberValue(row.length_m, 8);
     const width = numberValue(row.width_m, 6);
+    const buildingCode = String(row.building_code || "").trim();
+    const floorCode = String(row.floor_code || "").trim();
+    const spaceCode = String(row.space_code || "").trim();
     return {
-      id: `${row.building_code}__${row.floor_code}__${row.space_code}`,
-      space_code: row.space_code,
-      building_code: row.building_code,
-      floor_code: row.floor_code,
-      segment_code: row.segment_code,
+      id: row.id || `${buildingCode}__${floorCode}__${spaceCode}`,
+      space_code: spaceCode,
+      building_code: buildingCode,
+      floor_code: floorCode,
+      segment_code: String(row.segment_code || "").trim(),
       offset_m: numberValue(row.offset_m, 0),
       side: normalizeSide(row.side),
       front_door: row.front_door || row.space_code,
@@ -413,10 +544,11 @@
 
   function normalizeLab(row) {
     const now = isoNow();
+    const code = String(row.lab_code || "").trim();
     return {
-      id: row.lab_code || `lab-${Date.now()}`,
-      lab_code: row.lab_code,
-      lab_name: row.lab_name || row.lab_code,
+      id: row.id || code || `lab-${Date.now()}`,
+      lab_code: code,
+      lab_name: row.lab_name || code,
       college: row.college || "未设置学院",
       major: row.major || "",
       lab_type: row.lab_type === undefined ? "教学实验室" : row.lab_type,
@@ -478,9 +610,10 @@
   function normalizeLabType(row) {
     const now = isoNow();
     const name = String(row.type_name || row.lab_type || row.type_code || "").trim();
-    const code = normalizeDictionaryCode(row.type_code || name, "TYPE");
+    const rawCode = String(row.type_code || "").trim();
+    const code = /^[A-Z][A-Z0-9_-]*$/i.test(rawCode) && !/[\u3400-\u9fff]/.test(rawCode) ? rawCode.toUpperCase() : "";
     return {
-      id: code,
+      id: row.id || code || normalizeDictionaryCode(name, "TYPE"),
       type_code: code,
       type_name: name || code,
       sort_order: numberValue(row.sort_order, 0),
@@ -489,6 +622,77 @@
       created_at: row.created_at || now,
       updated_at: now,
     };
+  }
+
+  function canonicalUseTypeSeed(name) {
+    const trimmed = String(name || "").trim();
+    if (trimmed === "实验室") return { type_code: "USE0001", sort_order: 1 };
+    if (trimmed === "教室") return { type_code: "USE0002", sort_order: 2 };
+    return null;
+  }
+
+  function canonicalizeLabTypes(rows, labs = []) {
+    const normalized = (rows || []).map(normalizeLabType).filter((row) => row.type_name);
+    for (const name of unique((labs || []).map((row) => String(row.lab_type || "").trim())).filter(Boolean)) {
+      if (!normalized.some((row) => row.type_name === name)) {
+        normalized.push(normalizeLabType({ type_name: name, sort_order: normalized.length + 1, status: "active" }));
+      }
+    }
+    for (const name of ["实验室", "教室"]) {
+      if (!normalized.some((row) => row.type_name === name)) {
+        normalized.push(normalizeLabType({ type_name: name, sort_order: normalized.length + 1, status: "active" }));
+      }
+    }
+    const byName = new Map();
+    for (const row of normalized) {
+      const seed = canonicalUseTypeSeed(row.type_name);
+      const existing = byName.get(row.type_name);
+      if (!existing) {
+        byName.set(row.type_name, {
+          ...row,
+          id: row.id || row.type_code || normalizeDictionaryCode(row.type_name, "TYPE"),
+          type_code: seed?.type_code || row.type_code,
+          sort_order: seed?.sort_order || row.sort_order || 0,
+          status: seed ? "active" : row.status,
+        });
+        continue;
+      }
+      const nextSeed = seed || canonicalUseTypeSeed(existing.type_name);
+      byName.set(row.type_name, {
+        ...existing,
+        id: existing.id || row.id,
+        type_code: nextSeed?.type_code || existing.type_code || row.type_code,
+        sort_order: nextSeed?.sort_order || Math.min(existing.sort_order || row.sort_order || 0, row.sort_order || existing.sort_order || 0),
+        status: existing.status === "active" || row.status === "active" ? "active" : existing.status,
+        notes: existing.notes || row.notes || "",
+      });
+    }
+    const reserved = new Set(["USE0001", "USE0002"]);
+    const used = new Set();
+    let nextIndex = 3;
+    return [...byName.values()].sort((a, b) => {
+      const seedA = canonicalUseTypeSeed(a.type_name);
+      const seedB = canonicalUseTypeSeed(b.type_name);
+      return (seedA?.sort_order || a.sort_order || 999) - (seedB?.sort_order || b.sort_order || 999)
+        || compare(a.type_name, b.type_name);
+    }).map((row) => {
+      const seed = canonicalUseTypeSeed(row.type_name);
+      let code = seed?.type_code || (/^USE\d{4}$/i.test(row.type_code) && !reserved.has(row.type_code) ? row.type_code.toUpperCase() : "");
+      if (!code || used.has(code)) {
+        do {
+          code = `USE${String(nextIndex).padStart(4, "0")}`;
+          nextIndex += 1;
+        } while (used.has(code) || reserved.has(code));
+      }
+      used.add(code);
+      return normalizeLabType({
+        ...row,
+        id: seed?.type_code || row.id || code,
+        type_code: code,
+        sort_order: seed?.sort_order || row.sort_order || used.size,
+        status: row.status || "active",
+      });
+    });
   }
 
   function deriveDictionaries(labs, colleges, majors, labTypes) {
@@ -514,16 +718,18 @@
     return {
       colleges: dedupeBy(collegeRows, "id").sort(byOrderThenName("college_name")),
       majors: dedupeBy(majorRows, "id").sort(byOrderThenName("major_name")),
-      lab_types: dedupeBy(typeRows, "id").sort(byOrderThenName("type_name")),
+      lab_types: canonicalizeLabTypes(typeRows, labs).sort(byOrderThenName("type_name")),
     };
   }
 
   function normalizePlan(row) {
     const now = isoNow();
+    const code = String(row.plan_code || "").trim();
     return {
-      id: row.plan_code || `plan-${Date.now()}`,
-      plan_code: row.plan_code,
-      plan_name: row.plan_name || row.plan_code,
+      id: row.id || code || `plan-${Date.now()}`,
+      copy_id: row.copy_id || row.copyId || "",
+      plan_code: code,
+      plan_name: row.plan_name || code,
       plan_type: row.plan_type || "draft",
       source_plan_code: row.source_plan_code || "",
       source_plan_id: row.source_plan_id || "",
@@ -578,7 +784,11 @@
 
   function projectRow(key, row) {
     const aliases = KEY_ALIASES[key];
-    return Object.fromEntries(Object.keys(aliases).map((field) => [field, read(row, aliases[field])]));
+    return {
+      ...Object.fromEntries(Object.keys(aliases).map((field) => [field, read(row, aliases[field])])),
+      id: row?.id || "",
+      copy_id: row?.copy_id || row?.copyId || "",
+    };
   }
 
   function normalizeDataset(raw) {
@@ -698,8 +908,8 @@
       ["使用说明", "整套数据只需维护这一个 Excel 文件。"],
       ["导入方式", "上传本工作簿即可，系统会自动读取各工作表。"],
       ["工作表", "buildings, floor_segments, spaces, labs, colleges, majors, lab_types, plans, plan_assignments"],
-      ["字段约定", "编码字段保持唯一；side 使用 north/south/east/west；element_type 使用 corridor/stairs。"],
-      ["方案分配", "plan_assignments 用 plan_code + lab_code 表示一条实验室落位关系。"],
+      ["字段约定", "编码字段保持唯一；side 使用 north/south/east/west；element_type 使用 corridor/stairs/elevator/other。"],
+      ["方案分配", "plan_assignments 用 plan_code + lab_code 表示一条用途单元落位关系。"],
     ];
   }
 
@@ -709,14 +919,15 @@
       floor_segments: [
         { building_code: "B01", floor_code: "1", segment_code: "main", start_x_m: 0, start_y_m: 0, end_x_m: 28, end_y_m: 0, width_m: 2.4, element_type: "corridor", notes: "主走廊" },
         { building_code: "B01", floor_code: "1", segment_code: "stairs-east", start_x_m: 28, start_y_m: 4, end_x_m: 28, end_y_m: 10, width_m: 4, element_type: "stairs", notes: "东侧楼梯" },
+        { building_code: "B01", floor_code: "1", segment_code: "elevator-west", start_x_m: 2, start_y_m: 4, end_x_m: 2, end_y_m: 8, width_m: 4, element_type: "elevator", notes: "西侧电梯" },
       ],
       spaces: [{ space_code: "101", building_code: "B01", floor_code: "1", segment_code: "main", offset_m: 0, side: "north", front_door: "101", rear_door: "", length_m: 9.6, width_m: 7.2, network_segment: "192.168.1.0/24", current_status: "active" }],
-      labs: [{ lab_code: "LAB001", lab_name: "计算机组成原理实验室", college: "计算机学院", major: "计算机科学", lab_type: "教学实验室", director: "李老师", seat_count: 48, computer_count: 48, status: "active", notes: "" }],
+      labs: [{ lab_code: "UNIT000001", lab_name: "计算机组成原理实验室", college: "计算机学院", major: "计算机科学", lab_type: "教学实验室", director: "李老师", seat_count: 48, computer_count: 48, status: "active", notes: "" }],
       colleges: [{ college_code: "计算机学院", college_name: "计算机学院", sort_order: 1, status: "active", notes: "" }],
       majors: [{ major_code: "计算机学院-计算机科学", major_name: "计算机科学", college_code: "计算机学院", sort_order: 1, status: "active", notes: "" }],
       lab_types: [{ type_code: "教学实验室", type_name: "教学实验室", sort_order: 1, status: "active", notes: "" }],
       plans: defaultPlans(),
-      plan_assignments: [{ plan_code: "baseline", lab_code: "LAB001", space_code: "101", previous_space_code: "", assignment_status: "assigned", move_note: "", effective_from: "" }],
+      plan_assignments: [{ plan_code: "baseline", lab_code: "UNIT000001", space_code: "101", previous_space_code: "", assignment_status: "assigned", move_note: "", effective_from: "" }],
     }[key] || [];
   }
 
@@ -727,6 +938,7 @@
     DETAIL_SCALE,
     THUMB_SCALE,
     COLORS,
+    NUMBERING_RULES,
     DATASETS,
     emptyDataset,
     unique,
@@ -748,10 +960,19 @@
     normalizeCollege,
     normalizeMajor,
     normalizeLabType,
+    canonicalizeLabTypes,
     normalizePlan,
     normalizeAssignment,
     normalizeSide,
     normalizeElementType,
+    generateBuildingCode,
+    generateSpaceCode,
+    generateSegmentCode,
+    generateUnitCode,
+    generatePlanCode,
+    generateUseTypeCode,
+    segmentElementPrefix,
+    isAssignableSegment,
     relationMaps,
     templateInstructions,
     templateRows,

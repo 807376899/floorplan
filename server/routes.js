@@ -83,6 +83,35 @@ function createRouteApi(services) {
       return sendJson(res, 200, { plans: planCopies.listManageablePlans(context.user) });
     }
 
+    const activeManagedPlanMatch = pathname.match(/^\/api\/manage\/active-plans\/([^/]+)$/);
+    if (req.method === "GET" && activeManagedPlanMatch) {
+      auth.requireRole(context.user, ["admin"]);
+      return sendJson(res, 200, planCopies.getActiveManagedPlan(decodeURIComponent(activeManagedPlanMatch[1]), context.user));
+    }
+
+    if (req.method === "PATCH" && activeManagedPlanMatch) {
+      auth.requireRole(context.user, ["admin"]);
+      const body = await readJsonBody(req);
+      planCopies.updateActiveManagedPlan(decodeURIComponent(activeManagedPlanMatch[1]), body, context.user);
+      audit.writeAudit("active_plan_updated", context.user.username, context.ip, { planCode: decodeURIComponent(activeManagedPlanMatch[1]) });
+      return sendVisibleDataset(res, context, services);
+    }
+
+    if (req.method === "DELETE" && activeManagedPlanMatch) {
+      auth.requireRole(context.user, ["admin"]);
+      planCopies.deleteActiveManagedPlan(decodeURIComponent(activeManagedPlanMatch[1]), context.user);
+      audit.writeAudit("active_plan_deleted", context.user.username, context.ip, { planCode: decodeURIComponent(activeManagedPlanMatch[1]) });
+      return sendVisibleDataset(res, context, services);
+    }
+
+    const activeBaselineMatch = pathname.match(/^\/api\/manage\/active-plans\/([^/]+)\/baseline$/);
+    if (req.method === "POST" && activeBaselineMatch) {
+      auth.requireRole(context.user, ["admin"]);
+      planCopies.setActiveManagedPlanBaseline(decodeURIComponent(activeBaselineMatch[1]), context.user);
+      audit.writeAudit("active_plan_baselined", context.user.username, context.ip, { planCode: decodeURIComponent(activeBaselineMatch[1]) });
+      return sendVisibleDataset(res, context, services);
+    }
+
     const managedPlanMatch = pathname.match(/^\/api\/manage\/plans\/(\d+)$/);
     if (req.method === "GET" && managedPlanMatch) {
       auth.requireRole(context.user, ["admin"]);
@@ -162,6 +191,11 @@ function createRouteApi(services) {
       return handleRepairDatasetText(res, context, services);
     }
 
+    if (req.method === "POST" && pathname === "/api/dataset/normalize-numbering") {
+      auth.requireRole(context.user, ["admin"]);
+      return handleNormalizeNumbering(res, context, services);
+    }
+
     if (req.method === "POST" && pathname === "/api/imports") {
       auth.requireRole(context.user, ["admin"]);
       const body = await readJsonBody(req);
@@ -210,6 +244,21 @@ function createRouteApi(services) {
   };
 }
 
+function handleNormalizeNumbering(res, context, services) {
+  const active = services.dataset.getActiveDataset();
+  services.dataset.writeRepairBackup("numbering-repair", {
+    createdAt: new Date().toISOString(),
+    active,
+    planCopies: services.planCopies.listBackupRows(),
+  });
+  services.snapshots.createSnapshot("pre_numbering_normalize", `编号规范化前快照 #${active.revision}`, active.dataset, active.revision, context.user.username, 0);
+  const result = services.planCopies.normalizeAllNumbering(context.user);
+  services.audit.writeAudit("dataset_numbering_normalized", context.user.username, context.ip, {
+    revision: result.revision,
+  });
+  return sendVisibleDataset(res, context, services, 200, { ok: true, revision: result.revision });
+}
+
 function sendVisibleDataset(res, context, services, statusCode = 200, extra = {}) {
   const active = services.planCopies.buildVisibleDataset(context.user);
   return sendJson(res, statusCode, {
@@ -224,8 +273,9 @@ function sendVisibleDataset(res, context, services, statusCode = 200, extra = {}
 async function handleSaveDataset(req, res, context, services) {
   const body = await readJsonBody(req);
   const active = services.dataset.getActiveDataset();
-  const activeNormalized = services.dataset.normalizeIncomingDataset(stripPlanCopies(active.dataset));
-  const incomingNormalized = services.dataset.normalizeIncomingDataset(stripPlanCopies(body.dataset));
+  const copyIndex = services.planCopies.copyPayloadIndex();
+  const activeNormalized = services.dataset.normalizeIncomingDataset(stripPlanCopies(active.dataset, active.dataset, copyIndex));
+  const incomingNormalized = services.dataset.normalizeIncomingDataset(stripPlanCopies(body.dataset, active.dataset, copyIndex));
   const normalized = services.dataset.mergeTextSafeDataset(activeNormalized, incomingNormalized);
   const validation = services.dataset.validateDataset(normalized);
   if (!validation.ok) {
@@ -274,13 +324,45 @@ async function handleSaveDataset(req, res, context, services) {
   }
 }
 
-function stripPlanCopies(rawDataset) {
+function stripPlanCopies(rawDataset, activeDataset = {}, copyIndex = null) {
   const dataset = { ...(rawDataset || {}) };
+  const activeIds = {
+    buildings: new Set((activeDataset.buildings || []).map((row) => String(row.id || ""))),
+    floor_segments: new Set((activeDataset.floor_segments || []).map((row) => String(row.id || ""))),
+    spaces: new Set((activeDataset.spaces || []).map((row) => String(row.id || ""))),
+    labs: new Set((activeDataset.labs || []).map((row) => String(row.id || ""))),
+    lab_types: new Set((activeDataset.lab_types || []).map((row) => String(row.id || ""))),
+    colleges: new Set((activeDataset.colleges || []).map((row) => String(row.id || ""))),
+    majors: new Set((activeDataset.majors || []).map((row) => String(row.id || ""))),
+    file_assets: new Set((activeDataset.file_assets || []).map((row) => String(row.id || ""))),
+  };
   const copyCodes = new Set((dataset.plans || [])
     .map((plan) => String(plan.plan_code || ""))
     .filter((code) => code.startsWith("copy-")));
-  dataset.plans = (dataset.plans || []).filter((plan) => !copyCodes.has(String(plan.plan_code || "")));
+  for (const code of copyIndex?.planCodes || []) copyCodes.add(String(code));
+  const copyPlanIds = new Set([...(copyIndex?.planIds || [])].map(String));
+  dataset.plans = (dataset.plans || []).filter((plan) => {
+    const copyId = String(plan.copy_id || plan.copyId || "").trim();
+    const code = String(plan.plan_code || "").trim();
+    const id = String(plan.id || "").trim();
+    return !copyId && !copyCodes.has(code) && !copyPlanIds.has(id);
+  });
   dataset.plan_assignments = (dataset.plan_assignments || []).filter((assignment) => !copyCodes.has(String(assignment.plan_code || "")));
+  const filterCopyRows = (key, ids) => {
+    const copyIds = new Set([...(ids || [])].map(String));
+    dataset[key] = (dataset[key] || []).filter((row) => {
+      const id = String(row.id || "").trim();
+      return !id || !copyIds.has(id) || activeIds[key]?.has(id);
+    });
+  };
+  filterCopyRows("buildings", copyIndex?.buildingIds);
+  filterCopyRows("floor_segments", copyIndex?.floorSegmentIds);
+  filterCopyRows("spaces", copyIndex?.spaceIds);
+  filterCopyRows("labs", copyIndex?.labIds);
+  filterCopyRows("lab_types", copyIndex?.labTypeIds);
+  filterCopyRows("colleges", copyIndex?.collegeIds);
+  filterCopyRows("majors", copyIndex?.majorIds);
+  filterCopyRows("file_assets", copyIndex?.fileAssetIds);
   return dataset;
 }
 

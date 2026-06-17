@@ -96,6 +96,59 @@ function createDatasetService(db, config, audit) {
     return "active";
   }
 
+  function numberValue(value, fallback = 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  function padNumber(value, width) {
+    return String(Math.max(0, Math.trunc(numberValue(value, 0)))).padStart(width, "0").slice(-width);
+  }
+
+  function isAsciiCode(value) {
+    return /^[A-Z][A-Z0-9_-]*$/i.test(String(value || "").trim()) && !containsCjk(value);
+  }
+
+  function campusCodeFromName(campusName) {
+    const raw = String(campusName || "").trim();
+    if (raw.includes("下沙")) return "01";
+    if (raw.includes("绍兴")) return "02";
+    return "00";
+  }
+
+  function campusCodeForBuilding(building) {
+    const mapped = campusCodeFromName(building?.campus_zone);
+    if (mapped !== "00") return mapped;
+    const match = String(building?.building_code || "").trim().match(/^B(\d{2})\d{2}$/i);
+    return match?.[1] || mapped;
+  }
+
+  function buildingNumberCode(building) {
+    if (Number(building?.building_number) > 0) return padNumber(building.building_number, 2);
+    const match = String(building?.building_code || "").trim().match(/^B(?:\d{2})?(\d{2})$/i);
+    return match?.[1] || "00";
+  }
+
+  function generateBuildingCode(building) {
+    return `B${campusCodeForBuilding(building)}${buildingNumberCode(building)}`;
+  }
+
+  function generateSequentialCode(rows, field, prefix, width) {
+    const max = (rows || []).reduce((highest, row) => {
+      const match = String(row?.[field] || "").trim().match(new RegExp(`^${prefix}(\\d+)$`, "i"));
+      return match ? Math.max(highest, Number(match[1])) : highest;
+    }, 0);
+    return `${prefix}${String(max + 1).padStart(width, "0")}`;
+  }
+
+  function normalizeElementType(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (["stairs", "stair", "楼梯"].includes(raw)) return "stairs";
+    if (["elevator", "lift", "ev", "电梯"].includes(raw)) return "elevator";
+    if (["other", "ot", "其他"].includes(raw)) return "other";
+    return "corridor";
+  }
+
   function unique(values) {
     return [...new Set(values.filter(Boolean))];
   }
@@ -143,16 +196,91 @@ function createDatasetService(db, config, audit) {
 
   function normalizeLabTypeRow(row) {
     const name = String(row.type_name || row.lab_type || row.type_code || "").trim();
-    const code = normalizeDictionaryCode(row.type_code || name, "TYPE");
+    const rawCode = String(row.type_code || "").trim();
+    const code = isAsciiCode(rawCode) ? rawCode.toUpperCase() : "";
     return {
       ...row,
-      id: row.id || code,
+      id: row.id || code || normalizeDictionaryCode(name, "TYPE"),
       type_code: code,
       type_name: name || code,
       sort_order: Number(row.sort_order || 0),
       status: activeStatus(row.status),
       notes: String(row.notes || ""),
     };
+  }
+
+  function canonicalUseTypeSeed(name) {
+    const trimmed = String(name || "").trim();
+    if (trimmed === "实验室") return { type_code: "USE0001", sort_order: 1 };
+    if (trimmed === "教室") return { type_code: "USE0002", sort_order: 2 };
+    return null;
+  }
+
+  function canonicalizeLabTypes(rows, labs = []) {
+    const normalized = (rows || []).map(normalizeLabTypeRow).filter((row) => row.type_name);
+    for (const name of unique((labs || []).map((row) => String(row.lab_type || "").trim())).filter(Boolean)) {
+      if (!normalized.some((row) => row.type_name === name)) {
+        normalized.push(normalizeLabTypeRow({ type_name: name, sort_order: normalized.length + 1, status: "active" }));
+      }
+    }
+    for (const name of ["实验室", "教室"]) {
+      if (!normalized.some((row) => row.type_name === name)) {
+        normalized.push(normalizeLabTypeRow({ type_name: name, sort_order: normalized.length + 1, status: "active" }));
+      }
+    }
+
+    const byName = new Map();
+    for (const row of normalized) {
+      const seed = canonicalUseTypeSeed(row.type_name);
+      const existing = byName.get(row.type_name);
+      if (!existing) {
+        byName.set(row.type_name, {
+          ...row,
+          id: row.id || row.type_code || normalizeDictionaryCode(row.type_name, "TYPE"),
+          type_code: seed?.type_code || row.type_code,
+          sort_order: seed?.sort_order || row.sort_order || 0,
+          status: seed ? "active" : row.status,
+        });
+        continue;
+      }
+      const nextSeed = seed || canonicalUseTypeSeed(existing.type_name);
+      byName.set(row.type_name, {
+        ...existing,
+        id: existing.id || row.id,
+        type_code: nextSeed?.type_code || existing.type_code || row.type_code,
+        sort_order: nextSeed?.sort_order || Math.min(existing.sort_order || row.sort_order || 0, row.sort_order || existing.sort_order || 0),
+        status: existing.status === "active" || row.status === "active" ? "active" : existing.status,
+        notes: existing.notes || row.notes || "",
+      });
+    }
+
+    const reserved = new Set(["USE0001", "USE0002"]);
+    const used = new Set();
+    let nextIndex = 3;
+    const sorted = [...byName.values()].sort((a, b) => {
+      const seedA = canonicalUseTypeSeed(a.type_name);
+      const seedB = canonicalUseTypeSeed(b.type_name);
+      return (seedA?.sort_order || a.sort_order || 999) - (seedB?.sort_order || b.sort_order || 999)
+        || String(a.type_name).localeCompare(String(b.type_name), "zh-Hans-CN");
+    });
+    return sorted.map((row) => {
+      const seed = canonicalUseTypeSeed(row.type_name);
+      let code = seed?.type_code || (isAsciiCode(row.type_code) && !reserved.has(row.type_code) ? row.type_code : "");
+      if (!code || used.has(code)) {
+        do {
+          code = `USE${String(nextIndex).padStart(4, "0")}`;
+          nextIndex += 1;
+        } while (used.has(code) || reserved.has(code));
+      }
+      used.add(code);
+      return {
+        ...row,
+        id: seed?.type_code || row.id || code,
+        type_code: code,
+        sort_order: seed?.sort_order || row.sort_order || used.size,
+        status: row.status || "active",
+      };
+    });
   }
 
   function deriveDictionaries(labs, data) {
@@ -172,12 +300,12 @@ function createDatasetService(db, config, audit) {
         });
       })
       .filter(Boolean);
-    const labTypes = data.lab_types.length ? data.lab_types.map(normalizeLabTypeRow) : unique(labs.map((row) => row.lab_type))
+    const labTypesRaw = data.lab_types.length ? data.lab_types.map(normalizeLabTypeRow) : unique(labs.map((row) => row.lab_type))
       .map((name, index) => normalizeLabTypeRow({ type_code: name, type_name: name, sort_order: index + 1 }));
     return {
       colleges: dedupeById(colleges),
       majors: dedupeById(majors),
-      lab_types: dedupeById(labTypes),
+      lab_types: canonicalizeLabTypes(labTypesRaw, labs),
     };
   }
 
@@ -198,6 +326,7 @@ function createDatasetService(db, config, audit) {
       building_code: String(row.building_code || "").trim(),
       floor_code: String(row.floor_code || "").trim(),
       segment_code: String(row.segment_code || "").trim(),
+      element_type: normalizeElementType(row.element_type),
     })));
     const spaces = dedupeById(data.spaces.map((row) => {
       const length = Number(row.length_m || 0);
@@ -225,7 +354,7 @@ function createDatasetService(db, config, audit) {
       lab_name: String(row.lab_name || row.lab_code || row.lab_id || row.id || "").trim(),
     })));
     const dictionary = deriveDictionaries(labs, data);
-    const plans = dedupeById(data.plans.map((row) => ({
+    const plansRaw = dedupeById(data.plans.map((row) => ({
       ...row,
       id: row.id || row.plan_code || row.plan_id,
       plan_code: firstText(row, ["plan_code", "plan_id", "id"]),
@@ -234,11 +363,15 @@ function createDatasetService(db, config, audit) {
       is_default_compare_before: toBoolean(row.is_default_compare_before),
       is_default_compare_after: toBoolean(row.is_default_compare_after),
     })));
-    const plansByCode = new Map(plans.map((row) => [row.plan_code, row]));
+    const plans = fillSequentialCodes(plansRaw, "plan_code", "PLAN", 6);
+    const planAlias = new Map(plansRaw.map((plan, index) => [plan.plan_code, plans[index]?.plan_code || plan.plan_code]));
+    const plansWithSources = plans.map((plan) => ({ ...plan, source_plan_code: planAlias.get(plan.source_plan_code) || plan.source_plan_code || "" }));
+    const plansByCode = new Map(plansWithSources.map((row) => [row.plan_code, row]));
     const labsByCode = new Map(labs.map((row) => [row.lab_code, row]));
     const spacesByCode = new Map(spaces.map((row) => [row.space_code, row]));
     const assignments = dedupeById(data.plan_assignments.map((row) => {
-      const planCode = firstText(row, ["plan_code", "plan_id"]);
+      const rawPlanCode = firstText(row, ["plan_code", "plan_id"]);
+      const planCode = planAlias.get(rawPlanCode) || rawPlanCode;
       const labCode = firstText(row, ["lab_code", "lab_id"]);
       const spaceCode = firstText(row, ["space_code", "space_id"]);
       const previousSpaceCode = firstText(row, ["previous_space_code", "previous_space_id"]);
@@ -269,7 +402,7 @@ function createDatasetService(db, config, audit) {
       colleges: dictionary.colleges,
       majors: dictionary.majors,
       lab_types: dictionary.lab_types,
-      plans,
+      plans: plansWithSources,
       plan_assignments: assignments,
       deleted_space_ids: data.deleted_space_ids || [],
     };
@@ -277,6 +410,132 @@ function createDatasetService(db, config, audit) {
 
   function dedupeById(rows) {
     return [...new Map(rows.filter((row) => row.id).map((row) => [row.id, row])).values()];
+  }
+
+  function fillSequentialCodes(rows, field, prefix, width, options = {}) {
+    const used = new Set();
+    return (rows || []).map((row) => {
+      let code = String(row[field] || "").trim();
+      if (!isAsciiCode(code) || (options.forcePrefix && !code.toUpperCase().startsWith(prefix)) || containsCjk(code) || used.has(code)) {
+        code = generateSequentialCode([...rows.filter((item) => used.has(String(item[field] || "").trim())), ...[...used].map((value) => ({ [field]: value }))], field, prefix, width);
+        while (used.has(code)) code = generateSequentialCode([...used].map((value) => ({ [field]: value })), field, prefix, width);
+      }
+      used.add(code);
+      return { ...row, [field]: code, id: row.id || code };
+    });
+  }
+
+  function normalizeNumberingDataset(raw) {
+    const data = normalizeIncomingDataset(raw);
+    const buildingAlias = new Map();
+    const buildingsByCode = new Map();
+    const buildings = [];
+    for (const building of data.buildings || []) {
+      const oldCode = String(building.building_code || "").trim();
+      const nextCode = generateBuildingCode(building);
+      buildingAlias.set(oldCode, nextCode);
+      const next = { ...building, id: building.id || oldCode || nextCode, building_code: nextCode };
+      const existing = buildingsByCode.get(nextCode);
+      if (existing) {
+        Object.assign(existing, {
+          building_name: existing.building_name || next.building_name,
+          campus_zone: existing.campus_zone === "未分区" ? next.campus_zone : existing.campus_zone,
+          building_number: existing.building_number || next.building_number,
+          notes: existing.notes || next.notes,
+        });
+      } else {
+        buildingsByCode.set(nextCode, next);
+        buildings.push(next);
+      }
+    }
+    const translateBuildingCode = (code) => buildingAlias.get(String(code || "").trim()) || String(code || "").trim();
+    const spacesById = new Map();
+    const spaces = (data.spaces || []).map((space) => {
+      const next = { ...space, building_code: translateBuildingCode(space.building_code) };
+      spacesById.set(next.id, next);
+      return next;
+    });
+    const floorSegments = (data.floor_segments || []).map((segment) => ({ ...segment, building_code: translateBuildingCode(segment.building_code) }));
+    const planCompaction = compactPlansForNumbering(data.plans || []);
+    const plans = fillSequentialCodes(planCompaction.plans, "plan_code", "PLAN", 6, { forcePrefix: true });
+    const planAlias = new Map(planCompaction.alias);
+    planCompaction.plans.forEach((plan, index) => {
+      const nextCode = plans[index]?.plan_code || plan.plan_code;
+      for (const key of [plan.plan_code, plan.plan_id, plan.id]) {
+        if (key) planAlias.set(String(key).trim(), nextCode);
+      }
+    });
+    for (const [oldCode, canonicalCode] of [...planAlias.entries()]) {
+      const finalCode = planAlias.get(canonicalCode);
+      if (finalCode) planAlias.set(oldCode, finalCode);
+    }
+    const labTypes = canonicalizeLabTypes(data.lab_types || [], data.labs || []);
+    const translated = {
+      ...data,
+      buildings,
+      floor_segments: floorSegments,
+      spaces,
+      lab_types: labTypes,
+      plans: plans.map((plan) => ({ ...plan, source_plan_code: planAlias.get(plan.source_plan_code) || plan.source_plan_code || "" })),
+    };
+    const relation = {
+      plansByCode: new Map(translated.plans.map((plan) => [plan.plan_code, plan])),
+      labsByCode: new Map((translated.labs || []).map((lab) => [lab.lab_code, lab])),
+      spacesByCode: new Map(translated.spaces.map((space) => [space.space_code, space])),
+    };
+    translated.plan_assignments = (data.plan_assignments || []).map((assignment) => normalizeAssignmentLike({
+      ...assignment,
+      plan_code: planAlias.get(assignment.plan_code) || assignment.plan_code,
+    }, relation));
+    return normalizeIncomingDataset(translated);
+  }
+
+  function compactPlansForNumbering(plans) {
+    const kept = [];
+    const bySemantic = new Map();
+    const alias = new Map();
+    for (const plan of plans || []) {
+      const semantic = [
+        String(plan.source_plan_code || "").trim(),
+        String(plan.plan_type || "").trim(),
+        String(plan.plan_name || "").trim(),
+      ].join("__");
+      const existing = bySemantic.get(semantic);
+      if (semantic.replace(/_/g, "") && existing) {
+        for (const key of [plan.plan_code, plan.plan_id, plan.id]) {
+          if (key) alias.set(String(key).trim(), existing.plan_code);
+        }
+        continue;
+      }
+      bySemantic.set(semantic, plan);
+      kept.push(plan);
+    }
+    return { plans: kept, alias };
+  }
+
+  function writeRepairBackup(label, payload) {
+    fs.mkdirSync(config.backupsDir, { recursive: true });
+    const safeLabel = String(label || "repair").replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "") || "repair";
+    const fileName = `${new Date().toISOString().replace(/[:.]/g, "-")}-${safeLabel}.json`;
+    const filePath = path.join(config.backupsDir, fileName);
+    fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf8");
+    return filePath;
+  }
+
+  function normalizeAssignmentLike(row, relation) {
+    const plan = relation.plansByCode.get(row.plan_code);
+    const lab = relation.labsByCode.get(row.lab_code);
+    const space = relation.spacesByCode.get(row.space_code);
+    const previousSpace = relation.spacesByCode.get(row.previous_space_code);
+    return {
+      ...row,
+      id: `${row.plan_code}__${row.lab_code}`,
+      plan_id: plan?.id || row.plan_id || "",
+      lab_id: lab?.id || row.lab_id || "",
+      space_id: space?.id || "",
+      previous_space_id: previousSpace?.id || "",
+      assignment_status: normalizeAssignmentStatus(row.assignment_status, Boolean(space)),
+    };
   }
 
   function emptyDataset() {
@@ -486,6 +745,8 @@ function createDatasetService(db, config, audit) {
     saveActiveDataset,
     seedDataset,
     normalizeIncomingDataset,
+    normalizeNumberingDataset,
+    writeRepairBackup,
     validateDataset,
     detectTextCorruption,
     findTextRepairSource,

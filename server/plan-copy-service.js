@@ -24,14 +24,124 @@ function createPlanCopyService(db, datasetService) {
 
   function listManageablePlans(user) {
     requireAdmin(user);
+    const activePlans = listActiveManagedPlans(user);
+    const copyPlans = listManagedCopyPlans(user);
+    return [...activePlans, ...copyPlans].sort((a, b) =>
+      Number(b.isBaseline) - Number(a.isBaseline)
+      || String(b.updatedAt || "").localeCompare(String(a.updatedAt || ""))
+      || String(a.id).localeCompare(String(b.id))
+    );
+  }
+
+  function listManagedCopyPlans(user) {
     return db.prepare(`
       SELECT plan_copies.*, users.username AS owner_username, users.role AS owner_role
       FROM plan_copies
       JOIN users ON users.id = plan_copies.owner_user_id
       WHERE plan_copies.deleted_at IS NULL
-        AND (plan_copies.is_baseline = 1 OR plan_copies.visibility = 'public' OR users.role = 'admin')
       ORDER BY plan_copies.is_baseline DESC, plan_copies.updated_at DESC, plan_copies.id DESC
-    `).all().map((row) => stripPayload(publicCopy(row), user));
+    `).all().map((row) => ({
+      ...stripPayload(publicCopy(row), user),
+      kind: "copy",
+      copyId: row.id,
+      canDelete: manageablePlanCount() > 1,
+    }));
+  }
+
+  function listActiveManagedPlans(user) {
+    const active = datasetService.getActiveDataset();
+    const dataset = datasetService.normalizeIncomingDataset(active.dataset);
+    return (dataset.plans || []).map((plan) => stripActivePlanPayload(publicActivePlan(plan, active), user));
+  }
+
+  function publicActivePlan(plan, active) {
+    const isBaseline = String(plan.plan_type || "") === "baseline" || toBoolean(plan.is_locked);
+    return {
+      id: `active:${plan.plan_code || plan.id}`,
+      kind: "active",
+      planCode: plan.plan_code || plan.id,
+      planName: plan.plan_name || plan.plan_code || plan.id,
+      description: plan.description || "",
+      visibility: "active",
+      isPublic: true,
+      isBaseline,
+      sourceType: "active",
+      importDraftId: null,
+      ownerUserId: null,
+      ownerUsername: "active dataset",
+      ownerRole: "system",
+      isMine: true,
+      canDelete: manageablePlanCount() > 1,
+      revision: active.revision,
+      sourcePlanCode: plan.source_plan_code || "",
+      createdAt: plan.created_at || active.updatedAt,
+      updatedAt: plan.updated_at || active.updatedAt,
+      plan: {
+        ...plan,
+        id: plan.id || plan.plan_code,
+        plan_code: plan.plan_code || plan.id,
+        plan_name: plan.plan_name || plan.plan_code || plan.id,
+        plan_type: isBaseline ? "baseline" : plan.plan_type,
+        is_locked: isBaseline ? true : toBoolean(plan.is_locked),
+      },
+    };
+  }
+
+  function stripActivePlanPayload(plan, _user) {
+    const { plan: _plan, ...rest } = plan;
+    return rest;
+  }
+
+  function manageablePlanCount() {
+    const active = datasetService.normalizeIncomingDataset(datasetService.getActiveDataset().dataset);
+    const activeCount = (active.plans || []).length;
+    const copyCount = db.prepare("SELECT COUNT(*) AS count FROM plan_copies WHERE deleted_at IS NULL").get().count;
+    return activeCount + copyCount;
+  }
+
+  function listBackupRows() {
+    return db.prepare("SELECT * FROM plan_copies ORDER BY id ASC").all();
+  }
+
+  function copyPayloadIndex() {
+    const rows = db.prepare("SELECT * FROM plan_copies WHERE deleted_at IS NULL").all();
+    const index = {
+      buildingIds: new Set(),
+      floorSegmentIds: new Set(),
+      spaceIds: new Set(),
+      labIds: new Set(),
+      labTypeIds: new Set(),
+      collegeIds: new Set(),
+      majorIds: new Set(),
+      fileAssetIds: new Set(),
+      planCodes: new Set(),
+      planIds: new Set(),
+    };
+    for (const row of rows) {
+      const copy = publicCopy(row);
+      index.planCodes.add(copy.planCode);
+      index.planIds.add(copy.planCode);
+      index.planIds.add(String(copy.id));
+      for (const plan of copy.dataset?.plans || []) {
+        if (plan.plan_code) index.planCodes.add(String(plan.plan_code));
+        if (plan.id) index.planIds.add(String(plan.id));
+      }
+      collectIds(index.buildingIds, copy.dataset?.buildings);
+      collectIds(index.floorSegmentIds, copy.dataset?.floor_segments);
+      collectIds(index.spaceIds, copy.dataset?.spaces);
+      collectIds(index.labIds, copy.dataset?.labs);
+      collectIds(index.labTypeIds, copy.dataset?.lab_types);
+      collectIds(index.collegeIds, copy.dataset?.colleges);
+      collectIds(index.majorIds, copy.dataset?.majors);
+      collectIds(index.fileAssetIds, copy.dataset?.file_assets);
+    }
+    return index;
+  }
+
+  function collectIds(target, rows = []) {
+    for (const row of rows || []) {
+      if (row?.id) target.add(String(row.id));
+    }
   }
 
   function getVisibleCopy(copyId, user) {
@@ -69,6 +179,91 @@ function createPlanCopyService(db, datasetService) {
       updatedBy: active.updatedBy,
       updatedAt: active.updatedAt,
     };
+  }
+
+  function normalizeAllNumbering(user) {
+    requireAdmin(user);
+    const now = nowIso();
+    db.exec("BEGIN");
+    try {
+      const active = datasetService.getActiveDataset();
+      const nextActive = datasetService.normalizeNumberingDataset(active.dataset);
+      const activePlanAlias = new Map();
+      (active.dataset.plans || []).forEach((plan, index) => {
+        const nextPlan = (nextActive.plans || []).find((item) =>
+          String(item.plan_name || "").trim() === String(plan.plan_name || "").trim() &&
+          String(item.source_plan_code || "").trim() === String(plan.source_plan_code || "").trim()
+        ) || nextActive.plans?.[index] || nextActive.plans?.[0];
+        const nextCode = nextPlan?.plan_code || "";
+        for (const key of [plan.plan_code, plan.plan_id, plan.id, plan.source_plan_code]) {
+          if (key && nextCode) activePlanAlias.set(String(key).trim(), nextCode);
+        }
+      });
+      const usedPlanCodes = new Set((nextActive.plans || []).map((plan) => plan.plan_code).filter(Boolean));
+      const nextRevision = active.revision + 1;
+      db.prepare("UPDATE active_dataset SET revision = ?, dataset_json = ?, updated_by = ?, updated_at = ? WHERE id = 1")
+        .run(nextRevision, JSON.stringify(nextActive), user.username, now);
+
+      const rows = db.prepare("SELECT * FROM plan_copies WHERE deleted_at IS NULL ORDER BY id ASC").all();
+      for (const row of rows) {
+        const sourceDataset = row.dataset_json ? JSON.parse(row.dataset_json) : {
+          ...nextActive,
+          plans: [JSON.parse(row.plan_json)],
+          plan_assignments: JSON.parse(row.assignments_json || "[]"),
+        };
+        const nextDataset = datasetService.normalizeNumberingDataset(sourceDataset);
+        const preferredPlan = nextDataset.plans.find((plan) => plan.id === row.plan_code || plan.plan_code === row.plan_code) || nextDataset.plans[0] || JSON.parse(row.plan_json);
+        const preferredPlanCode = preferredPlan.plan_code;
+        let nextPlanCode = preferredPlan.plan_code;
+        if (!nextPlanCode || usedPlanCodes.has(nextPlanCode)) {
+          nextPlanCode = nextAvailablePlanCode(usedPlanCodes);
+        }
+        usedPlanCodes.add(nextPlanCode);
+        const nextSourcePlanCode = activePlanAlias.get(preferredPlan.source_plan_code)
+          || activePlanAlias.get(row.source_plan_code)
+          || preferredPlan.source_plan_code
+          || "";
+        const nextPlan = {
+          ...preferredPlan,
+          id: preferredPlan.id || nextPlanCode,
+          plan_code: nextPlanCode,
+          source_plan_code: nextSourcePlanCode,
+          plan_name: row.plan_name || preferredPlan.plan_name || nextPlanCode,
+          plan_type: toBoolean(row.is_baseline) ? "baseline" : preferredPlan.plan_type,
+          is_locked: toBoolean(row.is_baseline) ? true : toBoolean(preferredPlan.is_locked),
+          updated_at: now,
+        };
+        const nextAssignments = (nextDataset.plan_assignments || [])
+          .filter((assignment) => assignment.plan_code === preferredPlanCode || assignment.plan_code === nextPlanCode || assignment.plan_id === nextPlan.id)
+          .map((assignment) => ({
+            ...assignment,
+            id: `${nextPlanCode}__${assignment.lab_code}`,
+            plan_code: nextPlanCode,
+            plan_id: nextPlan.id,
+          }));
+        const storedDataset = datasetService.normalizeIncomingDataset({
+          ...nextDataset,
+          plans: [nextPlan],
+          plan_assignments: nextAssignments,
+        });
+        db.prepare(`
+          UPDATE plan_copies
+          SET plan_code = ?, plan_json = ?, assignments_json = ?, dataset_json = ?, source_plan_code = ?, revision = revision + 1, updated_at = ?
+          WHERE id = ?
+        `).run(nextPlanCode, JSON.stringify(nextPlan), JSON.stringify(nextAssignments), JSON.stringify(storedDataset), nextSourcePlanCode, now, row.id);
+      }
+      db.exec("COMMIT");
+      return { revision: nextRevision, updatedAt: now };
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  function nextAvailablePlanCode(used) {
+    let index = 1;
+    while (used.has(`PLAN${String(index).padStart(6, "0")}`)) index += 1;
+    return `PLAN${String(index).padStart(6, "0")}`;
   }
 
   function mergeCopyDataset(dataset, copy, latestBaselineCode) {
@@ -265,6 +460,27 @@ function createPlanCopyService(db, datasetService) {
     updateCopy(copyId, body, user);
   }
 
+  function updateActiveManagedPlan(planCode, body, user) {
+    requireAdmin(user);
+    const active = datasetService.getActiveDataset();
+    const dataset = datasetService.normalizeIncomingDataset(active.dataset);
+    const code = String(planCode || "").trim();
+    const plan = (dataset.plans || []).find((item) => item.plan_code === code || item.id === code);
+    if (!plan) throw httpError(404, "plan_not_found", "未找到方案");
+    const nextName = body.planName === undefined ? plan.plan_name : String(body.planName || "").trim();
+    if (!nextName) throw httpError(400, "invalid_plan_name", "请输入方案名称");
+    const description = body.description === undefined ? plan.description || "" : String(body.description || "").trim();
+    const now = nowIso();
+    const nextDataset = {
+      ...dataset,
+      plans: dataset.plans.map((item) => {
+        if (item !== plan) return item;
+        return { ...item, plan_name: nextName, description, updated_at: now };
+      }),
+    };
+    return datasetService.saveActiveDataset(datasetService.normalizeIncomingDataset(nextDataset), user.username);
+  }
+
   function setManagedPlanBaseline(copyId, user) {
     requireAdmin(user);
     const row = getOwnedCopy(copyId, user);
@@ -284,6 +500,32 @@ function createPlanCopyService(db, datasetService) {
       SET is_baseline = 1, baselined_at = ?, baselined_by = ?, plan_json = ?, dataset_json = ?, updated_at = ?
       WHERE id = ?
     `).run(now, user.username, JSON.stringify(nextPlan), nextDatasetJson, now, copyId);
+  }
+
+  function setActiveManagedPlanBaseline(planCode, user) {
+    requireAdmin(user);
+    const active = datasetService.getActiveDataset();
+    const dataset = datasetService.normalizeIncomingDataset(active.dataset);
+    const code = String(planCode || "").trim();
+    let found = false;
+    const now = nowIso();
+    const nextDataset = {
+      ...dataset,
+      plans: (dataset.plans || []).map((plan) => {
+        if (plan.plan_code !== code && plan.id !== code) return plan;
+        found = true;
+        return {
+          ...plan,
+          plan_type: "baseline",
+          is_locked: true,
+          is_default_compare_before: true,
+          is_default_compare_after: false,
+          updated_at: now,
+        };
+      }),
+    };
+    if (!found) throw httpError(404, "plan_not_found", "未找到方案");
+    return datasetService.saveActiveDataset(datasetService.normalizeIncomingDataset(nextDataset), user.username);
   }
 
   function saveAssignments(copyId, body, user) {
@@ -369,7 +611,33 @@ function createPlanCopyService(db, datasetService) {
 
   function deleteManagedPlan(copyId, user) {
     requireAdmin(user);
+    if (manageablePlanCount() <= 1) {
+      throw httpError(400, "last_plan_required", "至少需要保留一个方案");
+    }
     deleteCopy(copyId, user);
+  }
+
+  function deleteActiveManagedPlan(planCode, user) {
+    requireAdmin(user);
+    if (manageablePlanCount() <= 1) {
+      throw httpError(400, "last_plan_required", "至少需要保留一个方案");
+    }
+    const active = datasetService.getActiveDataset();
+    const dataset = datasetService.normalizeIncomingDataset(active.dataset);
+    const code = String(planCode || "").trim();
+    const plans = (dataset.plans || []).filter((plan) => plan.plan_code !== code && plan.id !== code);
+    if (plans.length === (dataset.plans || []).length) throw httpError(404, "plan_not_found", "未找到方案");
+    const removedCodes = new Set((dataset.plans || [])
+      .filter((plan) => plan.plan_code === code || plan.id === code)
+      .flatMap((plan) => [plan.plan_code, plan.id].filter(Boolean)));
+    const nextDataset = {
+      ...dataset,
+      plans,
+      plan_assignments: (dataset.plan_assignments || []).filter((assignment) =>
+        !removedCodes.has(assignment.plan_code) && !removedCodes.has(assignment.plan_id)
+      ),
+    };
+    return datasetService.saveActiveDataset(datasetService.normalizeIncomingDataset(nextDataset), user.username);
   }
 
   function findSourcePlan(sourcePlanCode, user) {
@@ -416,6 +684,19 @@ function createPlanCopyService(db, datasetService) {
     };
   }
 
+  function getActiveManagedPlan(planCode, user) {
+    requireAdmin(user);
+    const active = datasetService.getActiveDataset();
+    const dataset = datasetService.normalizeIncomingDataset(active.dataset);
+    const code = String(planCode || "").trim();
+    const plan = (dataset.plans || []).find((item) => item.plan_code === code || item.id === code);
+    if (!plan) throw httpError(404, "plan_not_found", "未找到方案");
+    return {
+      plan: stripActivePlanPayload(publicActivePlan(plan, active), user),
+      dataset,
+    };
+  }
+
   function buildSingleCopyDataset(copy) {
     const base = copy.dataset ? clone(copy.dataset) : clone(datasetService.getActiveDataset().dataset);
     const withoutCurrent = {
@@ -457,6 +738,7 @@ function createPlanCopyService(db, datasetService) {
       plan: {
         ...plan,
         id: row.plan_code,
+        copy_id: row.id,
         plan_code: row.plan_code,
         plan_name: row.plan_name,
         description: row.description,
@@ -508,17 +790,24 @@ function createPlanCopyService(db, datasetService) {
 
   return {
     buildVisibleDataset,
+    normalizeAllNumbering,
+    listBackupRows,
+    copyPayloadIndex,
     createCopy,
     createImportedPlans,
     updateCopy,
     updateManagedPlan,
+    updateActiveManagedPlan,
     setManagedPlanBaseline,
+    setActiveManagedPlanBaseline,
     saveAssignments,
     saveCopyDataset,
     deleteCopy,
     deleteManagedPlan,
+    deleteActiveManagedPlan,
     listManageablePlans,
     getManagedPlan,
+    getActiveManagedPlan,
   };
 }
 

@@ -70,6 +70,7 @@
 - 中屏或窄屏下当缩略图区位于 workspace 顶部时，每组缩略图中的 compare-title 必须位于左侧、floor-thumbs 位于右侧，二者横向并列且高度一致；每栋楼的缩略图只能占一行，楼层缩略图数量变多时，compare-title 与 floor-thumbs 必须通过同一个横向滚动条一起滚动，不得换行、固定高度裁切或纵向滚轮隐藏。
 - 详细信息栏在宽度足够时，可以将逐行信息改为矩阵排列；宽度不足时必须保持单列，避免文字拥挤或重叠。
 - 楼梯标识使用楼层骨架 `floor_segments.element_type = stairs` 表示，并在主图和缩略图中显示楼梯线与“楼梯”标识；楼梯不作为可分配空间参与实验室落位。
+- 电梯标识使用楼层骨架 `floor_segments.element_type = elevator` 表示，并在主图和缩略图中显示灰色独立电梯图标；电梯不作为可分配空间参与用途单元落位。
 
 ## 2026-06-09 管理方案与多基线
 
@@ -104,7 +105,7 @@
 - 业务编辑中可在选中空间上下文内维护可编辑空间资料、实验室资料和落位安排；系统负责同步 `spaces`、`labs`、`plan_assignments` 的底层关系。除教学楼和楼层骨架等结构维护外，物理空间、实验室、方案分配三张原始表的日常编辑能力必须由业务编辑覆盖。
 - 业务编辑中“实验室信息”必须位于“空间信息”之前；当选中空间未规划时，实验室信息区只显示 `business-preview business-unplanned-card` 未规划卡片和可用操作，不显示落位实验室下拉或实验室资料表单。
 - “规划”和“改建”操作必须位于业务编辑的实验室信息区；详情信息栏不再提供规划和改建按钮。
-- 业务编辑中的实验室类型、所属学院、所属专业必须使用下拉单选；所属专业按已选学院联动过滤。admin 必须可维护学院、专业和实验室类型基础信息，editor/viewer 只能使用已启用的基础信息选项。
+- 业务编辑中的实验室类型、所属学院、所属专业必须使用下拉单选；所属专业按已选学院联动过滤。admin 必须通过数据编辑中的学院、专业和实验室类型原始表维护基础信息，顶部不再提供重复的“基础信息”独立弹窗入口，editor/viewer 只能使用已启用的基础信息选项。
 - 数据编辑中的学院和专业信息仅 admin 可见、可编辑；editor/viewer 不显示学院和专业原始表，也不显示业务编辑中的学院和专业字段。
 - 点击“规划”未规划空间时，所属学院必须使用下拉单选，不得再使用自由文本提示框；学院选项来自 admin 维护的基础信息。
 - 业务编辑中的落位实验室候选只应显示当前方案中未落位的实验室，以及当前空间已落位的实验室；已落位到其他空间的实验室不得作为可选项出现，也不显示“已隐藏”数量提示。若保存时检测到实验室已被其他空间占用，必须给出明确提示，不得无响应。
@@ -115,6 +116,29 @@
 - 保存业务编辑或原始表格后，重新拉取服务端数据必须能读回刚才保存的空间资料、实验室资料和落位安排；不得出现接口已写入但界面被其他副本同 ID 数据覆盖而看起来无法保存的情况。
 - 业务编辑必须支持新增空间和删除空间；删除空间在当前非基线方案中移除空间数据，并将当前方案中该空间相关分配标记为 `Invalid`，不得仅标记为不可用。admin 可删除任意非基线方案中的空间，editor 只能删除自己创建且非基线方案中的空间。
 - 原始表格能力仅保留为高级结构维护入口；`spaces`、`labs`、`plan_assignments` 原始表不再作为可见编辑入口，业务编辑必须替代这些单表编辑。详情信息栏不再显示“编辑此空间”“编辑此实验室”“查看当前分配”等旧原始表跳转按钮。
-- admin 可在教学楼、楼层骨架、学院、专业、实验室类型原始表中删除未被引用的行；被空间、实验室或专业引用的基础数据必须阻止删除并提示原因，非 admin 不显示删除入口。
+- admin 可在教学楼、楼层骨架、学院、专业、实验室类型原始表中删除行；删除教学楼必须级联删除该楼的楼层骨架和空间，删除楼层骨架必须级联删除绑定到该骨架的空间，相关方案分配必须标记为 `Invalid` 且保留实验室资料；被实验室或专业引用的学院、专业和实验室类型仍必须阻止删除，并在当前表格附近明确提示原因，非 admin 不显示删除入口。
+- admin 在楼层骨架原始表中修改教学楼编码、楼层编码或走廊段编码时，系统必须按原始骨架身份同步迁移绑定空间，并更新分配引用；若目标骨架键已存在，必须阻止保存并提示冲突，不得把原骨架复制成另一楼层的重复数据。
 - 编辑权限仍必须遵守方案权限：editor 只能编辑自己创建且非基线的方案；admin 可编辑基线方案；viewer/游客只读。
 - 前端界面应采用清晰的业务工具风格，业务编辑和主要工作区不得使用渐变背景，状态颜色必须明确区分已建设、已规划、未规划、不可用。
+- 数据自动编号必须集中配置并可复用：默认校区编码为下沙校区 `01`、绍兴校区 `02`；教学楼编号为 `B` + 校区码 + 两位楼号；空间编号为 `0` + 校区码 + 两位楼号 + 两位楼层 + 前门牌两位 + 后门牌两位；单门空间后门牌为空时后门牌编号必须等于前门牌编号；楼层骨架编号使用 `EW/NS/ST/EV/OT` + 校区码 + 两位楼号 + 两位楼层 + 两位序号；新增用途单元编号使用 `UNIT` + 六位流水。
+- 新增记录可自动生成编号；已有记录不得因字段变化静默改号，必须由 admin 显式执行补全/刷新编号后才更新，并同步相关空间、骨架和方案分配引用；导入数据已有编号时默认保留。
+- 现有 `labs` 表短期继续作为底层表名和关系字段来源，但业务含义扩展为“用途单元”，可承载实验室、教室、办公室、公共空间等用途；旧 `LAB...` 编号继续兼容，新建用途单元使用 `UNIT...` 编号。
+## Numbering and Stable Identity
+
+- Business codes are editable identifiers and must not be used as the only durable row identity. Existing `id` values for buildings, floor segments, spaces, labs, lab types, and plans must be preserved when codes are filled or refreshed.
+- Admin post-upload numbering normalization must be supported. It must create a snapshot before writing, normalize the active dataset and all non-deleted plan copies together, and migrate references instead of creating duplicate old/new rows.
+- The active dataset save path must defensively strip plan-copy payload rows before persisting. Visible datasets may merge copy-specific buildings, floor segments, spaces, labs, plans, and assignments for display, but those rows must never be written back into `active_dataset`.
+- Plan-copy identity must be carried by an explicit copy id (`copy_id`/`copyId`) instead of being inferred only from `plan_code`; plan codes may be normalized to `PLAN...` while the copy remains manageable by admin.
+- Building code normalization uses `B` + campus code + two-digit building number, for example `B0109`.
+- Plan codes must not contain Chinese text after explicit numbering normalization. Normalized plan codes use global sequential `PLAN000001`, `PLAN000002`, and so on across the active dataset and plan copies.
+- Use type codes must not contain Chinese text after explicit numbering normalization. Normalized use type codes use sequential `USE0001`, `USE0002`, and so on.
+- Use types are reusable dictionary entries keyed by normalized `type_name`; duplicate rows such as repeated "实验室" or "教室" must be merged instead of treated as separate business entities. The default dictionary keeps `USE0001` for "实验室" and `USE0002` for "教室".
+- Admin plan management must include both active dataset plans and non-deleted plan copies. Admin can rename, delete, and baseline either kind through the manage plans UI, while the server must keep at least one manageable plan available.
+- When building codes change, all bound floor segment and space `building_code` references must be migrated. Saving after normalization must not leave the old building row visible through stale plan-copy data.
+
+## Admin Correction Usability
+
+- The business editor must not expose a generic "refresh space code on save" checkbox for existing spaces. Existing spaces should show stable door/code summary fields by default, with an admin-only explicit correction action when door text was entered incorrectly.
+- Admin door/code correction must allow editing `front_door` and `rear_door`, preview the resulting `space_code`, and refresh the space code only when the correction panel is active. If `rear_door` is blank, the generated code must reuse the last two digits from `front_door`.
+- Floor skeleton editing must provide clear creation controls for corridor-adjacent structural elements. Stairs and elevators need dedicated add buttons or equivalent guidance so a new admin can create them without knowing raw `element_type` values.
+- Newly added stairs and elevators must use the configured segment code prefixes (`ST` and `EV`) and remain non-assignable skeleton elements.
