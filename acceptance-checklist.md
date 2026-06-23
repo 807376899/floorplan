@@ -31,6 +31,7 @@
 - [ ] 已有实验室详情不显示“分配状态”和“生效时间”；业务编辑中的“改建”后旧分配变为 `Invalid`，空间显示同学院的新“未规划实验室+门牌号”分配。
 - [ ] 主图默认适配显示大小。
 - [ ] 主图默认居中显示。
+- [ ] 当前方案落位用途类型为 `教室` 的空间在主图和缩略图中显示为灰色；其他已落位空间仍按学院区分颜色，未规划空间保持未规划灰色。
 - [ ] 缩放主图时，教学楼信息保持固定显示，不随缩放变化。
 - [ ] 缩放主图时，北边指示保持固定显示，不随缩放变化。
 - [ ] 放大主图并滚动 `.floorplan` 后，教学楼信息和北边指示仍固定浮在主图可视区域，不随内部滚动条移动。
@@ -38,6 +39,7 @@
 - [ ] 中屏时，缩略图区独占 workspace 第一行，主图和详细信息栏在第二行并列且高度对齐。
 - [ ] 窄屏堆叠时，workspace 高度由缩略图区域、主图区域、详细信息区域三段自然相加，主图不会被裁切或隐藏。
 - [ ] 中屏或窄屏下缩略图区位于顶部时，每组缩略图的 compare-title 在左、floor-thumbs 在右横向并列且高度一致；每栋楼缩略图只占一行，数量变多时通过同一个横向滚动条一起滚动，不换行、不被固定高度裁切，也不出现纵向滚轮隐藏。
+- [ ] 单个楼层缩略图完整适配预览框，缩略图内部没有鼠标滚轮或内部滚动条；需要滚动时只滚动缩略图列表容器。
 - [ ] 详细信息栏宽度足够时，行式信息可以矩阵排列；宽度不足时保持单列且文字不重叠。
 - [ ] `floor_segments.element_type = stairs` 的楼层骨架在主图和缩略图中显示楼梯标识，且不作为实验室可分配空间。
 - [ ] `floor_segments.element_type = elevator` 的楼层骨架在主图和缩略图中显示灰色独立电梯图标，且不作为用途单元可分配空间。
@@ -95,11 +97,14 @@
 - [ ] editor 只能在自己创建且非基线的方案中保存业务编辑；admin 可保存基线方案业务编辑。
 - [ ] viewer/游客不可保存业务编辑。
 - [ ] 新增教学楼、空间、楼层骨架和用途单元时按配置化编号规则生成编号；单门空间后门牌为空时使用前门牌生成后两位编号。
+- [ ] 教学楼表包含 `sort_order` 字段，admin 可在数据编辑中维护；顶部教学楼检索按下沙校区、绍兴校区分组，再按校区内 `sort_order` 排列，并在选项中标注校区。
 - [ ] admin 显式执行“补全/刷新编号”后才更新已有教学楼、楼层骨架或用途单元编号；刷新教学楼或楼层骨架编号时相关空间和分配引用同步迁移。
 - [ ] 空间只能绑定到走廊骨架；楼梯、电梯和其他骨架不能作为空间落位骨架。
 - [ ] `labs` 底层表可作为用途单元承载实验室、教室、办公室、公共空间等类型；旧 `LAB...` 编号兼容，新建用途单元使用 `UNIT...` 编号。
 - [ ] 主图放大时，`.floorplan` 和 `.floorplan-stage` 不会在垂直方向无意义撑高；只有真实超出时出现滚动。
 - [ ] 业务编辑和主要工作区不显示渐变背景，状态配色清晰区分已建设、已规划、未规划和不可用。
+- [ ] `outputs/lab-info-import` 导入模板中，杭州口径按下沙校区处理；下沙校区同楼同层空间按门牌号从东到西逐渐变大；光大教学楼和金通教学楼没有源表不存在的空间或重复物理空间。
+- [ ] `outputs/lab-info-import` 导入模板中，Sheet2 房间号只覆盖精确匹配的主表实训室；同楼同层不同前后门牌不得产生重复 `space_code`，修正后的 `labs` 和 `plan_assignments` 引用同步更新。
 ## Numbering Acceptance
 
 - [ ] Admin can run explicit numbering normalization after upload; a snapshot is created before the write.
@@ -111,6 +116,7 @@
 - [ ] Admin manage plans lists both active dataset plans and non-deleted plan copies, and rename/delete/baseline actions target the correct active plan code or copy id.
 - [ ] Deleting plans is blocked when it would leave the system with no manageable plan.
 - [ ] Reopening visible data after normalization does not show the stale pre-normalization building row from plan-copy payloads.
+- [ ] Visible datasets compact duplicate physical spaces from active data and visible plan copies before reaching the frontend, and assignments that pointed at discarded stale space ids/codes are migrated to the retained visible row.
 - [ ] Saving active data after viewing a merged copy dataset does not write copy-specific buildings, floor segments, spaces, labs, plans, or assignments into `active_dataset`.
 - [ ] Admin manage plans lists every non-deleted plan copy even after its `plan_code` is normalized to `PLAN...`, and delete/rename/baseline actions still target the correct copy id.
 

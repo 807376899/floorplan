@@ -683,7 +683,10 @@ function bindImportDraftDetailEvents(dataset) {
 
   const buildingSelect = els.importDraftDetail.querySelector("#importPreviewBuildingSelect");
   const planSelect = els.importDraftDetail.querySelector("#importPreviewPlanSelect");
-  fillInlineSelect(buildingSelect, dataset.buildings.slice().sort(compareBuildings).map((row) => ({ value: row.building_code, label: row.building_name || row.building_code })), state.importDrafts.preview.buildingCode);
+  fillInlineSelect(buildingSelect, dataset.buildings.slice().sort(compareBuildings).map((row) => ({
+    value: row.building_code,
+    label: `${row.campus_zone || "未分区"} - ${row.building_name || row.building_code}`,
+  })), state.importDrafts.preview.buildingCode);
   fillImportPreviewFloors(dataset);
   fillInlineSelect(planSelect, dataset.plans.map((plan) => ({ value: plan.id || plan.plan_code, label: plan.plan_name || plan.plan_code })), state.importDrafts.preview.planId);
 
@@ -1159,7 +1162,10 @@ function syncPlanViewMode() {
 }
 
 function populateBuildingOptions() {
-  const items = state.data.buildings.slice().sort(compareBuildings).map((row) => ({ value: row.building_code, label: row.building_name || row.building_code }));
+  const items = state.data.buildings.slice().sort(compareBuildings).map((row) => ({
+    value: row.building_code,
+    label: `${row.campus_zone || "未分区"} - ${row.building_name || row.building_code}`,
+  }));
   fillSelect(els.buildingSelect, items);
 }
 

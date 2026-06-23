@@ -319,6 +319,7 @@ function createDatasetService(db, config, audit) {
       id: row.id || row.building_code,
       building_code: String(row.building_code || "").trim(),
       building_name: String(row.building_name || row.building_code || "").trim(),
+      sort_order: Number(row.sort_order || 0),
     })));
     const floorSegments = dedupeById(data.floor_segments.map((row) => ({
       ...row,

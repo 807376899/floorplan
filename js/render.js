@@ -128,6 +128,7 @@
 
   function roomFill(space, colors) {
     if (!space.lab) return "#e2e8f0";
+    if (String(space.lab.lab_type || "").trim() === "教室") return "#94a3b8";
     return colors[space.lab.college] || "#64748b";
   }
 

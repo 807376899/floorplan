@@ -5,6 +5,7 @@
   "description": "实验室布局维护系统",
   "scripts": {
     "start": "node server.js",
+    "test": "node --test tests/*.test.js",
     "user": "node scripts/manage-user.js"
   }
 }

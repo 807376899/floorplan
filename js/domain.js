@@ -36,6 +36,7 @@
         ["building_name", "教学楼名称"],
         ["campus_zone", "所属校区"],
         ["building_number", "楼号"],
+        ["sort_order", "排列顺序"],
         ["notes", "备注"],
       ],
     },
@@ -166,6 +167,7 @@
       building_name: ["building_name", "教学楼名称"],
       campus_zone: ["campus_zone", "所属校区"],
       building_number: ["building_number", "教学楼编号", "楼号"],
+      sort_order: ["sort_order", "排列顺序", "排序"],
       notes: ["notes", "备注"],
     },
     floor_segments: {
@@ -448,8 +450,18 @@
     return [...new Map(rows.filter((row) => row[key]).map((row) => [row[key], row])).values()];
   }
 
+  function campusSortOrder(campusName) {
+    const raw = String(campusName || "").trim();
+    if (raw.includes("下沙") || raw.includes("杭州")) return 1;
+    if (raw.includes("绍兴")) return 2;
+    return 99;
+  }
+
   function compareBuildings(a, b) {
-    return numberValue(a.building_number, 0) - numberValue(b.building_number, 0) || compare(a.building_name, b.building_name);
+    return campusSortOrder(a.campus_zone) - campusSortOrder(b.campus_zone)
+      || numberValue(a.sort_order, 0) - numberValue(b.sort_order, 0)
+      || numberValue(a.building_number, 0) - numberValue(b.building_number, 0)
+      || compare(a.building_name, b.building_name);
   }
 
   function defaultPlans() {
@@ -486,6 +498,7 @@
       building_name: row.building_name || code,
       campus_zone: row.campus_zone || "未分区",
       building_number: numberValue(row.building_number, 0),
+      sort_order: numberValue(row.sort_order, 0),
       notes: row.notes || "",
       created_at: row.created_at || now,
       updated_at: now,

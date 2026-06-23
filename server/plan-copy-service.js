@@ -172,8 +172,9 @@ function createPlanCopyService(db, datasetService) {
     const copies = listVisibleCopies(user);
     const latestBaselineCode = copies.find((copy) => copy.isBaseline)?.planCode || "";
     for (const copy of copies.slice().reverse()) mergeCopyDataset(dataset, copy, latestBaselineCode);
+    const visibleDataset = compactVisibleDataset(datasetService.normalizeIncomingDataset(dataset));
     return {
-      dataset: datasetService.normalizeIncomingDataset(dataset),
+      dataset: datasetService.normalizeIncomingDataset(visibleDataset),
       copies: copies.map((copy) => stripPayload(copy, user)),
       revision: active.revision,
       updatedBy: active.updatedBy,
@@ -811,4 +812,163 @@ function createPlanCopyService(db, datasetService) {
   };
 }
 
-module.exports = { createPlanCopyService };
+function compactVisibleDataset(raw) {
+  const dataset = { ...(raw || {}) };
+  const buildings = compactRows(dataset.buildings, buildingKey, buildingScore);
+  const floorSegments = compactRows(dataset.floor_segments, floorSegmentKey, floorSegmentScore);
+  const spaces = compactRows(dataset.spaces, spacePhysicalKey, spaceScore, ["space_code"]);
+  const labs = compactRows(dataset.labs, labKey, labScore, ["lab_code"]);
+  const colleges = compactRows(dataset.colleges, collegeKey, defaultScore, ["college_code", "college_name"]);
+  const majors = compactRows(dataset.majors, majorKey, defaultScore, ["major_code", "major_name"]);
+  const labTypes = compactRows(dataset.lab_types, labTypeKey, defaultScore, ["type_code", "type_name"]);
+  const fileAssets = compactRows(dataset.file_assets, rowIdKey, defaultScore);
+
+  dataset.buildings = buildings.rows;
+  dataset.floor_segments = floorSegments.rows;
+  dataset.spaces = spaces.rows;
+  dataset.labs = labs.rows;
+  dataset.colleges = colleges.rows;
+  dataset.majors = majors.rows;
+  dataset.lab_types = labTypes.rows;
+  dataset.file_assets = fileAssets.rows;
+
+  const spacesById = new Map(dataset.spaces.map((row) => [text(row.id), row]));
+  const labsById = new Map(dataset.labs.map((row) => [text(row.id), row]));
+  dataset.plan_assignments = (dataset.plan_assignments || []).map((assignment) => {
+    const nextSpaceId = aliasValue(spaces.idAliases, assignment.space_id);
+    const nextSpace = spacesById.get(nextSpaceId);
+    const nextLabId = aliasValue(labs.idAliases, assignment.lab_id);
+    const nextLab = labsById.get(nextLabId);
+    return {
+      ...assignment,
+      lab_id: nextLabId,
+      lab_code: nextLab?.lab_code || aliasValue(labs.fieldAliases.lab_code, assignment.lab_code),
+      space_id: nextSpaceId,
+      space_code: nextSpace?.space_code || aliasValue(spaces.fieldAliases.space_code, assignment.space_code),
+    };
+  });
+
+  return dataset;
+}
+
+function compactRows(rows = [], keyFn, scoreFn, aliasFields = []) {
+  const groups = new Map();
+  for (const row of rows || []) {
+    const key = keyFn(row);
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+
+  const keptRows = [];
+  const idAliases = new Map();
+  const fieldAliases = Object.fromEntries(aliasFields.map((field) => [field, new Map()]));
+  for (const group of groups.values()) {
+    const kept = chooseVisibleRow(group, scoreFn);
+    keptRows.push(kept);
+    for (const row of group) {
+      recordAlias(idAliases, row.id, kept.id);
+      for (const field of aliasFields) {
+        recordAlias(fieldAliases[field], row[field], kept[field]);
+      }
+    }
+  }
+  return { rows: keptRows, idAliases, fieldAliases };
+}
+
+function chooseVisibleRow(rows, scoreFn) {
+  return rows.reduce((best, row) => {
+    const bestScore = scoreFn(best);
+    const rowScore = scoreFn(row);
+    return rowScore >= bestScore ? row : best;
+  }, rows[0]);
+}
+
+function recordAlias(map, fromValue, toValue) {
+  const from = text(fromValue);
+  const to = text(toValue);
+  if (!from || !to || from === to) return;
+  if (map.has(from) && map.get(from) !== to) {
+    map.set(from, "");
+    return;
+  }
+  map.set(from, to);
+}
+
+function aliasValue(map, value) {
+  const raw = text(value);
+  if (!raw) return raw;
+  return map.get(raw) || raw;
+}
+
+function defaultScore(_row) {
+  return 0;
+}
+
+function buildingScore(row) {
+  return text(row.id) === text(row.building_code) ? 1 : 0;
+}
+
+function floorSegmentScore(row) {
+  const expected = `${text(row.building_code)}__${text(row.floor_code)}__${text(row.segment_code)}`;
+  return text(row.id) === expected ? 1 : 0;
+}
+
+function labScore(row) {
+  return text(row.id) === text(row.lab_code) ? 1 : 0;
+}
+
+function spaceScore(row) {
+  const id = text(row.id);
+  const expected = `${text(row.building_code)}__${text(row.floor_code)}__${text(row.space_code)}`;
+  let score = id === expected ? 4 : 0;
+  if (id.startsWith(`${text(row.building_code)}__${text(row.floor_code)}__`)) score += 2;
+  if (/^\d{11}$/.test(text(row.space_code))) score += 1;
+  return score;
+}
+
+function rowIdKey(row) {
+  return text(row.id);
+}
+
+function buildingKey(row) {
+  return text(row.building_code) || text(row.id);
+}
+
+function floorSegmentKey(row) {
+  return joinKey([row.building_code, row.floor_code, row.segment_code]);
+}
+
+function labKey(row) {
+  return text(row.lab_code) || text(row.id);
+}
+
+function collegeKey(row) {
+  return text(row.college_code) || text(row.college_name) || text(row.id);
+}
+
+function majorKey(row) {
+  return text(row.major_code) || joinKey([row.college_code, row.major_name]) || text(row.id);
+}
+
+function labTypeKey(row) {
+  return text(row.type_code) || text(row.type_name) || text(row.id);
+}
+
+function spacePhysicalKey(row) {
+  const frontDoor = text(row.front_door) || text(row.space_code);
+  const rawRearDoor = text(row.rear_door);
+  const rearDoor = rawRearDoor === frontDoor ? "" : rawRearDoor;
+  return joinKey([row.building_code, row.floor_code, frontDoor, rearDoor]);
+}
+
+function joinKey(values) {
+  const parts = values.map(text);
+  return parts.some(Boolean) ? parts.join("::") : "";
+}
+
+function text(value) {
+  return String(value || "").trim();
+}
+
+module.exports = { createPlanCopyService, compactVisibleDataset };

@@ -59,6 +59,14 @@ node server.js
 
 访问 [http://localhost:5173](http://localhost:5173)。
 
+## 测试
+
+```powershell
+npm.cmd test
+```
+
+测试使用 Node 内置 `node:test` runner，不需要额外安装依赖。PowerShell 如果阻止 `npm.ps1`，请使用 `npm.cmd test`。
+
 ## Docker 部署到新服务器
 
 适合以后把项目部署到一台新的 Windows 或 Linux 服务器。服务器需要能访问 Docker Hub，首次构建会拉取 `node:24-bookworm-slim` 镜像。

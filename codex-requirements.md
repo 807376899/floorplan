@@ -61,6 +61,7 @@
 
 - 主图默认适配显示大小。
 - 主图默认显示在中央。
+- 主图和缩略图中，当当前方案落位的用途类型为 `教室` 时，该空间必须显示为灰色；其他已落位空间继续按所属学院显示不同颜色，未规划空间保持未规划灰色。
 - 主图中的教学楼信息不应随着缩放一起变化。
 - 主图中的北边指示不应随着缩放一起变化。
 - 主图中的教学楼信息和北边指示必须固定浮在主图可视区域上，不得随着主图内部滚动条滚动而移动。
@@ -68,6 +69,7 @@
 - 中屏下 workspace 必须显示为两行：缩略图区独占第一行，主图和详细信息栏在第二行并列且高度对齐。
 - 窄屏下当 workspace 改为堆叠布局时，workspace 高度必须由缩略图区域高度、主图区域高度和详细信息区域高度自然相加，主图不得被裁切或隐藏。
 - 中屏或窄屏下当缩略图区位于 workspace 顶部时，每组缩略图中的 compare-title 必须位于左侧、floor-thumbs 位于右侧，二者横向并列且高度一致；每栋楼的缩略图只能占一行，楼层缩略图数量变多时，compare-title 与 floor-thumbs 必须通过同一个横向滚动条一起滚动，不得换行、固定高度裁切或纵向滚轮隐藏。
+- 单个楼层缩略图必须完整适配在预览框内，不得在缩略图内部出现鼠标滚轮或内部滚动条；需要滚动时只能由缩略图列表容器承担。
 - 详细信息栏在宽度足够时，可以将逐行信息改为矩阵排列；宽度不足时必须保持单列，避免文字拥挤或重叠。
 - 楼梯标识使用楼层骨架 `floor_segments.element_type = stairs` 表示，并在主图和缩略图中显示楼梯线与“楼梯”标识；楼梯不作为可分配空间参与实验室落位。
 - 电梯标识使用楼层骨架 `floor_segments.element_type = elevator` 表示，并在主图和缩略图中显示灰色独立电梯图标；电梯不作为可分配空间参与用途单元落位。
@@ -121,13 +123,17 @@
 - 编辑权限仍必须遵守方案权限：editor 只能编辑自己创建且非基线的方案；admin 可编辑基线方案；viewer/游客只读。
 - 前端界面应采用清晰的业务工具风格，业务编辑和主要工作区不得使用渐变背景，状态颜色必须明确区分已建设、已规划、未规划、不可用。
 - 数据自动编号必须集中配置并可复用：默认校区编码为下沙校区 `01`、绍兴校区 `02`；教学楼编号为 `B` + 校区码 + 两位楼号；空间编号为 `0` + 校区码 + 两位楼号 + 两位楼层 + 前门牌两位 + 后门牌两位；单门空间后门牌为空时后门牌编号必须等于前门牌编号；楼层骨架编号使用 `EW/NS/ST/EV/OT` + 校区码 + 两位楼号 + 两位楼层 + 两位序号；新增用途单元编号使用 `UNIT` + 六位流水。
+- 教学楼数据必须支持 `sort_order` 排列顺序字段，admin 可在数据编辑中的教学楼表维护；顶部教学楼检索先按下沙校区、绍兴校区分组，再按校区内 `sort_order` 排列，并在选项中标注校区。
 - 新增记录可自动生成编号；已有记录不得因字段变化静默改号，必须由 admin 显式执行补全/刷新编号后才更新，并同步相关空间、骨架和方案分配引用；导入数据已有编号时默认保留。
 - 现有 `labs` 表短期继续作为底层表名和关系字段来源，但业务含义扩展为“用途单元”，可承载实验室、教室、办公室、公共空间等用途；旧 `LAB...` 编号继续兼容，新建用途单元使用 `UNIT...` 编号。
+- `outputs/lab-info-import` 导入模板生成时，杭州口径等同下沙校区；下沙校区空间必须按门牌号从东到西逐渐变大生成排列位置；同一教学楼、楼层、前后门牌完全相同的源表记录只生成一个物理空间，额外用途单元保留但不得生成重复房间；Sheet2 仅补充已匹配实训室信息，不得单独生成源表不存在的空间。
+- `outputs/lab-info-import` 中 Sheet2 的房间号和实训室编号只能在实训室名称等关键信息精确匹配时覆盖主表生成值；若主表中同楼同层不同前后门牌生成了相同编码，未精确匹配 Sheet2 的记录必须使用完整门牌生成唯一空间编码，并同步更新用途单元和方案分配。
 ## Numbering and Stable Identity
 
 - Business codes are editable identifiers and must not be used as the only durable row identity. Existing `id` values for buildings, floor segments, spaces, labs, lab types, and plans must be preserved when codes are filled or refreshed.
 - Admin post-upload numbering normalization must be supported. It must create a snapshot before writing, normalize the active dataset and all non-deleted plan copies together, and migrate references instead of creating duplicate old/new rows.
 - The active dataset save path must defensively strip plan-copy payload rows before persisting. Visible datasets may merge copy-specific buildings, floor segments, spaces, labs, plans, and assignments for display, but those rows must never be written back into `active_dataset`.
+- Visible datasets must compact duplicate structural rows by semantic identity before returning to the frontend. Spaces with the same building, floor, and physical door range, including stale single-door rows whose rear door equals the front door, must display once, and assignments that referenced the discarded space id/code must be migrated to the retained visible row.
 - Plan-copy identity must be carried by an explicit copy id (`copy_id`/`copyId`) instead of being inferred only from `plan_code`; plan codes may be normalized to `PLAN...` while the copy remains manageable by admin.
 - Building code normalization uses `B` + campus code + two-digit building number, for example `B0109`.
 - Plan codes must not contain Chinese text after explicit numbering normalization. Normalized plan codes use global sequential `PLAN000001`, `PLAN000002`, and so on across the active dataset and plan copies.
