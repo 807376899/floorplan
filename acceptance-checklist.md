@@ -127,3 +127,8 @@
 - [ ] When the correction panel leaves `rear_door` blank, the generated space code uses the final two digits from `front_door` for both door positions.
 - [ ] Floor skeleton raw editing exposes clear controls for adding stairs and elevators, plus guidance that only corridors can bind spaces.
 - [ ] Clicking add elevator creates an editable `floor_segments` row with `element_type = elevator` and an `EV...` segment code without saving until the admin applies changes.
+
+## Thumbnail Scroll Acceptance
+
+- [ ] Scroll the thumbnail list to the bottom, then click several spaces in the main floorplan; the thumbnail list keeps its scroll position and does not jump upward.
+- [ ] Repeat the same thumbnail scroll check in compare mode; scroll positions stay stable unless the user changes building, floor, plan, or compare mode.

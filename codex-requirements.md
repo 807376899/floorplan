@@ -148,3 +148,8 @@
 - Admin door/code correction must allow editing `front_door` and `rear_door`, preview the resulting `space_code`, and refresh the space code only when the correction panel is active. If `rear_door` is blank, the generated code must reuse the last two digits from `front_door`.
 - Floor skeleton editing must provide clear creation controls for corridor-adjacent structural elements. Stairs and elevators need dedicated add buttons or equivalent guidance so a new admin can create them without knowing raw `element_type` values.
 - Newly added stairs and elevators must use the configured segment code prefixes (`ST` and `EV`) and remain non-assignable skeleton elements.
+
+## Thumbnail Scroll Stability
+
+- Selecting a space or lab in the main floorplan may update the main-map selection state and details panel, but must not rebuild an unchanged thumbnail list.
+- Re-rendering the app after a main-map room selection must preserve the `.compare-columns` scroll position so the thumbnail list does not jump upward, including when the user has scrolled to the bottom.

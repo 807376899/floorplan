@@ -1346,6 +1346,24 @@ function canViewRawEditorKey(key) {
   return true;
 }
 
+function snapshotThumbnailScroll() {
+  const scroller = els.compareColumns;
+  if (!scroller) return null;
+  return {
+    top: scroller.scrollTop,
+    left: scroller.scrollLeft,
+  };
+}
+
+function restoreThumbnailScroll(snapshot) {
+  if (!snapshot || !els.compareColumns) return;
+  const scroller = els.compareColumns;
+  const nextMaxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  const nextMaxLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+  scroller.scrollTop = Math.min(snapshot.top, nextMaxTop);
+  scroller.scrollLeft = Math.min(snapshot.left, nextMaxLeft);
+}
+
 function renderApp() {
   const building = buildingByCode(els.buildingSelect.value);
   const currentPlan = planById(els.currentPlanSelect.value);
@@ -1355,6 +1373,7 @@ function renderApp() {
   const colors = colorMap(state.data.labs);
   const thumbPlan = state.planViewMode === "compare" ? beforePlan : currentPlan || activePlan || beforePlan;
   const context = getSelectedContext();
+  const thumbScroll = snapshotThumbnailScroll();
 
   renderCompareChrome();
   renderLegend(els.legend, state.data, colors, activePlan?.id);
@@ -1381,7 +1400,10 @@ function renderApp() {
     });
   } else {
     els.afterThumbs.innerHTML = "";
+    if (els.afterThumbs.dataset) delete els.afterThumbs.dataset.thumbRenderKey;
   }
+
+  restoreThumbnailScroll(thumbScroll);
 
   renderFloorplan({
     floorplanEl: els.floorplan,

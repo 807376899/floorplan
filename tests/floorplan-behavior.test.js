@@ -22,10 +22,32 @@ class StubElement {
   constructor() {
     this.innerHTML = "";
     this.textContent = "";
+    this.dataset = {};
   }
 
   querySelectorAll() {
     return [];
+  }
+}
+
+class ThumbContainerStub extends StubElement {
+  constructor() {
+    super();
+    this.scrollTop = 0;
+    this.scrollHeight = 1200;
+    this.clientHeight = 400;
+    this.listenerCount = 0;
+  }
+
+  querySelectorAll(selector) {
+    if (selector !== "button") return [];
+    const matches = this.innerHTML.match(/<button /g) || [];
+    return matches.map(() => ({
+      dataset: { planId: "plan-1", floor: "1" },
+      addEventListener: () => {
+        this.listenerCount += 1;
+      },
+    }));
   }
 }
 
@@ -80,6 +102,41 @@ test("thumbnail previews fit without an internal scroll container", () => {
   assert.doesNotMatch(thumbRule.groups.body, /overflow\s*:\s*auto/);
   assert.match(thumbRule.groups.body, /overflow\s*:\s*hidden/);
   assert.match(thumbRule.groups.body, /aspect-ratio\s*:/);
+});
+
+test("thumbnail list keeps existing DOM and scroll when render input is unchanged", () => {
+  const { FloorplanRender } = loadBrowserModules();
+  const container = new ThumbContainerStub();
+  const params = {
+    data: {
+      floor_segments: [
+        { id: "seg-1", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", start_x_m: 0, start_y_m: 0, end_x_m: 20, end_y_m: 0, width_m: 2.4, element_type: "corridor" },
+        { id: "seg-2", building_code: "B0101", floor_code: "2", segment_code: "EW01010201", start_x_m: 0, start_y_m: 0, end_x_m: 20, end_y_m: 0, width_m: 2.4, element_type: "corridor" },
+      ],
+      spaces: [
+        { id: "space-1", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", offset_m: 0, side: "north", space_code: "101", front_door: "101", rear_door: "", length_m: 8, width_m: 6, current_status: "active" },
+        { id: "space-2", building_code: "B0101", floor_code: "2", segment_code: "EW01010201", offset_m: 0, side: "north", space_code: "201", front_door: "201", rear_door: "", length_m: 8, width_m: 6, current_status: "active" },
+      ],
+      labs: [],
+      plan_assignments: [],
+    },
+    buildingCode: "B0101",
+    plan: { id: "plan-1", plan_name: "Baseline" },
+    activePlanId: "plan-1",
+    currentFloorCode: "1",
+    colors: {},
+    onSelect() {},
+  };
+
+  FloorplanRender.renderThumbList(container, params);
+  const firstHtml = container.innerHTML;
+  const firstListenerCount = container.listenerCount;
+  container.scrollTop = 800;
+  FloorplanRender.renderThumbList(container, params);
+
+  assert.equal(container.innerHTML, firstHtml);
+  assert.equal(container.scrollTop, 800);
+  assert.equal(container.listenerCount, firstListenerCount);
 });
 
 test("visible datasets collapse stale physical duplicate spaces and migrate assignments", () => {

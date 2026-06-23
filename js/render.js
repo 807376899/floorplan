@@ -172,12 +172,54 @@
     legendEl.innerHTML = [...colleges, `<span class="legend-item"><span class="legend-swatch" style="background:#e2e8f0"></span>未分配空间</span>`].join("");
   }
 
+  function thumbRenderKey(params) {
+    const { data, buildingCode, plan, activePlanId, currentFloorCode, colors } = params;
+    const planId = plan?.id || "";
+    const floors = unique(data.floor_segments.filter((row) => row.building_code === buildingCode).map((row) => row.floor_code)).sort(compare);
+    const assigned = data.plan_assignments.filter((row) => row.plan_id === planId && row.assignment_status === "assigned");
+    const assignmentsBySpace = new Map(assigned.map((row) => [row.space_id, row]));
+    const labsById = new Map(data.labs.map((row) => [row.id, row]));
+    const floorParts = floors.map((floorCode) => {
+      const segments = data.floor_segments
+        .filter((row) => row.building_code === buildingCode && row.floor_code === floorCode)
+        .map((row) => [row.id, row.segment_code, row.start_x_m, row.start_y_m, row.end_x_m, row.end_y_m, row.width_m, row.element_type].join(":"))
+        .join("|");
+      const spaces = data.spaces
+        .filter((row) => row.building_code === buildingCode && row.floor_code === floorCode)
+        .map((row) => {
+          const assignment = assignmentsBySpace.get(row.id);
+          const lab = assignment ? labsById.get(assignment.lab_id) : null;
+          return [
+            row.id,
+            row.space_code,
+            row.segment_code,
+            row.offset_m,
+            row.side,
+            row.length_m,
+            row.width_m,
+            row.current_status,
+            assignment?.id || "",
+            assignment?.lab_id || "",
+            lab?.college || "",
+            lab?.lab_type || "",
+          ].join(":");
+        })
+        .join("|");
+      return [floorCode, segments, spaces].join("~");
+    });
+    const colorPart = Object.entries(colors || {}).sort(([a], [b]) => compare(a, b)).map(([key, value]) => `${key}:${value}`).join("|");
+    return JSON.stringify({ buildingCode, planId, activePlanId, currentFloorCode, floors: floorParts, colors: colorPart });
+  }
+
   function renderThumbList(container, params) {
     const { data, buildingCode, plan, activePlanId, currentFloorCode, colors, onSelect } = params;
+    const nextKey = thumbRenderKey(params);
+    if (container.dataset?.thumbRenderKey === nextKey) return false;
     const floors = unique(data.floor_segments.filter((row) => row.building_code === buildingCode).map((row) => row.floor_code)).sort(compare);
     if (!plan || !floors.length) {
       container.innerHTML = `<div class="empty">当前楼栋没有可展示的楼层。</div>`;
-      return;
+      if (container.dataset) container.dataset.thumbRenderKey = nextKey;
+      return true;
     }
 
     container.innerHTML = floors.map((floorCode) => {
@@ -194,7 +236,9 @@
       </button>`;
     }).join("");
 
+    if (container.dataset) container.dataset.thumbRenderKey = nextKey;
     container.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => onSelect(button.dataset.planId, button.dataset.floor)));
+    return true;
   }
 
   function renderFloorplan(params) {
