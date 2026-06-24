@@ -9,6 +9,7 @@
     unique,
     compare,
     escapeHtml,
+    normalizeColor,
   } = global.FloorplanDomain;
 
   function buildLayout(segments, spaces, scale, titleHeight = 96, margin = 34) {
@@ -113,6 +114,14 @@
     const size = compact ? Math.max(7, item.width * 1.3) : Math.max(22, item.width * 1.35);
     const half = size / 2;
     const strokeWidth = compact ? 0.8 : 1.8;
+    const boxLabel = compact ? "" : `<text x="${cx}" y="${cy + half + 14}" text-anchor="middle" font-size="12" fill="#475467">电梯</text>`;
+    return `<g class="structure-elevator" aria-label="elevator">
+      <rect class="elevator-car" x="${cx - half}" y="${cy - half}" width="${size}" height="${size}" rx="${compact ? 2 : 4}" fill="#f3f4f6" stroke="#6b7280" stroke-width="${strokeWidth}"></rect>
+      <rect class="elevator-door elevator-door-left" x="${cx - size * 0.34}" y="${cy - size * 0.26}" width="${size * 0.34}" height="${size * 0.56}" rx="${compact ? 1 : 2}" fill="#ffffff" stroke="#9ca3af" stroke-width="${strokeWidth * 0.75}"></rect>
+      <rect class="elevator-door elevator-door-right" x="${cx}" y="${cy - size * 0.26}" width="${size * 0.34}" height="${size * 0.56}" rx="${compact ? 1 : 2}" fill="#ffffff" stroke="#9ca3af" stroke-width="${strokeWidth * 0.75}"></rect>
+      <line class="elevator-door-seam" x1="${cx}" y1="${cy - size * 0.26}" x2="${cx}" y2="${cy + size * 0.3}" stroke="#6b7280" stroke-width="${strokeWidth * 0.7}"></line>
+      <rect class="elevator-indicator" x="${cx - size * 0.16}" y="${cy - size * 0.42}" width="${size * 0.32}" height="${size * 0.08}" rx="${compact ? 0.5 : 1}" fill="#9ca3af"></rect>
+    </g>${boxLabel}`;
     const label = compact ? "" : `<text x="${cx}" y="${cy + half + 14}" text-anchor="middle" font-size="12" fill="#475467">电梯</text>`;
     return `<g class="structure-elevator" aria-label="电梯">
       <rect x="${cx - half}" y="${cy - half}" width="${size}" height="${size}" rx="${compact ? 2 : 4}" fill="#f3f4f6" stroke="#6b7280" stroke-width="${strokeWidth}"></rect>
@@ -122,8 +131,21 @@
     </g>${label}`;
   }
 
-  function colorMap(labs) {
-    return Object.fromEntries(unique(labs.map((row) => row.college)).map((value, index) => [value, COLORS[index % COLORS.length]]));
+  function colorMap(dataOrLabs, maybeColleges = []) {
+    const labs = Array.isArray(dataOrLabs) ? dataOrLabs : dataOrLabs?.labs || [];
+    const colleges = Array.isArray(dataOrLabs) ? maybeColleges : dataOrLabs?.colleges || [];
+    const colors = {};
+    colleges.forEach((college) => {
+      const color = normalizeColor(college.color || college.color_hex);
+      if (!color) return;
+      if (college.college_name) colors[college.college_name] = color;
+      if (college.college_code) colors[college.college_code] = color;
+    });
+    unique(labs.map((row) => row.college)).forEach((value, index) => {
+      if (!value || colors[value]) return;
+      colors[value] = COLORS[index % COLORS.length];
+    });
+    return colors;
   }
 
   function roomFill(space, colors) {

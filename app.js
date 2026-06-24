@@ -7,11 +7,13 @@ const {
   compare,
   compareBuildings,
   normalizeDataset,
+  normalizeColor,
   normalizeBuilding,
   normalizeSegment,
   normalizeSpace,
   normalizeLab,
   normalizeCollege,
+  nextCollegeColor,
   normalizeMajor,
   normalizeLabType,
   canonicalizeLabTypes,
@@ -770,7 +772,7 @@ function renderImportPreviewCanvas() {
     building,
     floorCode: state.importDrafts.preview.floorCode,
     activePlan,
-    colors: colorMap(dataset.labs),
+    colors: colorMap(dataset),
     selectedSpaceId: null,
     collegeFilter: ALL_COLLEGES,
     onSelectSpace: () => {},
@@ -1370,7 +1372,7 @@ function renderApp() {
   const beforePlan = planById(els.beforePlanSelect.value);
   const afterPlan = planById(els.afterPlanSelect.value);
   const activePlan = planById(state.activePlanId);
-  const colors = colorMap(state.data.labs);
+  const colors = colorMap(state.data);
   const thumbPlan = state.planViewMode === "compare" ? beforePlan : currentPlan || activePlan || beforePlan;
   const context = getSelectedContext();
   const thumbScroll = snapshotThumbnailScroll();
@@ -2238,6 +2240,7 @@ function renderEditor() {
   const canDeleteRows = canDeleteEditorRows(state.editorKey);
   const actionHeader = canDeleteRows ? `<th>操作</th>` : "";
   els.dataEditor.innerHTML = `${numberingToolbarHtml()}${rawEditorNoticeHtml()}<table><thead><tr>${definition.columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}${actionHeader}</tr></thead><tbody>${rows.map((row, rowIndex) => `<tr data-row-id="${escapeHtml(row.id || "")}" class="${highlightRowId && row.id === highlightRowId ? "is-highlight" : ""}">${definition.columns.map(([key]) => `<td data-key="${key}"><input data-row="${rowIndex}" data-key="${key}" value="${escapeHtml(row[key] ?? "")}" ${inputDisabled}></td>`).join("")}${canDeleteRows ? `<td class="row-actions"><button type="button" class="row-delete-button" data-delete-row="${rowIndex}">删除</button></td>` : ""}</tr>`).join("")}</tbody></table>`;
+  enhanceCollegeColorInputs(inputDisabled);
   bindRawEditorTools();
   els.dataEditor.querySelectorAll("[data-delete-row]").forEach((button) => {
     button.addEventListener("click", () => { void deleteEditorRow(Number(button.dataset.deleteRow), button); });
@@ -2259,6 +2262,20 @@ function numberingToolbarHtml() {
     </div>`;
   }
   return `<div class="raw-editor-tools"><button type="button" data-regenerate-editor-codes>补全/刷新编号</button><span>编号只写入当前表单，点击“应用修改”后保存。</span></div>`;
+}
+
+function enhanceCollegeColorInputs(inputDisabled) {
+  if (state.editorKey !== "colleges") return;
+  els.dataEditor.querySelectorAll('td[data-key="color"] input[data-key="color"]').forEach((input) => {
+    const picker = document.createElement("input");
+    picker.type = "color";
+    picker.dataset.row = input.dataset.row;
+    picker.dataset.key = "color";
+    picker.value = normalizeColor(input.value) || nextCollegeColor(Number(input.dataset.row || 0), input.closest("tr")?.dataset.rowId || "", new Set(state.data.colleges.map((college) => college.color)));
+    picker.className = "college-color-input";
+    picker.disabled = Boolean(inputDisabled);
+    input.replaceWith(picker);
+  });
 }
 
 function bindRawEditorTools() {
@@ -3352,6 +3369,7 @@ function addEditorRow() {
     state.data.labs.push(normalizeLab({ lab_code: nextUnitCode(), lab_name: "新增用途单元", college: "未设置学院", major: "", lab_type: "教学实验室", director: "", seat_count: 0, computer_count: 0, status: "planning", notes: "", created_at: now }));
   } else if (state.editorKey === "colleges") {
     state.data.colleges.push(normalizeCollege({ college_code: `学院-${Date.now()}`, college_name: "新增学院", sort_order: state.data.colleges.length + 1, status: "active", notes: "", created_at: now }));
+    state.data.colleges[state.data.colleges.length - 1].color ||= nextCollegeColor(state.data.colleges.length - 1, "new-college", new Set(state.data.colleges.slice(0, -1).map((college) => college.color)));
   } else if (state.editorKey === "majors") {
     const college = activeCollegeOptions()[0] || state.data.colleges[0] || normalizeCollege({ college_code: "未设置学院", college_name: "未设置学院" });
     if (!state.data.colleges.length) state.data.colleges.push(college);

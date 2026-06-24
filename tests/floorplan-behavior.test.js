@@ -94,6 +94,102 @@ test("classroom spaces render gray even when assigned to a college", () => {
   assert.doesNotMatch(floorplanEl.innerHTML, /fill="#2563eb"/);
 });
 
+test("college dictionaries initialize unique editable colors", () => {
+  const { FloorplanDomain } = loadBrowserModules();
+  const dataset = FloorplanDomain.normalizeDataset({
+    buildings: [],
+    floor_segments: [],
+    spaces: [],
+    labs: [
+      { lab_code: "LAB001", lab_name: "Lab A", college: "学院A", lab_type: "实验室" },
+      { lab_code: "LAB002", lab_name: "Lab B", college: "学院B", lab_type: "实验室" },
+      { lab_code: "LAB003", lab_name: "Lab C", college: "学院C", lab_type: "实验室" },
+    ],
+    plans: [],
+    plan_assignments: [],
+  });
+
+  const colors = dataset.colleges.map((college) => college.color);
+
+  assert.equal(colors.length, 3);
+  assert.equal(new Set(colors).size, colors.length);
+  colors.forEach((color) => assert.match(color, /^#[0-9a-f]{6}$/i));
+});
+
+test("custom college colors drive room fills and legend swatches", () => {
+  const { FloorplanRender } = loadBrowserModules();
+  const floorplanEl = new StubElement();
+  const badgeEl = new StubElement();
+  const legendEl = new StubElement();
+  const data = {
+    buildings: [],
+    floor_segments: [{ id: "seg-1", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", start_x_m: 0, start_y_m: 0, end_x_m: 20, end_y_m: 0, width_m: 2.4, element_type: "corridor" }],
+    spaces: [{ id: "space-1", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", offset_m: 0, side: "north", space_code: "101", front_door: "101", rear_door: "", length_m: 8, width_m: 6, area_m2: 48, network_segment: "", current_status: "active" }],
+    labs: [{ id: "lab-1", lab_code: "LAB001", lab_name: "Lab A", college: "自定义学院", lab_type: "实验室" }],
+    colleges: [{ college_code: "C001", college_name: "自定义学院", color: "#123abc", sort_order: 1 }],
+    plan_assignments: [{ id: "assign-1", plan_id: "plan-1", lab_id: "lab-1", space_id: "space-1", assignment_status: "assigned" }],
+  };
+  const colors = FloorplanRender.colorMap(data);
+
+  FloorplanRender.renderFloorplan({
+    floorplanEl,
+    activePlanBadgeEl: badgeEl,
+    data,
+    building: { building_code: "B0101", building_name: "测试楼" },
+    floorCode: "1",
+    activePlan: { id: "plan-1", plan_name: "基线" },
+    colors,
+    selectedSpaceId: "",
+    collegeFilter: "全部学院",
+    onSelectSpace() {},
+  });
+  FloorplanRender.renderLegend(legendEl, data, colors, "plan-1");
+
+  assert.match(floorplanEl.innerHTML, /fill="#123abc"/);
+  assert.match(legendEl.innerHTML, /background:#123abc/);
+});
+
+test("admin college editor exposes a visual color input", () => {
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+
+  assert.match(appSource, /picker\.type = "color"/);
+  assert.match(appSource, /picker\.dataset\.key = "color"/);
+});
+
+test("elevator structures render as box elevator cars", () => {
+  const { FloorplanRender } = loadBrowserModules();
+  const floorplanEl = new StubElement();
+  const badgeEl = new StubElement();
+  const data = {
+    buildings: [],
+    floor_segments: [
+      { id: "seg-1", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", start_x_m: 0, start_y_m: 0, end_x_m: 20, end_y_m: 0, width_m: 2.4, element_type: "corridor" },
+      { id: "elevator-1", building_code: "B0101", floor_code: "1", segment_code: "ST01010101", start_x_m: 4, start_y_m: 0, end_x_m: 4, end_y_m: 4, width_m: 3, element_type: "elevator" },
+    ],
+    spaces: [],
+    labs: [],
+    plan_assignments: [],
+  };
+
+  FloorplanRender.renderFloorplan({
+    floorplanEl,
+    activePlanBadgeEl: badgeEl,
+    data,
+    building: { building_code: "B0101", building_name: "测试楼" },
+    floorCode: "1",
+    activePlan: { id: "plan-1", plan_name: "基线" },
+    colors: {},
+    selectedSpaceId: "",
+    collegeFilter: "全部学院",
+    onSelectSpace() {},
+  });
+
+  const elevatorMarkup = floorplanEl.innerHTML.match(/<g class="structure-elevator"[\s\S]*?<\/g>/)?.[0] || "";
+
+  assert.match(elevatorMarkup, /elevator-door/);
+  assert.doesNotMatch(elevatorMarkup, /<path/);
+});
+
 test("thumbnail previews fit without an internal scroll container", () => {
   const css = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
   const thumbRule = css.match(/\.thumb-preview\s*\{(?<body>[^}]+)\}/);

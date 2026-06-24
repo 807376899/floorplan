@@ -132,3 +132,10 @@
 
 - [ ] Scroll the thumbnail list to the bottom, then click several spaces in the main floorplan; the thumbnail list keeps its scroll position and does not jump upward.
 - [ ] Repeat the same thumbnail scroll check in compare mode; scroll positions stay stable unless the user changes building, floor, plan, or compare mode.
+
+## Display Color and Structure Acceptance
+
+- [ ] College rows include an editable `color` field, and admin raw editing shows that field as a color picker.
+- [ ] Existing and imported college dictionaries with missing or repeated colors normalize to distinct `#RRGGBB` values.
+- [ ] Main floorplan rooms and legend swatches use the admin-maintained college colors for assigned non-classroom spaces, while classroom spaces stay gray.
+- [ ] Elevator floor skeletons render as box elevator car icons in main and thumbnail views, without escalator or directional-arrow artwork.

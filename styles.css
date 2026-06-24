@@ -1275,6 +1275,13 @@ button:disabled {
   width: 144px;
 }
 
+.data-editor input.college-color-input {
+  width: 52px;
+  height: 34px;
+  padding: 3px;
+  cursor: pointer;
+}
+
 .data-editor input:focus {
   outline: 0;
   border-color: var(--accent);

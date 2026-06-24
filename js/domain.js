@@ -5,7 +5,11 @@
   const ROOM_GAP_M = 0.7;
   const DETAIL_SCALE = 28;
   const THUMB_SCALE = 6;
-  const COLORS = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#0891b2", "#be123c", "#4d7c0f"];
+  const COLORS = [
+    "#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#0891b2", "#be123c", "#4d7c0f",
+    "#b45309", "#0f766e", "#4338ca", "#c026d3", "#16a34a", "#ea580c", "#0284c7", "#e11d48",
+    "#65a30d", "#9333ea", "#ca8a04", "#0d9488", "#1d4ed8", "#be185d", "#15803d", "#7c2d12",
+  ];
   const NUMBERING_RULES = {
     campusCodes: [
       { code: "01", names: ["下沙校区", "下沙"] },
@@ -160,6 +164,11 @@
       ],
     },
   ];
+
+  const collegeDataset = DATASETS.find((item) => item.key === "colleges");
+  if (collegeDataset && !collegeDataset.columns.some(([key]) => key === "color")) {
+    collegeDataset.columns.splice(2, 0, ["color", "颜色"]);
+  }
 
   const KEY_ALIASES = {
     buildings: {
@@ -586,6 +595,67 @@
     return raw || `${fallbackPrefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   }
 
+  KEY_ALIASES.colleges.color = ["color", "color_hex", "颜色", "学院颜色", "颜色值"];
+
+  function normalizeColor(value) {
+    const raw = String(value || "").trim();
+    const short = raw.match(/^#?([0-9a-f]{3})$/i);
+    if (short) return `#${short[1].split("").map((char) => char + char).join("").toLowerCase()}`;
+    const full = raw.match(/^#?([0-9a-f]{6})$/i);
+    return full ? `#${full[1].toLowerCase()}` : "";
+  }
+
+  function stableColorIndex(seed, offset = 0) {
+    const text = String(seed || "");
+    let hash = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+    }
+    return (hash + offset) % COLORS.length;
+  }
+
+  function nextCollegeColor(index = 0, seed = "", usedColors = new Set()) {
+    const used = new Set([...usedColors].map(normalizeColor).filter(Boolean));
+    for (let offset = 0; offset < COLORS.length; offset += 1) {
+      const color = COLORS[(index + stableColorIndex(seed, offset)) % COLORS.length];
+      if (!used.has(color)) return color;
+    }
+    const hue = (stableColorIndex(seed, index) * 47 + index * 29) % 360;
+    for (let offset = 0; offset < 360; offset += 23) {
+      const color = hslToHex((hue + offset) % 360, 58, 42);
+      if (!used.has(color)) return color;
+    }
+    return COLORS[index % COLORS.length];
+  }
+
+  function hslToHex(hue, saturation, lightness) {
+    const s = saturation / 100;
+    const l = lightness / 100;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs((hue / 60) % 2 - 1));
+    const m = l - c / 2;
+    const [r, g, b] = hue < 60 ? [c, x, 0]
+      : hue < 120 ? [x, c, 0]
+        : hue < 180 ? [0, c, x]
+          : hue < 240 ? [0, x, c]
+            : hue < 300 ? [x, 0, c]
+              : [c, 0, x];
+    const toHex = (value) => Math.round((value + m) * 255).toString(16).padStart(2, "0");
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+
+  function assignCollegeColors(colleges) {
+    const used = new Set();
+    return colleges.map((college, index) => {
+      const preferred = normalizeColor(college.color || college.color_hex);
+      const color = preferred && !used.has(preferred)
+        ? preferred
+        : nextCollegeColor(index, college.college_name || college.college_code, used);
+      used.add(color);
+      return { ...college, color };
+    });
+  }
+
   function normalizeCollege(row) {
     const now = isoNow();
     const name = String(row.college_name || row.college || row.college_code || "").trim();
@@ -594,6 +664,7 @@
       id: code,
       college_code: code,
       college_name: name || code,
+      color: normalizeColor(row.color || row.color_hex),
       sort_order: numberValue(row.sort_order, 0),
       status: activeStatus(row.status),
       notes: row.notes || "",
@@ -729,7 +800,7 @@
       .map((name, index) => normalizeLabType({ type_code: name, type_name: name, sort_order: index + 1 }));
     const byOrderThenName = (nameKey) => (a, b) => numberValue(a.sort_order, 0) - numberValue(b.sort_order, 0) || compare(a[nameKey], b[nameKey]);
     return {
-      colleges: dedupeBy(collegeRows, "id").sort(byOrderThenName("college_name")),
+      colleges: assignCollegeColors(dedupeBy(collegeRows, "id").sort(byOrderThenName("college_name"))),
       majors: dedupeBy(majorRows, "id").sort(byOrderThenName("major_name")),
       lab_types: canonicalizeLabTypes(typeRows, labs).sort(byOrderThenName("type_name")),
     };
@@ -966,6 +1037,9 @@
     defaultPlans,
     defaultComparePlans,
     normalizeDataset,
+    normalizeColor,
+    nextCollegeColor,
+    assignCollegeColors,
     normalizeBuilding,
     normalizeSegment,
     normalizeSpace,

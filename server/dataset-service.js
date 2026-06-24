@@ -2,12 +2,18 @@ const fs = require("fs");
 const path = require("path");
 const { nowIso, toBoolean, httpError } = require("./http-utils");
 
+const COLLEGE_COLORS = [
+  "#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#0891b2", "#be123c", "#4d7c0f",
+  "#b45309", "#0f766e", "#4338ca", "#c026d3", "#16a34a", "#ea580c", "#0284c7", "#e11d48",
+  "#65a30d", "#9333ea", "#ca8a04", "#0d9488", "#1d4ed8", "#be185d", "#15803d", "#7c2d12",
+];
+
 const repairFieldMap = {
   buildings: ["building_name", "campus_zone", "notes"],
   floor_segments: ["notes"],
   spaces: ["network_segment", "notes"],
   labs: ["lab_name", "college", "major", "lab_type", "director", "notes"],
-  colleges: ["college_name", "notes"],
+  colleges: ["college_name", "color", "notes"],
   majors: ["major_name", "notes"],
   lab_types: ["type_name", "notes"],
   plans: ["plan_name", "description"],
@@ -164,6 +170,65 @@ function createDatasetService(db, config, audit) {
     return raw || `${fallbackPrefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   }
 
+  function normalizeColor(value) {
+    const raw = String(value || "").trim();
+    const short = raw.match(/^#?([0-9a-f]{3})$/i);
+    if (short) return `#${short[1].split("").map((char) => char + char).join("").toLowerCase()}`;
+    const full = raw.match(/^#?([0-9a-f]{6})$/i);
+    return full ? `#${full[1].toLowerCase()}` : "";
+  }
+
+  function stableColorIndex(seed, offset = 0) {
+    const text = String(seed || "");
+    let hash = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+    }
+    return (hash + offset) % COLLEGE_COLORS.length;
+  }
+
+  function hslToHex(hue, saturation, lightness) {
+    const s = saturation / 100;
+    const l = lightness / 100;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs((hue / 60) % 2 - 1));
+    const m = l - c / 2;
+    const [r, g, b] = hue < 60 ? [c, x, 0]
+      : hue < 120 ? [x, c, 0]
+        : hue < 180 ? [0, c, x]
+          : hue < 240 ? [0, x, c]
+            : hue < 300 ? [x, 0, c]
+              : [c, 0, x];
+    const toHex = (value) => Math.round((value + m) * 255).toString(16).padStart(2, "0");
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+
+  function nextCollegeColor(index = 0, seed = "", usedColors = new Set()) {
+    const used = new Set([...usedColors].map(normalizeColor).filter(Boolean));
+    for (let offset = 0; offset < COLLEGE_COLORS.length; offset += 1) {
+      const color = COLLEGE_COLORS[(index + stableColorIndex(seed, offset)) % COLLEGE_COLORS.length];
+      if (!used.has(color)) return color;
+    }
+    const hue = (stableColorIndex(seed, index) * 47 + index * 29) % 360;
+    for (let offset = 0; offset < 360; offset += 23) {
+      const color = hslToHex((hue + offset) % 360, 58, 42);
+      if (!used.has(color)) return color;
+    }
+    return COLLEGE_COLORS[index % COLLEGE_COLORS.length];
+  }
+
+  function assignCollegeColors(colleges) {
+    const used = new Set();
+    return colleges.map((college, index) => {
+      const preferred = normalizeColor(college.color || college.color_hex);
+      const color = preferred && !used.has(preferred)
+        ? preferred
+        : nextCollegeColor(index, college.college_name || college.college_code, used);
+      used.add(color);
+      return { ...college, color };
+    });
+  }
+
   function normalizeCollegeRow(row) {
     const name = String(row.college_name || row.college || row.college_code || "").trim();
     const code = normalizeDictionaryCode(row.college_code || name, "COLLEGE");
@@ -172,6 +237,7 @@ function createDatasetService(db, config, audit) {
       id: row.id || code,
       college_code: code,
       college_name: name || code,
+      color: normalizeColor(row.color || row.color_hex),
       sort_order: Number(row.sort_order || 0),
       status: activeStatus(row.status),
       notes: String(row.notes || ""),
@@ -303,7 +369,7 @@ function createDatasetService(db, config, audit) {
     const labTypesRaw = data.lab_types.length ? data.lab_types.map(normalizeLabTypeRow) : unique(labs.map((row) => row.lab_type))
       .map((name, index) => normalizeLabTypeRow({ type_code: name, type_name: name, sort_order: index + 1 }));
     return {
-      colleges: dedupeById(colleges),
+      colleges: assignCollegeColors(dedupeById(colleges)),
       majors: dedupeById(majors),
       lab_types: canonicalizeLabTypes(labTypesRaw, labs),
     };

@@ -153,3 +153,10 @@
 
 - Selecting a space or lab in the main floorplan may update the main-map selection state and details panel, but must not rebuild an unchanged thumbnail list.
 - Re-rendering the app after a main-map room selection must preserve the `.compare-columns` scroll position so the thumbnail list does not jump upward, including when the user has scrolled to the bottom.
+
+## Display Colors and Structure Icons
+
+- College dictionary rows carry an editable `color` value in `#RRGGBB` format. Missing or duplicate college colors must be initialized to distinct colors during dataset normalization.
+- Room fills and legend swatches must use the admin-maintained college color mapping for assigned non-classroom spaces. Classroom spaces remain gray even when assigned to a college.
+- Admin raw data editing must expose the college `color` field as a visual color picker in the colleges table.
+- Elevator floor skeletons (`floor_segments.element_type = elevator`) must render as box elevator car icons, not escalator or directional-arrow icons, in the main floorplan and thumbnails.
