@@ -148,29 +148,57 @@
     return colors;
   }
 
-  function roomFill(space, colors) {
+  function roomFill(space, colors, previewItem = null) {
+    if (previewItem) return previewItem.color || colors[previewItem.college] || "#64748b";
     if (!space.lab) return "#e2e8f0";
     if (String(space.lab.lab_type || "").trim() === "教室") return "#94a3b8";
     return colors[space.lab.college] || "#64748b";
   }
 
-  function roomSvg(box, colors, compact, selectedSpaceId, collegeFilter) {
-    const fill = roomFill(box.space, colors);
-    const labelFill = box.space.lab ? "#ffffff" : "#344054";
+  function roomSvg(box, colors, compact, selectedSpaceId, collegeFilter, moveBasket = {}, canMoveLabs = false) {
+    const items = moveBasket.items || [];
+    const previewItem = items.find((item) => item.targetSpaceId === box.space.id) || null;
+    const sourceItem = items.find((item) => item.sourceSpaceId === box.space.id) || null;
+    const fill = roomFill(box.space, colors, previewItem);
+    const labelFill = box.space.lab || previewItem ? "#ffffff" : "#344054";
     if (compact) return `<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="${fill}" rx="3"></rect>`;
 
     const muted = collegeFilter !== ALL_COLLEGES && box.space.lab?.college !== collegeFilter;
     const selected = selectedSpaceId === box.space.id;
     const doorLabel = box.space.front_door || box.space.space_code;
-    const label = box.space.lab?.lab_name || box.space.front_door || box.space.space_code;
-    const subLabel = box.space.lab?.college || box.space.network_segment || box.space.current_status;
-    return `<g class="room ${muted && box.space.lab ? "is-muted" : ""} ${selected ? "is-selected" : ""}" data-space-id="${box.space.id}" data-room-x="${box.x}" data-room-y="${box.y}" data-room-width="${box.width}" data-room-height="${box.height}">
+    const label = previewItem?.labName || box.space.lab?.lab_name || box.space.front_door || box.space.space_code;
+    const subLabel = previewItem
+      ? `${previewItem.college || "待落位"} · 落位中`
+      : box.space.lab?.college || box.space.network_segment || box.space.current_status;
+    const movable = Boolean(canMoveLabs && box.space.assignment && box.space.lab && !sourceItem);
+    const tooltip = roomTooltipText(box.space);
+    return `<g class="room ${muted && box.space.lab ? "is-muted" : ""} ${selected ? "is-selected" : ""} ${movable ? "is-move-source" : ""} ${sourceItem ? "is-basket-source" : ""} ${previewItem ? "is-basket-target" : ""}" tabindex="0" data-space-id="${box.space.id}" data-assignment-id="${box.space.assignment?.id || ""}" data-lab-id="${box.space.lab?.id || ""}" data-room-tooltip="${escapeHtml(tooltip)}" data-room-x="${box.x}" data-room-y="${box.y}" data-room-width="${box.width}" data-room-height="${box.height}">
       <rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="4" fill="${fill}"></rect>
       <text class="room-label room-label-door" data-label-role="door" data-label-text="${escapeHtml(doorLabel)}" x="${box.x + 8}" y="${box.y + 18}" fill="${labelFill}" font-size="13" font-weight="700">${escapeHtml(doorLabel)}</text>
       <text class="room-label room-label-name" data-label-role="name" data-label-text="${escapeHtml(label)}" x="${box.x + 8}" y="${box.y + 36}" fill="${labelFill}" font-size="12">${escapeHtml(label)}</text>
       <text class="room-label room-label-meta" data-label-role="meta" data-label-text="${escapeHtml(subLabel)}" x="${box.x + 8}" y="${box.y + 53}" fill="${labelFill}" font-size="12">${escapeHtml(subLabel)}</text>
       <text class="room-label room-label-area" data-label-role="area" data-label-text="${escapeHtml(`${box.space.area_m2.toFixed(1)} m²`)}" x="${box.x + 8}" y="${box.y + 70}" fill="${labelFill}" font-size="12">${escapeHtml(box.space.area_m2.toFixed(1))} m²</text>
     </g>`;
+  }
+
+  function roomTooltipText(space) {
+    const door = doorRangeLabel(space) || space.space_code || "-";
+    if (!space.lab) {
+      return [
+        "未规划",
+        `门牌：${door}`,
+        `面积：${space.area_m2.toFixed(1)} m²`,
+        `网段：${space.network_segment || "未填写"}`,
+      ].join("\n");
+    }
+    return [
+      space.lab.lab_name || "未命名用途单元",
+      `学院：${space.lab.college || "未填写"}`,
+      `专业：${space.lab.major || "未填写"}`,
+      `负责人：${space.lab.director || "未填写"}`,
+      `座位：${space.lab.seat_count || 0} · 电脑：${space.lab.computer_count || 0}`,
+      `门牌：${door} · 面积：${space.area_m2.toFixed(1)} m²`,
+    ].join("\n");
   }
 
   function floorRenderData(data, buildingCode, floorCode, planId) {
@@ -264,7 +292,7 @@
   }
 
   function renderFloorplan(params) {
-    const { floorplanEl, activePlanBadgeEl, data, building, floorCode, activePlan, colors, selectedSpaceId, collegeFilter, onSelectSpace } = params;
+    const { floorplanEl, activePlanBadgeEl, data, building, floorCode, activePlan, colors, selectedSpaceId, collegeFilter, moveBasket, canMoveLabs, onSelectSpace, onRoomPointerDown } = params;
     if (!activePlan) {
       floorplanEl.innerHTML = `<div class="empty">当前没有可用方案。</div>`;
       activePlanBadgeEl.textContent = "当前主图";
@@ -288,11 +316,52 @@
         <svg viewBox="0 0 ${layout.width} ${layout.height}">
           <rect width="${layout.width}" height="${layout.height}" fill="#fbfcfe"></rect>
           ${layout.corridors.map((item) => structureSvg(item, false)).join("")}
-          ${layout.rooms.map((item) => roomSvg(item, colors, false, selectedSpaceId, collegeFilter)).join("")}
+          ${layout.rooms.map((item) => roomSvg(item, colors, false, selectedSpaceId, collegeFilter, moveBasket, canMoveLabs)).join("")}
         </svg>
-      </div>`;
+      </div>
+      <div class="room-hover-card is-hidden" aria-hidden="true"></div>`;
 
-    floorplanEl.querySelectorAll(".room").forEach((node) => node.addEventListener("click", () => onSelectSpace(node.dataset.spaceId)));
+    const hoverCard = floorplanEl.querySelector?.(".room-hover-card") || null;
+    const hideHoverCard = () => {
+      hoverCard?.classList.add("is-hidden");
+      hoverCard?.setAttribute("aria-hidden", "true");
+    };
+    const showHoverCard = (node, event) => {
+      if (!hoverCard || document.body.classList.contains("is-moving-placement") || floorplanEl.classList.contains("is-panning")) return;
+      const text = node.dataset.roomTooltip || "";
+      if (!text.trim()) return;
+      hoverCard.innerHTML = roomTooltipHtml(text);
+      hoverCard.classList.remove("is-hidden");
+      hoverCard.setAttribute("aria-hidden", "false");
+      positionHoverCard(floorplanEl, hoverCard, event);
+    };
+
+    floorplanEl.querySelectorAll(".room").forEach((node) => {
+      node.addEventListener("click", () => onSelectSpace(node.dataset.spaceId));
+      node.addEventListener("pointerdown", (event) => onRoomPointerDown?.(event, node.dataset.spaceId));
+      node.addEventListener("pointerenter", (event) => showHoverCard(node, event));
+      node.addEventListener("pointermove", (event) => showHoverCard(node, event));
+      node.addEventListener("pointerleave", hideHoverCard);
+      node.addEventListener("focus", (event) => showHoverCard(node, event));
+      node.addEventListener("blur", hideHoverCard);
+    });
+  }
+
+  function roomTooltipHtml(text) {
+    const [title, ...lines] = text.split("\n");
+    return `<strong>${escapeHtml(title || "")}</strong>${lines.map((line) => `<span>${escapeHtml(line)}</span>`).join("")}`;
+  }
+
+  function positionHoverCard(container, card, event) {
+    const rect = container.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    const fallbackX = rect.left + rect.width / 2;
+    const fallbackY = rect.top + rect.height / 2;
+    const clientX = event?.clientX || fallbackX;
+    const clientY = event?.clientY || fallbackY;
+    const nextLeft = Math.min(Math.max(clientX - rect.left + 14, 8), rect.width - cardRect.width - 8);
+    const nextTop = Math.min(Math.max(clientY - rect.top + 14, 8), rect.height - cardRect.height - 8);
+    card.style.transform = `translate(${nextLeft}px, ${nextTop}px)`;
   }
 
   function renderDetailsPanel(params) {
@@ -310,6 +379,13 @@
       onMoveFieldChange,
       onConfirmMove,
       onCancelMove,
+      moveBasket = { items: [], isOpen: false },
+      onToggleBasket,
+      onLocateBasketSource,
+      onReturnBasketItem,
+      onBasketCardPointerDown,
+      onOpenBasket,
+      onCloseBasket,
     } = params;
 
     if (!context.space) {
@@ -317,15 +393,21 @@
         <h2>当前选中对象</h2>
         <p>点击主图中的空间，在这里查看当前方案下的空间、实验室和分配信息。</p>
       </div>`;
+      renderMoveBasketDock(detailsEl, moveBasket, canEdit, { onToggleBasket, onLocateBasketSource, onReturnBasketItem, onBasketCardPointerDown, onOpenBasket, onCloseBasket });
+      bindMoveBasketBlankClose(detailsEl, moveBasket, onCloseBasket);
       return;
     }
 
     if (mode === "move") {
       renderMovePanel(detailsEl, context, moveDraft, moveErrors, moveDirty, moveTargetOptions, onMoveFieldChange, onConfirmMove, onCancelMove);
+      renderMoveBasketDock(detailsEl, moveBasket, canEdit, { onToggleBasket, onLocateBasketSource, onReturnBasketItem, onBasketCardPointerDown, onOpenBasket, onCloseBasket });
+      bindMoveBasketBlankClose(detailsEl, moveBasket, onCloseBasket);
       return;
     }
 
     renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove);
+    renderMoveBasketDock(detailsEl, moveBasket, canEdit, { onToggleBasket, onLocateBasketSource, onReturnBasketItem, onBasketCardPointerDown, onOpenBasket, onCloseBasket });
+    bindMoveBasketBlankClose(detailsEl, moveBasket, onCloseBasket);
   }
 
   function renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove) {
@@ -379,10 +461,101 @@
       </div>
 
       <div class="details-actions">
-        ${canEdit ? `<button type="button" class="primary-button" data-action="move" ${canMove ? "" : "disabled"}>搬迁实验室</button>` : ""}
+        ${canEdit ? `<button type="button" class="primary-button" data-action="move" ${canMove ? "" : "disabled"}>加入待安置区</button>` : ""}
       </div>
     </div>`;
     detailsEl.querySelector('[data-action="move"]')?.addEventListener("click", onOpenMove);
+  }
+
+  function renderMoveBasketDock(detailsEl, moveBasket, canEdit, handlers) {
+    const items = moveBasket.items || [];
+    const dock = document.createElement("div");
+    dock.className = `move-basket-dock ${items.length ? "has-items" : "is-empty"}`;
+    dock.dataset.moveBasketDropzone = "true";
+    dock.innerHTML = `<div class="move-basket-dock-summary">
+        <span class="move-basket-color-stack">${items.slice(0, 4).map((item) => `<i style="background:${escapeHtml(item.color || "#64748b")}"></i>`).join("")}</span>
+        <strong>${items.length ? `待安置区 ${items.length}` : "待安置区"}</strong>
+        <span>${basketStatusText(items)}</span>
+      </div>`;
+    detailsEl.appendChild(dock);
+
+    if (moveBasket.isOpen && items.length) {
+      const popover = document.createElement("div");
+      popover.className = "move-basket-popover";
+      popover.dataset.moveBasketDropzone = "true";
+      popover.innerHTML = `<div class="move-basket-popover-head">
+          <strong>待安置实验室</strong>
+          <span>拖到未规划空间落位</span>
+        </div>
+        <div class="move-basket-list">
+          ${items.map((item) => basketItemHtml(item, canEdit)).join("")}
+        </div>`;
+      detailsEl.appendChild(popover);
+      popover.querySelectorAll("[data-action='locate-basket-source']").forEach((button) => {
+        button.addEventListener("click", () => handlers.onLocateBasketSource?.(button.dataset.itemId));
+      });
+      popover.querySelectorAll("[data-action='return-basket-item']").forEach((button) => {
+        button.addEventListener("click", () => handlers.onReturnBasketItem?.(button.dataset.itemId));
+      });
+      popover.querySelectorAll(".move-basket-item").forEach((node) => {
+        node.addEventListener("pointerdown", (event) => handlers.onBasketCardPointerDown?.(event, node.dataset.itemId));
+      });
+    }
+
+    dock.addEventListener("click", (event) => {
+      if (!items.length) return;
+      event.stopPropagation();
+      if (moveBasket.isOpen) {
+        handlers.onCloseBasket?.();
+      } else {
+        handlers.onOpenBasket?.();
+      }
+    });
+  }
+
+  function basketStatusText(items) {
+    if (!items.length) return "拖入后进入待安置";
+    return "待安置";
+  }
+
+  function basketItemHtml(item, canEdit) {
+    const location = splitLocationLabel(item.sourceSpaceLabel || item.sourceSpaceCode || "-");
+    const seats = item.seatCount || 0;
+    const computers = item.computerCount || 0;
+    return `<article class="move-basket-item" data-item-id="${escapeHtml(item.id)}" style="border-left-color:${escapeHtml(item.color || "#64748b")}" title="${escapeHtml(item.sourceSpaceLabel || item.sourceSpaceCode || "")}">
+      <div class="move-basket-item-main">
+        <strong>${escapeHtml(item.labName)}</strong>
+        <span>${escapeHtml(`${item.college || "未填写学院"} · ${location.primary}`)}</span>
+        <small>${escapeHtml(location.secondary)}</small>
+      </div>
+      <div class="move-basket-item-stats">
+        <span>${escapeHtml(String(seats))} 座</span>
+        ${computers ? `<span>${escapeHtml(String(computers))} 机</span>` : ""}
+      </div>
+      <div class="move-basket-item-actions">
+        <button type="button" data-action="locate-basket-source" data-item-id="${escapeHtml(item.id)}">定位</button>
+        ${canEdit ? `<button type="button" data-action="return-basket-item" data-item-id="${escapeHtml(item.id)}">归位</button>` : ""}
+      </div>
+    </article>`;
+  }
+
+  function splitLocationLabel(label) {
+    const parts = String(label || "-").split("·").map((part) => part.trim()).filter(Boolean);
+    if (parts.length >= 2) {
+      return { primary: parts.slice(0, 2).join(" · "), secondary: parts.slice(2).join(" · ") };
+    }
+    return { primary: parts[0] || "-", secondary: "" };
+  }
+
+  function bindMoveBasketBlankClose(detailsEl, moveBasket, onCloseBasket) {
+    if (!moveBasket.isOpen) return;
+    detailsEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (target.closest?.(".move-basket-item, .move-basket-item-actions, button")) return;
+      if (target.closest?.(".move-basket-popover") || target.closest?.(".move-basket-dock") || target === detailsEl) {
+        onCloseBasket?.();
+      }
+    });
   }
 
   function renderMovePanel(detailsEl, context, moveDraft, moveErrors, moveDirty, moveTargetOptions, onMoveFieldChange, onConfirmMove, onCancelMove) {

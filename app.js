@@ -41,6 +41,7 @@ const { colorMap, renderLegend, renderThumbList, renderFloorplan, renderDetailsP
 const { fetchJson } = window.FloorplanApp.Api;
 const ImportExport = window.FloorplanApp.ImportExport;
 const Canvas = window.FloorplanApp.Canvas;
+const MoveBasket = window.FloorplanApp.MoveBasket;
 const REMEMBERED_USER_KEY = "floorplan_remembered_user";
 const RAW_EDITOR_REPLACED_BY_BUSINESS = new Set(["spaces", "labs", "plan_assignments"]);
 const ADMIN_ONLY_RAW_EDITOR_KEYS = new Set(["colleges", "majors"]);
@@ -72,10 +73,19 @@ const state = {
   planViewMode: "single",
   zoom: 1,
   detailsMode: "view",
+  inspectorMode: "details",
   moveDraft: null,
   moveErrors: {},
   moveDirty: false,
   moveTargetKey: null,
+  moveBasket: {
+    items: [],
+    isOpen: false,
+    draggingItemId: "",
+  },
+  moveUndoStack: [],
+  moveDrag: null,
+  suppressNextSpaceClick: false,
   pendingNavigation: null,
   planDeleteTargetId: null,
   loginSubmitting: false,
@@ -141,6 +151,7 @@ function bindEvents() {
   els.fitCanvasBtn.addEventListener("click", () => Canvas.resetCanvasZoom(state, els));
   els.zoomOutBtn.addEventListener("click", () => Canvas.changeCanvasZoom(state, els, -0.15));
   els.zoomInBtn.addEventListener("click", () => Canvas.changeCanvasZoom(state, els, 0.15));
+  Canvas.bindCanvasPan(state, els);
   els.addRowBtn.addEventListener("click", () => runWithUnsavedGuard(addEditorRow));
   els.applyTableBtn.addEventListener("click", () => runWithUnsavedGuard(() => { void applyEditorRows(); }));
   els.downloadSheetBtn.addEventListener("click", () => runWithUnsavedGuard(downloadEditorData));
@@ -1011,6 +1022,9 @@ function resetContextState() {
   state.moveErrors = {};
   state.moveDirty = false;
   state.moveTargetKey = null;
+  state.moveBasket = { items: [], isOpen: false, draggingItemId: "" };
+  state.moveUndoStack = [];
+  state.moveDrag = null;
   state.pendingNavigation = null;
   state.planDeleteTargetId = null;
 }
@@ -1028,6 +1042,7 @@ function refreshStateAndRender(message, options = {}) {
   ensureActivePlan();
   syncSelectedSpace();
   syncMoveDraft(forceMoveReset);
+  syncSavedUnplacedMoveBasketItems();
   applyAuthUi();
   renderEditorTabs();
   renderEditor();
@@ -1372,6 +1387,7 @@ function renderApp() {
   const beforePlan = planById(els.beforePlanSelect.value);
   const afterPlan = planById(els.afterPlanSelect.value);
   const activePlan = planById(state.activePlanId);
+  syncSavedUnplacedMoveBasketItems();
   const colors = colorMap(state.data);
   const thumbPlan = state.planViewMode === "compare" ? beforePlan : currentPlan || activePlan || beforePlan;
   const context = getSelectedContext();
@@ -1417,7 +1433,10 @@ function renderApp() {
     colors,
     selectedSpaceId: state.selectedSpaceId,
     collegeFilter: els.collegeSelect.value,
+    moveBasket: state.moveBasket,
+    canMoveLabs: canEditActivePlan(),
     onSelectSpace: handleSpaceSelect,
+    onRoomPointerDown: beginRoomMoveDrag,
   });
 
   renderDetailsPanel({
@@ -1436,6 +1455,13 @@ function renderApp() {
     onMoveFieldChange: updateMoveField,
     onConfirmMove: confirmMoveAssignmentAction,
     onCancelMove: cancelMoveMode,
+    moveBasket: state.moveBasket,
+    onToggleBasket: toggleMoveBasket,
+    onLocateBasketSource: locateMoveBasketSource,
+    onReturnBasketItem: returnMoveBasketItemAction,
+    onBasketCardPointerDown: beginBasketItemDrag,
+    onOpenBasket: openMoveBasket,
+    onCloseBasket: closeMoveBasket,
   });
   renderPlanDiffPanel(beforePlan, afterPlan);
 
@@ -1710,6 +1736,50 @@ function moveTargetSpaceOptions(context) {
     }));
 }
 
+function moveBasketNormalizeAssignment(row) {
+  return normalizeAssignment(row, relationMaps(state.data));
+}
+
+function syncSavedUnplacedMoveBasketItems() {
+  const activePlan = planById(state.activePlanId);
+  if (!activePlan) return;
+  const colors = colorMap(state.data);
+  const labsById = new Map(state.data.labs.map((lab) => [lab.id, lab]));
+  const spacesByCode = new Map(state.data.spaces.map((space) => [space.space_code, space]));
+  const savedItems = MoveBasket.basketItemsFromUnplacedAssignments(state.data.plan_assignments, {
+    planId: activePlan.id,
+    labsById,
+    existingItems: state.moveBasket.items,
+    colorForCollege: (college) => colors[college] || "#64748b",
+    sourceSpaceLabelForCode: (code) => {
+      const space = spacesByCode.get(code);
+      return space ? spaceDisplayName(space) : (code || "已保存未落位");
+    },
+  });
+  if (!savedItems.length) return;
+  state.moveBasket = {
+    ...state.moveBasket,
+    items: [...state.moveBasket.items, ...savedItems],
+  };
+}
+
+function targetSpaceOptionsForBasketItem(item) {
+  if (!item?.planId) return [];
+  const reservedSpaceIds = new Set(state.moveBasket.items
+    .filter((row) => row.id !== item.id && row.targetSpaceId)
+    .map((row) => row.targetSpaceId));
+  return state.data.spaces
+    .filter((space) => MoveBasket.resolveBasketDrop(item, space, state.data.spaces, state.data.plan_assignments).ok)
+    .filter((space) => !reservedSpaceIds.has(space.id))
+    .slice()
+    .sort((a, b) => compare(spaceDisplayName(a), spaceDisplayName(b)));
+}
+
+function canDropBasketItemOnSpace(item, space) {
+  if (!item || !space) return false;
+  return targetSpaceOptionsForBasketItem(item).some((row) => row.id === space.id);
+}
+
 function syncMoveDraft(force = false) {
   const context = getSelectedContext();
   const targetKey = moveTargetKey(context);
@@ -1752,6 +1822,10 @@ function handleThumbSelect(planId, floorCode) {
 }
 
 function handleSpaceSelect(spaceId) {
+  if (state.suppressNextSpaceClick) {
+    state.suppressNextSpaceClick = false;
+    return;
+  }
   if (spaceId === state.selectedSpaceId) return;
   runWithUnsavedGuard(() => {
     state.selectedSpaceId = spaceId;
@@ -1773,9 +1847,304 @@ function openMoveMode() {
     updateStatus("当前空间在此方案下没有已绑定实验室，无法直接搬迁。");
     return;
   }
-  state.detailsMode = "move";
-  syncMoveDraft(true);
+  void addContextToMoveBasket(context);
+}
+
+async function addContextToMoveBasket(context) {
+  if (!context.assignment || !context.lab || !context.space) return false;
+  if (state.moveBasket.items.some((item) => item.assignmentId === context.assignment.id)) {
+    state.moveBasket.isOpen = true;
+    renderApp();
+    updateStatus("该实验室已在待安置区中。");
+    return false;
+  }
+  const colors = colorMap(state.data);
+  const nextItems = MoveBasket.addBasketItem(state.moveBasket.items, {
+    assignment: context.assignment,
+    lab: context.lab,
+    sourceSpace: context.space,
+    sourceSpaceLabel: spaceDisplayName(context.space),
+    color: colors[context.lab.college] || "#64748b",
+  });
+  const item = nextItems[nextItems.length - 1];
+  const savedItem = { ...item, isSavedUnplaced: true };
+  const previousData = cloneDataset(state.data);
+  const previousRevision = state.serverRevision;
+  const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
+  const previousBasket = JSON.parse(JSON.stringify(state.moveBasket));
+  state.data.plan_assignments = MoveBasket.applyTemporaryUnbind(state.data.plan_assignments, item, moveBasketNormalizeAssignment);
+  state.data = normalizeDataset(state.data);
+  state.moveBasket = { ...state.moveBasket, items: [...state.moveBasket.items, savedItem], isOpen: true };
+  state.detailsMode = "view";
+  syncSelectedSpace();
+  renderEditor();
   renderApp();
+  updateStatus(`正在将 ${context.lab.lab_name} 加入待安置区...`);
+  try {
+    await saveMoveBasketAssignmentsToServer();
+  } catch (error) {
+    state.data = normalizeDataset(previousData);
+    state.serverRevision = previousRevision;
+    state.planCopies = previousCopies;
+    state.moveBasket = previousBasket;
+    refreshStateAndRender(`加入待安置区失败：${error.message}`, { stamp: false, forceMoveReset: true });
+    return false;
+  }
+  refreshStateAndRender(`已将 ${context.lab.lab_name} 加入待安置区，原空间已保存为未规划。`, { stamp: false, forceMoveReset: true });
+  return true;
+}
+
+function toggleMoveBasket() {
+  state.moveBasket.isOpen = !state.moveBasket.isOpen;
+  renderApp();
+}
+
+function openMoveBasket() {
+  if (!state.moveBasket.items.length || state.moveBasket.isOpen) return;
+  state.moveBasket.isOpen = true;
+  renderApp();
+}
+
+function closeMoveBasket() {
+  if (!state.moveBasket.isOpen) return;
+  state.moveBasket.isOpen = false;
+  renderApp();
+}
+
+async function saveMoveBasketAssignmentsToServer() {
+  if (!state.serverMode) return true;
+  const activePlan = planById(state.activePlanId);
+  const copy = copyMetaForPlan(activePlan);
+  if (canManageCopy(copy)) return saveActivePlanCopyToServer();
+  if (state.permissions.canAdmin && activePlan && (activePlan.is_locked || activePlan.plan_type === "baseline")) {
+    return saveDatasetToServer("保存待安置区安排");
+  }
+  throw new Error("只能保存自己创建的方案副本");
+}
+
+function locateMoveBasketSource(itemId) {
+  const item = state.moveBasket.items.find((row) => row.id === itemId);
+  const space = item ? state.data.spaces.find((row) => row.id === item.sourceSpaceId || row.space_code === item.sourceSpaceCode) : null;
+  if (!space) return;
+  els.buildingSelect.value = space.building_code;
+  populateFloorOptions();
+  els.floorSelect.value = space.floor_code;
+  state.selectedSpaceId = space.id;
+  state.businessEditor.selectedSpaceId = space.id;
+  state.zoom = 1;
+  renderEditor();
+  renderApp();
+}
+
+async function returnMoveBasketItemAction(itemId) {
+  const item = state.moveBasket.items.find((row) => row.id === itemId);
+  if (!item) return false;
+  if (!canEditActivePlan()) {
+    updateStatus("当前账号没有编辑此方案的权限。");
+    return false;
+  }
+  const result = MoveBasket.canReturnBasketItem(item, state.data.spaces, state.data.plan_assignments);
+  if (!result.ok) {
+    updateStatus(`无法归位 ${item.labName}：${result.reason}`);
+    return false;
+  }
+  const previousData = cloneDataset(state.data);
+  const previousRevision = state.serverRevision;
+  const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
+  const previousBasket = JSON.parse(JSON.stringify(state.moveBasket));
+  state.data.plan_assignments = MoveBasket.restoreBasketItem(state.data.plan_assignments, item, moveBasketNormalizeAssignment);
+  state.data = normalizeDataset(state.data);
+  state.moveBasket = {
+    ...state.moveBasket,
+    items: MoveBasket.removeBasketItem(state.moveBasket.items, itemId),
+  };
+  if (!state.moveBasket.items.length) state.moveBasket.isOpen = false;
+  renderEditor();
+  renderApp();
+  updateStatus(`正在将 ${item.labName} 归位...`);
+  try {
+    await saveMoveBasketAssignmentsToServer();
+  } catch (error) {
+    state.data = normalizeDataset(previousData);
+    state.serverRevision = previousRevision;
+    state.planCopies = previousCopies;
+    state.moveBasket = previousBasket;
+    refreshStateAndRender(`归位失败：${error.message}`, { stamp: false, forceMoveReset: true });
+    return false;
+  }
+  refreshStateAndRender(`已将 ${item.labName} 归位到 ${result.space ? spaceDisplayName(result.space) : item.sourceSpaceCode}。`, { stamp: false, forceMoveReset: true });
+  return true;
+}
+
+function contextForSpace(spaceId) {
+  const activePlan = planById(state.activePlanId);
+  const space = state.data.spaces.find((row) => row.id === spaceId) || null;
+  const assignment = activePlan && space
+    ? state.data.plan_assignments.find((row) => row.plan_id === activePlan.id && row.space_id === space.id && row.assignment_status === "assigned") || null
+    : null;
+  const lab = assignment ? state.data.labs.find((row) => row.id === assignment.lab_id) || null : null;
+  return { activePlan, space, assignment, lab };
+}
+
+function beginRoomMoveDrag(event, spaceId) {
+  if (event.button !== 0 || !canEditActivePlan()) return;
+  const context = contextForSpace(spaceId);
+  if (!context.assignment || !context.lab || state.moveBasket.items.some((item) => item.assignmentId === context.assignment.id)) return;
+  beginPointerMoveDrag(event, {
+    kind: "room",
+    label: context.lab.lab_name || context.assignment.lab_code,
+    color: colorMap(state.data)[context.lab.college] || "#64748b",
+    context,
+  });
+}
+
+function beginBasketItemDrag(event, itemId) {
+  if (event.button !== 0 || !canEditActivePlan()) return;
+  if (event.target.closest?.("button")) return;
+  const item = state.moveBasket.items.find((row) => row.id === itemId);
+  if (!item) return;
+  beginPointerMoveDrag(event, {
+    kind: "basket",
+    label: item.labName,
+    color: item.color,
+    itemId,
+  });
+}
+
+function beginPointerMoveDrag(event, drag) {
+  event.preventDefault();
+  state.moveDrag = {
+    ...drag,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    active: false,
+  };
+  window.addEventListener("pointermove", handleMoveDragPointerMove);
+  window.addEventListener("pointerup", handleMoveDragPointerUp, { once: true });
+  window.addEventListener("pointercancel", cancelMoveDrag, { once: true });
+}
+
+function handleMoveDragPointerMove(event) {
+  const drag = state.moveDrag;
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+  if (!drag.active && distance > 6) {
+    drag.active = true;
+    state.suppressNextSpaceClick = true;
+    createMoveDragGhost(drag);
+    if (drag.kind === "basket") markMoveDropTargets(drag.itemId);
+  }
+  if (!drag.active) return;
+  moveDragGhost(event.clientX, event.clientY);
+}
+
+function handleMoveDragPointerUp(event) {
+  const drag = state.moveDrag;
+  cleanupMoveDrag();
+  if (!drag || event.pointerId !== drag.pointerId || !drag.active) return;
+  const target = document.elementFromPoint(event.clientX, event.clientY);
+  if (drag.kind === "room") {
+    if (target?.closest("[data-move-basket-dropzone='true']")) {
+      void addContextToMoveBasket(drag.context);
+    }
+    return;
+  }
+  if (drag.kind === "basket") {
+    const room = target?.closest(".room[data-space-id]");
+    const space = room ? state.data.spaces.find((row) => row.id === room.dataset.spaceId) : null;
+    if (space) void setMoveBasketTarget(drag.itemId, space);
+  }
+}
+
+function cancelMoveDrag() {
+  cleanupMoveDrag();
+}
+
+function createMoveDragGhost(drag) {
+  const ghost = document.createElement("div");
+  ghost.className = "move-drag-ghost";
+  ghost.style.borderLeftColor = drag.color || "#64748b";
+  ghost.textContent = drag.label || "搬迁实验室";
+  document.body.appendChild(ghost);
+  document.body.classList.add("is-moving-placement");
+  state.moveDrag.ghost = ghost;
+}
+
+function moveDragGhost(x, y) {
+  const ghost = state.moveDrag?.ghost;
+  if (!ghost) return;
+  ghost.style.transform = `translate(${x + 12}px, ${y + 12}px)`;
+}
+
+function cleanupMoveDrag() {
+  window.removeEventListener("pointermove", handleMoveDragPointerMove);
+  document.querySelectorAll(".room.is-drop-candidate, .room.is-drop-return, .room.is-drop-blocked").forEach((node) => {
+    node.classList.remove("is-drop-candidate", "is-drop-return", "is-drop-blocked");
+  });
+  state.moveDrag?.ghost?.remove();
+  document.body.classList.remove("is-moving-placement");
+  state.moveDrag = null;
+}
+
+function markMoveDropTargets(itemId) {
+  const item = state.moveBasket.items.find((row) => row.id === itemId);
+  const candidates = new Map(targetSpaceOptionsForBasketItem(item).map((space) => {
+    const result = MoveBasket.resolveBasketDrop(item, space, state.data.spaces, state.data.plan_assignments);
+    return [space.id, result.action];
+  }));
+  els.floorplan.querySelectorAll(".room[data-space-id]").forEach((node) => {
+    const action = candidates.get(node.dataset.spaceId);
+    if (action === "return") {
+      node.classList.add("is-drop-return");
+    } else {
+      node.classList.add(action === "place" ? "is-drop-candidate" : "is-drop-blocked");
+    }
+  });
+}
+
+async function setMoveBasketTarget(itemId, space) {
+  const item = state.moveBasket.items.find((row) => row.id === itemId);
+  const drop = MoveBasket.resolveBasketDrop(item, space, state.data.spaces, state.data.plan_assignments);
+  if (!drop.ok) {
+    updateStatus(drop.reason || "该空间不可作为当前实验室的安置目标。");
+    return false;
+  }
+  if (drop.action === "return") return returnMoveBasketItemAction(itemId);
+  const targetItem = {
+    ...item,
+    targetSpaceId: space.id,
+    targetSpaceCode: space.space_code,
+    targetSpaceLabel: spaceDisplayName(space),
+  };
+  const previousData = cloneDataset(state.data);
+  const previousRevision = state.serverRevision;
+  const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
+  const previousBasket = JSON.parse(JSON.stringify(state.moveBasket));
+  state.data.plan_assignments = MoveBasket.applyBasketTargets(state.data.plan_assignments, [targetItem], moveBasketNormalizeAssignment);
+  state.data = normalizeDataset(state.data);
+  state.moveBasket = {
+    ...state.moveBasket,
+    items: MoveBasket.removeBasketItem(state.moveBasket.items, itemId),
+  };
+  if (!state.moveBasket.items.length) state.moveBasket.isOpen = false;
+  state.selectedSpaceId = space.id;
+  state.businessEditor.selectedSpaceId = space.id;
+  renderEditor();
+  renderApp();
+  updateStatus(`正在将 ${item.labName} 落位到 ${spaceDisplayName(space)}...`);
+  try {
+    await saveMoveBasketAssignmentsToServer();
+  } catch (error) {
+    state.data = normalizeDataset(previousData);
+    state.serverRevision = previousRevision;
+    state.planCopies = previousCopies;
+    state.moveBasket = previousBasket;
+    refreshStateAndRender(`落位失败：${error.message}`, { stamp: false, forceMoveReset: true });
+    return false;
+  }
+  refreshStateAndRender(`已将 ${item.labName} 落位到 ${spaceDisplayName(space)}。`, { stamp: false, forceMoveReset: true });
+  return true;
 }
 
 function updateMoveField(field, value) {
@@ -2064,12 +2433,16 @@ function focusRowFromDetails(key, rowId) {
 }
 
 function runWithUnsavedGuard(action) {
-  if (!state.moveDirty) {
+  if (!hasUnsavedMoveChanges()) {
     action();
     return;
   }
   state.pendingNavigation = action;
   openUnsavedModal();
+}
+
+function hasUnsavedMoveChanges() {
+  return Boolean(state.moveDirty);
 }
 
 function openUnsavedModal() {
@@ -2094,13 +2467,19 @@ async function saveAndContinuePendingAction() {
 function discardAndContinuePendingAction() {
   const pending = state.pendingNavigation;
   if (!pending) return;
+  discardMoveChanges();
+  closeUnsavedModal();
+  pending();
+}
+
+function discardMoveChanges() {
   state.detailsMode = "view";
   state.moveDraft = null;
   state.moveErrors = {};
   state.moveDirty = false;
   state.moveTargetKey = null;
-  closeUnsavedModal();
-  pending();
+  state.moveUndoStack = [];
+  state.moveDrag = null;
 }
 
 function openNewPlanModal() {

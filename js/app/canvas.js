@@ -9,6 +9,50 @@
     applyCanvasMode(state, els);
   }
 
+  function bindCanvasPan(state, els) {
+    let pan = null;
+    els.floorplan.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || state.zoom <= 1) return;
+      if (event.target.closest?.(".room")) return;
+      pan = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        scrollLeft: els.floorplan.scrollLeft,
+        scrollTop: els.floorplan.scrollTop,
+        active: false,
+      };
+      els.floorplan.setPointerCapture?.(event.pointerId);
+    });
+
+    els.floorplan.addEventListener("pointermove", (event) => {
+      if (!pan || event.pointerId !== pan.pointerId) return;
+      const dx = event.clientX - pan.startX;
+      const dy = event.clientY - pan.startY;
+      if (!pan.active && Math.hypot(dx, dy) > 3) {
+        pan.active = true;
+        els.floorplan.classList.add("is-panning");
+      }
+      if (!pan.active) return;
+      event.preventDefault();
+      els.floorplan.scrollLeft = pan.scrollLeft - dx;
+      els.floorplan.scrollTop = pan.scrollTop - dy;
+    });
+
+    const finishPan = (event) => {
+      if (!pan || event.pointerId !== pan.pointerId) return;
+      els.floorplan.releasePointerCapture?.(event.pointerId);
+      els.floorplan.classList.remove("is-panning");
+      pan = null;
+    };
+    els.floorplan.addEventListener("pointerup", finishPan);
+    els.floorplan.addEventListener("pointercancel", finishPan);
+    window.addEventListener("blur", () => {
+      els.floorplan.classList.remove("is-panning");
+      pan = null;
+    });
+  }
+
   function applyCanvasMode(state, els) {
     const stage = els.floorplan.querySelector(".floorplan-stage");
     const svg = stage?.querySelector("svg");
@@ -125,6 +169,7 @@
 
   global.FloorplanApp = global.FloorplanApp || {};
   global.FloorplanApp.Canvas = {
+    bindCanvasPan,
     changeCanvasZoom,
     resetCanvasZoom,
     applyCanvasMode,
