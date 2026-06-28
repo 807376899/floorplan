@@ -5,12 +5,12 @@
     ROOM_GAP_M,
     DETAIL_SCALE,
     THUMB_SCALE,
-    COLORS,
     unique,
     compare,
     escapeHtml,
-    normalizeColor,
   } = global.FloorplanDomain;
+  const LegendColors = global.FloorplanApp?.LegendColors;
+  const Thumbnails = global.FloorplanApp?.Thumbnails;
 
   function buildLayout(segments, spaces, scale, titleHeight = 96, margin = 34) {
     const segmentMap = new Map(segments.map((segment) => [segment.segment_code, makeSegment(segment, scale, margin, titleHeight)]));
@@ -131,23 +131,6 @@
     </g>${label}`;
   }
 
-  function colorMap(dataOrLabs, maybeColleges = []) {
-    const labs = Array.isArray(dataOrLabs) ? dataOrLabs : dataOrLabs?.labs || [];
-    const colleges = Array.isArray(dataOrLabs) ? maybeColleges : dataOrLabs?.colleges || [];
-    const colors = {};
-    colleges.forEach((college) => {
-      const color = normalizeColor(college.color || college.color_hex);
-      if (!color) return;
-      if (college.college_name) colors[college.college_name] = color;
-      if (college.college_code) colors[college.college_code] = color;
-    });
-    unique(labs.map((row) => row.college)).forEach((value, index) => {
-      if (!value || colors[value]) return;
-      colors[value] = COLORS[index % COLORS.length];
-    });
-    return colors;
-  }
-
   function roomFill(space, colors, previewItem = null) {
     if (previewItem) return previewItem.color || colors[previewItem.college] || "#64748b";
     if (!space.lab) return "#e2e8f0";
@@ -155,15 +138,15 @@
     return colors[space.lab.college] || "#64748b";
   }
 
-  function roomSvg(box, colors, compact, selectedSpaceId, collegeFilter, moveBasket = {}, canMoveLabs = false) {
+  function roomSvg(box, colors, compact, selectedSpaceId, mutedColleges = new Set(), moveBasket = {}, canMoveLabs = false) {
     const items = moveBasket.items || [];
     const previewItem = items.find((item) => item.targetSpaceId === box.space.id) || null;
     const sourceItem = items.find((item) => item.sourceSpaceId === box.space.id) || null;
     const fill = roomFill(box.space, colors, previewItem);
     const labelFill = box.space.lab || previewItem ? "#ffffff" : "#344054";
-    if (compact) return `<rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="${fill}" rx="3"></rect>`;
+    const muted = Boolean(box.space.lab?.college && mutedColleges.has(box.space.lab.college));
+    if (compact) return `<rect class="room ${muted && box.space.lab ? "is-muted" : ""}" x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="${fill}" rx="3"></rect>`;
 
-    const muted = collegeFilter !== ALL_COLLEGES && box.space.lab?.college !== collegeFilter;
     const selected = selectedSpaceId === box.space.id;
     const doorLabel = box.space.front_door || box.space.space_code;
     const label = previewItem?.labName || box.space.lab?.lab_name || box.space.front_door || box.space.space_code;
@@ -214,85 +197,8 @@
     return { segments, spaces };
   }
 
-  function renderLegend(legendEl, data, colors, activePlanId) {
-    const assignments = data.plan_assignments.filter((row) => row.plan_id === activePlanId && row.assignment_status === "assigned");
-    const labsById = new Map(data.labs.map((row) => [row.id, row]));
-    const activeColleges = unique(assignments.map((row) => labsById.get(row.lab_id)?.college));
-    const colleges = activeColleges.map((college) => `<span class="legend-item"><span class="legend-swatch" style="background:${colors[college] || "#94a3b8"}"></span>${escapeHtml(college)}</span>`);
-    legendEl.innerHTML = [...colleges, `<span class="legend-item"><span class="legend-swatch" style="background:#e2e8f0"></span>未分配空间</span>`].join("");
-  }
-
-  function thumbRenderKey(params) {
-    const { data, buildingCode, plan, activePlanId, currentFloorCode, colors } = params;
-    const planId = plan?.id || "";
-    const floors = unique(data.floor_segments.filter((row) => row.building_code === buildingCode).map((row) => row.floor_code)).sort(compare);
-    const assigned = data.plan_assignments.filter((row) => row.plan_id === planId && row.assignment_status === "assigned");
-    const assignmentsBySpace = new Map(assigned.map((row) => [row.space_id, row]));
-    const labsById = new Map(data.labs.map((row) => [row.id, row]));
-    const floorParts = floors.map((floorCode) => {
-      const segments = data.floor_segments
-        .filter((row) => row.building_code === buildingCode && row.floor_code === floorCode)
-        .map((row) => [row.id, row.segment_code, row.start_x_m, row.start_y_m, row.end_x_m, row.end_y_m, row.width_m, row.element_type].join(":"))
-        .join("|");
-      const spaces = data.spaces
-        .filter((row) => row.building_code === buildingCode && row.floor_code === floorCode)
-        .map((row) => {
-          const assignment = assignmentsBySpace.get(row.id);
-          const lab = assignment ? labsById.get(assignment.lab_id) : null;
-          return [
-            row.id,
-            row.space_code,
-            row.segment_code,
-            row.offset_m,
-            row.side,
-            row.length_m,
-            row.width_m,
-            row.current_status,
-            assignment?.id || "",
-            assignment?.lab_id || "",
-            lab?.college || "",
-            lab?.lab_type || "",
-          ].join(":");
-        })
-        .join("|");
-      return [floorCode, segments, spaces].join("~");
-    });
-    const colorPart = Object.entries(colors || {}).sort(([a], [b]) => compare(a, b)).map(([key, value]) => `${key}:${value}`).join("|");
-    return JSON.stringify({ buildingCode, planId, activePlanId, currentFloorCode, floors: floorParts, colors: colorPart });
-  }
-
-  function renderThumbList(container, params) {
-    const { data, buildingCode, plan, activePlanId, currentFloorCode, colors, onSelect } = params;
-    const nextKey = thumbRenderKey(params);
-    if (container.dataset?.thumbRenderKey === nextKey) return false;
-    const floors = unique(data.floor_segments.filter((row) => row.building_code === buildingCode).map((row) => row.floor_code)).sort(compare);
-    if (!plan || !floors.length) {
-      container.innerHTML = `<div class="empty">当前楼栋没有可展示的楼层。</div>`;
-      if (container.dataset) container.dataset.thumbRenderKey = nextKey;
-      return true;
-    }
-
-    container.innerHTML = floors.map((floorCode) => {
-      const layoutData = floorRenderData(data, buildingCode, floorCode, plan.id);
-      if (!layoutData.segments.length) {
-        return `<button class="floor-thumb ${activePlanId === plan.id && currentFloorCode === floorCode ? "is-active" : ""}" data-plan-id="${plan.id}" data-floor="${floorCode}"><span>${escapeHtml(floorCode)}</span><div class="thumb-preview thumb-preview-empty"><div class="empty">无楼层骨架</div></div></button>`;
-      }
-      const layout = buildLayout(layoutData.segments, layoutData.spaces, THUMB_SCALE, 0, 4);
-      return `<button class="floor-thumb ${activePlanId === plan.id && currentFloorCode === floorCode ? "is-active" : ""}" data-plan-id="${plan.id}" data-floor="${floorCode}">
-        <span>${escapeHtml(floorCode)}</span>
-        <div class="thumb-preview">
-          <svg viewBox="0 0 ${layout.width} ${layout.height}">${layout.corridors.map((item) => structureSvg(item, true)).join("")}${layout.rooms.map((item) => roomSvg(item, colors, true)).join("")}</svg>
-        </div>
-      </button>`;
-    }).join("");
-
-    if (container.dataset) container.dataset.thumbRenderKey = nextKey;
-    container.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => onSelect(button.dataset.planId, button.dataset.floor)));
-    return true;
-  }
-
   function renderFloorplan(params) {
-    const { floorplanEl, activePlanBadgeEl, data, building, floorCode, activePlan, colors, selectedSpaceId, collegeFilter, moveBasket, canMoveLabs, onSelectSpace, onRoomPointerDown } = params;
+    const { floorplanEl, activePlanBadgeEl, data, building, floorCode, activePlan, colors, selectedSpaceId, mutedColleges = new Set(), moveBasket, canMoveLabs, onSelectSpace, onRoomPointerDown } = params;
     if (!activePlan) {
       floorplanEl.innerHTML = `<div class="empty">当前没有可用方案。</div>`;
       activePlanBadgeEl.textContent = "当前主图";
@@ -316,7 +222,7 @@
         <svg viewBox="0 0 ${layout.width} ${layout.height}">
           <rect width="${layout.width}" height="${layout.height}" fill="#fbfcfe"></rect>
           ${layout.corridors.map((item) => structureSvg(item, false)).join("")}
-          ${layout.rooms.map((item) => roomSvg(item, colors, false, selectedSpaceId, collegeFilter, moveBasket, canMoveLabs)).join("")}
+          ${layout.rooms.map((item) => roomSvg(item, colors, false, selectedSpaceId, mutedColleges, moveBasket, canMoveLabs)).join("")}
         </svg>
       </div>
       <div class="room-hover-card is-hidden" aria-hidden="true"></div>`;
@@ -379,6 +285,9 @@
       onMoveFieldChange,
       onConfirmMove,
       onCancelMove,
+      inspectorMode = "details",
+      placementDragActive = false,
+      onSetInspectorMode,
       moveBasket = { items: [], isOpen: false },
       onToggleBasket,
       onLocateBasketSource,
@@ -386,31 +295,58 @@
       onBasketCardPointerDown,
       onOpenBasket,
       onCloseBasket,
+      onCreateUnplacedLab,
     } = params;
+    detailsEl.dataset.moveBasketDropzone = "true";
+
+    if (inspectorMode === "placement") {
+      renderPlacementPanel(detailsEl, moveBasket, canEdit, placementDragActive, {
+        onSetInspectorMode,
+        onLocateBasketSource,
+        onReturnBasketItem,
+        onBasketCardPointerDown,
+        onCreateUnplacedLab,
+      });
+      return;
+    }
 
     if (!context.space) {
-      detailsEl.innerHTML = `<div class="details-empty">
-        <h2>当前选中对象</h2>
-        <p>点击主图中的空间，在这里查看当前方案下的空间、实验室和分配信息。</p>
+      detailsEl.innerHTML = `<div class="details-empty" data-move-basket-dropzone="true">
+        ${inspectorTabsHtml("details", moveBasket.items?.length || 0)}
+        <div>
+          <h2>当前选中对象</h2>
+          <p>点击主图中的空间，在这里查看当前方案下的空间、实验室和分配信息。</p>
+        </div>
       </div>`;
-      renderMoveBasketDock(detailsEl, moveBasket, canEdit, { onToggleBasket, onLocateBasketSource, onReturnBasketItem, onBasketCardPointerDown, onOpenBasket, onCloseBasket });
-      bindMoveBasketBlankClose(detailsEl, moveBasket, onCloseBasket);
+      bindInspectorTabs(detailsEl, onSetInspectorMode);
       return;
     }
 
     if (mode === "move") {
-      renderMovePanel(detailsEl, context, moveDraft, moveErrors, moveDirty, moveTargetOptions, onMoveFieldChange, onConfirmMove, onCancelMove);
-      renderMoveBasketDock(detailsEl, moveBasket, canEdit, { onToggleBasket, onLocateBasketSource, onReturnBasketItem, onBasketCardPointerDown, onOpenBasket, onCloseBasket });
-      bindMoveBasketBlankClose(detailsEl, moveBasket, onCloseBasket);
+      renderMovePanel(detailsEl, context, moveDraft, moveErrors, moveDirty, moveTargetOptions, onMoveFieldChange, onConfirmMove, onCancelMove, moveBasket, onSetInspectorMode);
       return;
     }
 
-    renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove);
-    renderMoveBasketDock(detailsEl, moveBasket, canEdit, { onToggleBasket, onLocateBasketSource, onReturnBasketItem, onBasketCardPointerDown, onOpenBasket, onCloseBasket });
-    bindMoveBasketBlankClose(detailsEl, moveBasket, onCloseBasket);
+    renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove, moveBasket, onSetInspectorMode);
   }
 
-  function renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove) {
+  function inspectorTabsHtml(activeMode, count) {
+    return `<div class="inspector-tabs" role="tablist" aria-label="右侧检查器视图">
+      <button type="button" data-inspector-mode="details" class="${activeMode === "details" ? "is-active" : ""}">详细信息</button>
+      <button type="button" data-inspector-mode="placement" class="${activeMode === "placement" ? "is-active" : ""}">待安置区${count ? `<span>${escapeHtml(String(count))}</span>` : ""}</button>
+    </div>`;
+  }
+
+  function bindInspectorTabs(root, onSetInspectorMode) {
+    root.querySelectorAll("[data-inspector-mode]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        onSetInspectorMode?.(button.dataset.inspectorMode);
+      });
+    });
+  }
+
+  function renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove, moveBasket, onSetInspectorMode) {
     const { building, space, lab, assignment } = context;
     const pageTitle = lab?.lab_name || "未规划";
     const canMove = Boolean(canEdit && assignment && lab);
@@ -437,11 +373,12 @@
       );
     }
 
-    detailsEl.innerHTML = `<div class="details-panel is-readonly">
+    detailsEl.innerHTML = `<div class="details-panel is-readonly" data-move-basket-dropzone="true">
       <div class="details-header">
         <div>
           <h2>详细信息</h2>
         </div>
+        ${inspectorTabsHtml("details", moveBasket.items?.length || 0)}
       </div>
 
       <div class="details-scroll">
@@ -460,62 +397,37 @@
         </section>
       </div>
 
-      <div class="details-actions">
-        ${canEdit ? `<button type="button" class="primary-button" data-action="move" ${canMove ? "" : "disabled"}>加入待安置区</button>` : ""}
+    </div>`;
+    bindInspectorTabs(detailsEl, onSetInspectorMode);
+  }
+
+  function renderPlacementPanel(detailsEl, moveBasket, canEdit, placementDragActive, handlers) {
+    const items = moveBasket.items || [];
+    detailsEl.innerHTML = `<div class="details-panel is-placement ${placementDragActive ? "is-drop-active" : ""}" data-move-basket-dropzone="true">
+      <div class="details-header">
+        <div>
+          <h2>待安置区</h2>
+        </div>
+        <div class="details-header-actions">
+          ${canEdit ? `<button type="button" class="secondary-button compact-button" data-action="create-unplaced-lab">新增</button>` : ""}
+          ${inspectorTabsHtml("placement", items.length)}
+        </div>
+      </div>
+      <div class="move-basket-list placement-list" data-move-basket-dropzone="true">
+        ${items.length ? items.map((item) => basketItemHtml(item, canEdit)).join("") : `<div class="details-empty-inline">当前没有待安置实验室。</div>`}
       </div>
     </div>`;
-    detailsEl.querySelector('[data-action="move"]')?.addEventListener("click", onOpenMove);
-  }
-
-  function renderMoveBasketDock(detailsEl, moveBasket, canEdit, handlers) {
-    const items = moveBasket.items || [];
-    const dock = document.createElement("div");
-    dock.className = `move-basket-dock ${items.length ? "has-items" : "is-empty"}`;
-    dock.dataset.moveBasketDropzone = "true";
-    dock.innerHTML = `<div class="move-basket-dock-summary">
-        <span class="move-basket-color-stack">${items.slice(0, 4).map((item) => `<i style="background:${escapeHtml(item.color || "#64748b")}"></i>`).join("")}</span>
-        <strong>${items.length ? `待安置区 ${items.length}` : "待安置区"}</strong>
-        <span>${basketStatusText(items)}</span>
-      </div>`;
-    detailsEl.appendChild(dock);
-
-    if (moveBasket.isOpen && items.length) {
-      const popover = document.createElement("div");
-      popover.className = "move-basket-popover";
-      popover.dataset.moveBasketDropzone = "true";
-      popover.innerHTML = `<div class="move-basket-popover-head">
-          <strong>待安置实验室</strong>
-          <span>拖到未规划空间落位</span>
-        </div>
-        <div class="move-basket-list">
-          ${items.map((item) => basketItemHtml(item, canEdit)).join("")}
-        </div>`;
-      detailsEl.appendChild(popover);
-      popover.querySelectorAll("[data-action='locate-basket-source']").forEach((button) => {
-        button.addEventListener("click", () => handlers.onLocateBasketSource?.(button.dataset.itemId));
-      });
-      popover.querySelectorAll("[data-action='return-basket-item']").forEach((button) => {
-        button.addEventListener("click", () => handlers.onReturnBasketItem?.(button.dataset.itemId));
-      });
-      popover.querySelectorAll(".move-basket-item").forEach((node) => {
-        node.addEventListener("pointerdown", (event) => handlers.onBasketCardPointerDown?.(event, node.dataset.itemId));
-      });
-    }
-
-    dock.addEventListener("click", (event) => {
-      if (!items.length) return;
-      event.stopPropagation();
-      if (moveBasket.isOpen) {
-        handlers.onCloseBasket?.();
-      } else {
-        handlers.onOpenBasket?.();
-      }
+    bindInspectorTabs(detailsEl, handlers.onSetInspectorMode);
+    detailsEl.querySelector("[data-action='create-unplaced-lab']")?.addEventListener("click", () => handlers.onCreateUnplacedLab?.());
+    detailsEl.querySelectorAll("[data-action='locate-basket-source']").forEach((button) => {
+      button.addEventListener("click", () => handlers.onLocateBasketSource?.(button.dataset.itemId));
     });
-  }
-
-  function basketStatusText(items) {
-    if (!items.length) return "拖入后进入待安置";
-    return "待安置";
+    detailsEl.querySelectorAll("[data-action='return-basket-item']").forEach((button) => {
+      button.addEventListener("click", () => handlers.onReturnBasketItem?.(button.dataset.itemId));
+    });
+    detailsEl.querySelectorAll(".move-basket-item").forEach((node) => {
+      node.addEventListener("pointerdown", (event) => handlers.onBasketCardPointerDown?.(event, node.dataset.itemId));
+    });
   }
 
   function basketItemHtml(item, canEdit) {
@@ -547,31 +459,20 @@
     return { primary: parts[0] || "-", secondary: "" };
   }
 
-  function bindMoveBasketBlankClose(detailsEl, moveBasket, onCloseBasket) {
-    if (!moveBasket.isOpen) return;
-    detailsEl.addEventListener("click", (event) => {
-      const target = event.target;
-      if (target.closest?.(".move-basket-item, .move-basket-item-actions, button")) return;
-      if (target.closest?.(".move-basket-popover") || target.closest?.(".move-basket-dock") || target === detailsEl) {
-        onCloseBasket?.();
-      }
-    });
-  }
-
-  function renderMovePanel(detailsEl, context, moveDraft, moveErrors, moveDirty, moveTargetOptions, onMoveFieldChange, onConfirmMove, onCancelMove) {
+  function renderMovePanel(detailsEl, context, moveDraft, moveErrors, moveDirty, moveTargetOptions, onMoveFieldChange, onConfirmMove, onCancelMove, moveBasket, onSetInspectorMode) {
     const { activePlan, building, space, lab, assignment } = context;
     const errorText = moveErrors.targetSpaceCode || "";
     const selectedTarget = moveDraft?.targetSpaceId || "";
     const targetOptionsHtml = moveTargetOptions.length
       ? `<option value="">请选择未规划空间</option>${moveTargetOptions.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === selectedTarget ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")}`
       : `<option value="">当前没有可搬迁的未规划空间</option>`;
-    detailsEl.innerHTML = `<div class="details-panel is-move ${moveDirty ? "is-dirty" : ""}">
+    detailsEl.innerHTML = `<div class="details-panel is-move ${moveDirty ? "is-dirty" : ""}" data-move-basket-dropzone="true">
       <div class="details-header">
         <div>
           <h2>搬迁实验室</h2>
           <p>${escapeHtml(`${activePlan?.plan_name || "当前方案"} · ${building?.building_name || building?.building_code || ""} · ${space.floor_code}`)}</p>
         </div>
-        <span class="details-status">${moveDirty ? "未保存搬迁" : "待确认"}</span>
+        ${inspectorTabsHtml("details", moveBasket.items?.length || 0)}
       </div>
 
       <section class="details-card">
@@ -617,6 +518,7 @@
     });
     detailsEl.querySelector('[data-action="confirm-move"]')?.addEventListener("click", onConfirmMove);
     detailsEl.querySelector('[data-action="cancel-move"]')?.addEventListener("click", onCancelMove);
+    bindInspectorTabs(detailsEl, onSetInspectorMode);
   }
 
   function detailLine(label, value) {
@@ -634,9 +536,20 @@
     return `<div class="detail-meta-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value || "未填写")}</strong></div>`;
   }
 
+  const renderThumbList = Thumbnails.createRenderThumbList({
+    unique,
+    compare,
+    escapeHtml,
+    THUMB_SCALE,
+    buildLayout,
+    floorRenderData,
+    structureSvg,
+    roomSvg,
+  });
+
   global.FloorplanRender = {
-    colorMap,
-    renderLegend,
+    colorMap: LegendColors.colorMap,
+    renderLegend: LegendColors.renderLegend,
     renderThumbList,
     renderFloorplan,
     renderDetailsPanel,

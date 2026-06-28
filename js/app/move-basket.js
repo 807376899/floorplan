@@ -4,29 +4,38 @@
     const lab = input.lab || {};
     const sourceSpace = input.sourceSpace || {};
     if (!assignment || !sourceSpace?.id) return items.slice();
-    if (items.some((item) => item.assignmentId === assignment.id)) return items.slice();
+    const nextItem = {
+      id: `${assignment.id}__${Date.now()}__${Math.random().toString(16).slice(2)}`,
+      assignmentId: assignment.id,
+      planId: assignment.plan_id,
+      planCode: assignment.plan_code,
+      labId: assignment.lab_id,
+      labCode: assignment.lab_code,
+      labName: lab.lab_name || assignment.lab_code || "未命名用途单元",
+      college: lab.college || "",
+      seatCount: lab.seat_count || "",
+      computerCount: lab.computer_count || "",
+      sourceSpaceId: sourceSpace.id,
+      sourceSpaceCode: assignment.space_code || sourceSpace.space_code || "",
+      sourceSpaceLabel: input.sourceSpaceLabel || sourceSpace.space_code || "",
+      targetSpaceId: "",
+      targetSpaceCode: "",
+      targetSpaceLabel: "",
+      color: input.color || "#64748b",
+    };
+    const nextKey = basketItemKey(nextItem);
+    if (items.some((item) => basketItemKey(item) === nextKey)) return items.slice();
 
     return [
       ...items,
-      {
-        id: `${assignment.id}__${Date.now()}__${Math.random().toString(16).slice(2)}`,
-        assignmentId: assignment.id,
-        planId: assignment.plan_id,
-        labId: assignment.lab_id,
-        labCode: assignment.lab_code,
-        labName: lab.lab_name || assignment.lab_code || "未命名用途单元",
-        college: lab.college || "",
-        seatCount: lab.seat_count || "",
-        computerCount: lab.computer_count || "",
-        sourceSpaceId: sourceSpace.id,
-        sourceSpaceCode: assignment.space_code || sourceSpace.space_code || "",
-        sourceSpaceLabel: input.sourceSpaceLabel || sourceSpace.space_code || "",
-        targetSpaceId: "",
-        targetSpaceCode: "",
-        targetSpaceLabel: "",
-        color: input.color || "#64748b",
-      },
+      nextItem,
     ];
+  }
+
+  function basketItemKey(item) {
+    const planKey = item?.planId || item?.planCode || "";
+    const labKey = item?.labId || item?.labCode || "";
+    return planKey && labKey ? `${planKey}::${labKey}` : (item?.assignmentId || item?.id || "");
   }
 
   function applyTemporaryUnbind(assignments, item, normalizeAssignment) {
@@ -99,11 +108,10 @@
       colorForCollege = () => "#64748b",
       sourceSpaceLabelForCode = (code) => code || "未落位",
     } = options;
-    const existingAssignmentIds = new Set(existingItems.map((item) => item.assignmentId));
+    const existingKeys = new Set(existingItems.map((item) => basketItemKey(item)));
     return assignments
       .filter((row) => row.plan_id === planId)
       .filter((row) => row.assignment_status === "Invalid" && row.lab_id && !row.space_id && !row.space_code)
-      .filter((row) => !existingAssignmentIds.has(row.id))
       .map((assignment) => {
         const lab = labsById.get(assignment.lab_id) || {};
         const sourceSpaceCode = assignment.previous_space_code || "";
@@ -111,6 +119,7 @@
           id: `${assignment.id}__saved-unplaced`,
           assignmentId: assignment.id,
           planId: assignment.plan_id,
+          planCode: assignment.plan_code,
           labId: assignment.lab_id,
           labCode: assignment.lab_code,
           labName: lab.lab_name || assignment.lab_code || "未命名用途单元",
@@ -126,7 +135,12 @@
           color: colorForCollege(lab.college || ""),
           isSavedUnplaced: true,
         };
-      });
+      })
+      .filter((item) => !existingKeys.has(basketItemKey(item)));
+  }
+
+  function removeBasketItemsByKey(items, key) {
+    return items.filter((item) => basketItemKey(item) !== key);
   }
 
   function canReturnBasketItem(item, spaces = [], assignments = []) {
@@ -163,14 +177,25 @@
     return { ok: true, action: "place", reason: "" };
   }
 
+  function resolveRoomDirectDrop(item, space, spaces = [], assignments = []) {
+    if (!item || !space) return { ok: false, action: "", reason: "未找到投放目标。" };
+    const isSource = Boolean(item.sourceSpaceCode && space.space_code === item.sourceSpaceCode)
+      || Boolean(item.sourceSpaceId && space.id === item.sourceSpaceId);
+    if (isSource) return { ok: true, action: "source", reason: "" };
+    return resolveBasketDrop(item, space, spaces, assignments);
+  }
+
   const api = {
     addBasketItem,
     applyBasketTargets,
     applyTemporaryUnbind,
     basketItemsFromUnplacedAssignments,
+    basketItemKey,
     canReturnBasketItem,
     removeBasketItem,
+    removeBasketItemsByKey,
     resolveBasketDrop,
+    resolveRoomDirectDrop,
     restoreBasketItem,
     updateBasketTarget,
   };

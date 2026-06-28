@@ -6,8 +6,11 @@ const {
   applyBasketTargets,
   applyTemporaryUnbind,
   basketItemsFromUnplacedAssignments,
+  basketItemKey,
   canReturnBasketItem,
+  removeBasketItemsByKey,
   resolveBasketDrop,
+  resolveRoomDirectDrop,
   restoreBasketItem,
 } = require("../js/app/move-basket.js");
 
@@ -91,6 +94,36 @@ test("resolves basket drops to either return-to-source or place-on-free-active-t
   assert.equal(resolveBasketDrop(item, { id: "space:401", space_code: "401", current_status: "active" }, spaces, assignments).ok, false);
 });
 
+test("allows placement after deleted source assignments are invalidated", () => {
+  const item = { assignmentId: "plan-a__lab-a", planId: "plan-a", sourceSpaceCode: "101" };
+  const spaces = [
+    { id: "space:102", space_code: "102", current_status: "active" },
+  ];
+  const assignments = [
+    { id: "plan-a__lab-a", plan_id: "plan-a", space_code: "", space_id: "", previous_space_code: "101", assignment_status: "Invalid" },
+  ];
+
+  assert.deepEqual(resolveBasketDrop(item, spaces[0], spaces, assignments), { ok: true, action: "place", reason: "" });
+});
+
+test("resolves direct room drops only to free active non-source targets", () => {
+  const item = { id: "direct-a", assignmentId: "plan-a__lab-a", planId: "plan-a", sourceSpaceCode: "101" };
+  const spaces = [
+    { id: "space:101", space_code: "101", current_status: "active" },
+    { id: "space:201", space_code: "201", current_status: "active" },
+    { id: "space:301", space_code: "301", current_status: "unavailable" },
+    { id: "space:401", space_code: "401", current_status: "active" },
+  ];
+  const assignments = [
+    { id: "plan-a__lab-b", plan_id: "plan-a", space_code: "401", space_id: "space:401", assignment_status: "assigned" },
+  ];
+
+  assert.deepEqual(resolveRoomDirectDrop(item, spaces[0], spaces, assignments), { ok: true, action: "source", reason: "" });
+  assert.deepEqual(resolveRoomDirectDrop(item, spaces[1], spaces, assignments), { ok: true, action: "place", reason: "" });
+  assert.equal(resolveRoomDirectDrop(item, spaces[2], spaces, assignments).ok, false);
+  assert.equal(resolveRoomDirectDrop(item, spaces[3], spaces, assignments).ok, false);
+});
+
 test("saves basket items with targets as assigned and unplaced items as Invalid", () => {
   const assignments = [
     { id: "plan-a__lab-a", plan_id: "plan-a", lab_id: "lab-a", lab_code: "LAB-A", space_code: "", previous_space_code: "101", assignment_status: "Invalid" },
@@ -132,4 +165,38 @@ test("rebuilds saved unplaced assignments as draggable basket items", () => {
   assert.equal(items[0].sourceSpaceCode, "101");
   assert.equal(items[0].isSavedUnplaced, true);
   assert.equal(items[0].color, "#7c3aed");
+});
+
+test("deduplicates saved unplaced basket items by stable plan and lab identity", () => {
+  const existingItems = [{
+    id: "old-ui-row",
+    assignmentId: "copy-1__LAB-A",
+    planId: "copy-1",
+    labId: "lab-a",
+    labCode: "LAB-A",
+  }];
+  const assignments = [
+    { id: "PLAN000002__LAB-A", plan_id: "copy-1", plan_code: "PLAN000002", lab_id: "lab-a", lab_code: "LAB-A", space_code: "", previous_space_code: "101", assignment_status: "Invalid" },
+  ];
+  const labsById = new Map([["lab-a", { id: "lab-a", lab_code: "LAB-A", lab_name: "AI Lab" }]]);
+
+  const items = basketItemsFromUnplacedAssignments(assignments, {
+    planId: "copy-1",
+    labsById,
+    existingItems,
+  });
+
+  assert.equal(items.length, 0);
+});
+
+test("removes every duplicate basket item with the same stable identity", () => {
+  const items = [
+    { id: "old-ui-row", assignmentId: "copy-1__LAB-A", planId: "copy-1", labId: "lab-a", labCode: "LAB-A" },
+    { id: "server-row", assignmentId: "PLAN000002__LAB-A", planId: "copy-1", labId: "lab-a", labCode: "LAB-A" },
+    { id: "other-row", assignmentId: "copy-1__LAB-B", planId: "copy-1", labId: "lab-b", labCode: "LAB-B" },
+  ];
+
+  const remaining = removeBasketItemsByKey(items, basketItemKey(items[0]));
+
+  assert.deepEqual(remaining.map((item) => item.id), ["other-row"]);
 });

@@ -476,7 +476,10 @@ function createDatasetService(db, config, audit) {
   }
 
   function dedupeById(rows) {
-    return [...new Map(rows.filter((row) => row.id).map((row) => [row.id, row])).values()];
+    return [...new Map(rows.filter((row) => row.id).map((row) => {
+      const copyId = String(row.copy_id || row.copyId || "").trim();
+      return [`${copyId}::${row.id}`, row];
+    })).values()];
   }
 
   function fillSequentialCodes(rows, field, prefix, width, options = {}) {

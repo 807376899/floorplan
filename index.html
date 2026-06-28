@@ -7,11 +7,22 @@
     <link rel="stylesheet" href="./styles.css" />
     <script defer src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
     <script defer src="./js/domain.js"></script>
+    <script defer src="./js/app/legend-colors.js"></script>
+    <script defer src="./js/app/thumbnails.js"></script>
     <script defer src="./js/render.js"></script>
     <script defer src="./js/app/api.js"></script>
     <script defer src="./js/app/import-export.js"></script>
     <script defer src="./js/app/canvas.js"></script>
     <script defer src="./js/app/move-basket.js"></script>
+    <script defer src="./js/app/move-controller.js"></script>
+    <script defer src="./js/app/business-edit.js"></script>
+    <script defer src="./js/app/raw-editor.js"></script>
+    <script defer src="./js/app/plan-management.js"></script>
+    <script defer src="./js/app/plan-scope.js"></script>
+    <script defer src="./js/app/plan-actions.js"></script>
+    <script defer src="./js/app/managed-plans-modal.js"></script>
+    <script defer src="./js/app/plan-diff.js"></script>
+    <script defer src="./js/app/plan-diff-panel.js"></script>
     <script defer src="./app.js"></script>
   </head>
   <body>
@@ -41,22 +52,8 @@
         </div>
       </section>
 
-      <section class="filters">
-        <label>教学楼<select id="buildingSelect"></select></label>
-        <label>楼层<select id="floorSelect"></select></label>
-        <label>学院高亮<select id="collegeSelect"></select></label>
-        <div class="plan-mode-box">
-          <span>方案模式</span>
-          <div class="mode-toggle" role="tablist" aria-label="方案显示模式">
-            <button id="singleModeBtn" type="button" class="is-active">单方案</button>
-            <button id="compareModeBtn" type="button">对比模式</button>
-          </div>
-        </div>
-        <label id="singlePlanFilter">当前方案<select id="currentPlanSelect"></select></label>
-        <div id="planCompareFilters" class="plan-filter-group">
-          <label>左侧方案<select id="beforePlanSelect"></select></label>
-          <label>右侧方案<select id="afterPlanSelect"></select></label>
-        </div>
+      <section class="filters" hidden>
+        <select id="floorSelect" aria-label="当前楼层"></select>
       </section>
 
       <section class="status-row">
@@ -70,24 +67,37 @@
             <div class="compare-heading">
               <div>
                 <h2 id="comparePanelTitle">缩略图</h2>
-                <p id="comparePanelHint"></p>
+                <div class="compare-heading-actions">
+                  <button id="newPlanBtn" type="button">新增方案</button>
+                  <button id="toggleVisibilityBtn" type="button">公开方案</button>
+                  <button id="deletePlanBtn" type="button">删除方案</button>
+                </div>
               </div>
-              <div class="compare-heading-actions">
-                <button id="newPlanBtn" type="button">新增方案</button>
-                <button id="toggleVisibilityBtn" type="button">公开副本</button>
-                <button id="deletePlanBtn" type="button">删除方案</button>
+              <div class="thumbnail-plan-toolbar">
+                <label class="thumbnail-building-select">教学楼<select id="buildingSelect"></select></label>
+                <div class="mode-toggle" role="tablist" aria-label="方案显示模式">
+                  <button id="singleModeBtn" type="button" class="is-active">单方案</button>
+                  <button id="compareModeBtn" type="button">对比</button>
+                </div>
               </div>
             </div>
             <div id="compareColumns" class="compare-columns is-single">
               <section id="beforeColumn" class="compare-column">
                 <div class="compare-title compare-title-before">
-                  <span id="beforePlanName"></span>
+                  <label id="singlePlanFilter" class="compare-plan-select">
+                    <select id="currentPlanSelect" aria-label="当前方案"></select>
+                  </label>
+                  <label id="beforePlanFilter" class="compare-plan-select is-hidden">
+                    <select id="beforePlanSelect" aria-label="左侧方案"></select>
+                  </label>
                 </div>
                 <div id="beforeThumbs" class="floor-thumbs"></div>
               </section>
               <section id="afterColumn" class="compare-column is-hidden">
                 <div class="compare-title compare-title-after">
-                  <span id="afterPlanName"></span>
+                  <label id="afterPlanFilter" class="compare-plan-select">
+                    <select id="afterPlanSelect" aria-label="右侧方案"></select>
+                  </label>
                 </div>
                 <div id="afterThumbs" class="floor-thumbs"></div>
               </section>
@@ -305,6 +315,38 @@
           <div class="modal-actions">
             <button id="confirmNewPlanBtn" type="submit" class="primary-button">创建方案</button>
             <button id="cancelNewPlanBtn" type="button">取消</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="newUnplacedLabModal" class="modal-backdrop is-hidden" aria-hidden="true">
+      <div class="modal-card modal-card-form" role="dialog" aria-modal="true" aria-labelledby="newUnplacedLabModalTitle">
+        <h3 id="newUnplacedLabModalTitle">新增待安置用途单元</h3>
+        <p>先记录用途单元信息，后续可拖到未规划空间落位。</p>
+        <form id="newUnplacedLabForm" class="modal-form">
+          <label class="modal-field">
+            <span>名称</span>
+            <input id="newUnplacedLabNameInput" name="labName" type="text" maxlength="80" required />
+          </label>
+          <label class="modal-field">
+            <span>所属学院</span>
+            <input id="newUnplacedLabCollegeInput" name="college" type="text" maxlength="80" />
+          </label>
+          <div class="modal-field-grid">
+            <label class="modal-field">
+              <span>座位数</span>
+              <input id="newUnplacedLabSeatInput" name="seatCount" type="number" min="0" step="1" />
+            </label>
+            <label class="modal-field">
+              <span>电脑数</span>
+              <input id="newUnplacedLabComputerInput" name="computerCount" type="number" min="0" step="1" />
+            </label>
+          </div>
+          <div id="newUnplacedLabErrorText" class="modal-error" aria-live="polite"></div>
+          <div class="modal-actions">
+            <button id="confirmNewUnplacedLabBtn" type="submit" class="primary-button">新增</button>
+            <button id="cancelNewUnplacedLabBtn" type="button">取消</button>
           </div>
         </form>
       </div>

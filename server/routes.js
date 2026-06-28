@@ -107,8 +107,10 @@ function createRouteApi(services) {
     const activeBaselineMatch = pathname.match(/^\/api\/manage\/active-plans\/([^/]+)\/baseline$/);
     if (req.method === "POST" && activeBaselineMatch) {
       auth.requireRole(context.user, ["admin"]);
-      planCopies.setActiveManagedPlanBaseline(decodeURIComponent(activeBaselineMatch[1]), context.user);
-      audit.writeAudit("active_plan_baselined", context.user.username, context.ip, { planCode: decodeURIComponent(activeBaselineMatch[1]) });
+      const body = await readJsonBody(req);
+      const isBaseline = body.isBaseline !== false;
+      planCopies.setActiveManagedPlanBaseline(decodeURIComponent(activeBaselineMatch[1]), context.user, isBaseline);
+      audit.writeAudit(isBaseline ? "active_plan_baselined" : "active_plan_unbaselined", context.user.username, context.ip, { planCode: decodeURIComponent(activeBaselineMatch[1]) });
       return sendVisibleDataset(res, context, services);
     }
 
@@ -136,8 +138,10 @@ function createRouteApi(services) {
     const baselineMatch = pathname.match(/^\/api\/manage\/plans\/(\d+)\/baseline$/);
     if (req.method === "POST" && baselineMatch) {
       auth.requireRole(context.user, ["admin"]);
-      planCopies.setManagedPlanBaseline(Number(baselineMatch[1]), context.user);
-      audit.writeAudit("managed_plan_baselined", context.user.username, context.ip, { copyId: Number(baselineMatch[1]) });
+      const body = await readJsonBody(req);
+      const isBaseline = body.isBaseline !== false;
+      planCopies.setManagedPlanBaseline(Number(baselineMatch[1]), context.user, isBaseline);
+      audit.writeAudit(isBaseline ? "managed_plan_baselined" : "managed_plan_unbaselined", context.user.username, context.ip, { copyId: Number(baselineMatch[1]) });
       return sendVisibleDataset(res, context, services);
     }
 
@@ -352,6 +356,8 @@ function stripPlanCopies(rawDataset, activeDataset = {}, copyIndex = null) {
     const copyIds = new Set([...(ids || [])].map(String));
     dataset[key] = (dataset[key] || []).filter((row) => {
       const id = String(row.id || "").trim();
+      const rowCopyId = String(row.copy_id || row.copyId || "").trim();
+      if (rowCopyId) return false;
       return !id || !copyIds.has(id) || activeIds[key]?.has(id);
     });
   };

@@ -459,6 +459,13 @@
     return [...new Map(rows.filter((row) => row[key]).map((row) => [row[key], row])).values()];
   }
 
+  function copyScopedDedupeBy(rows, key) {
+    return [...new Map(rows.filter((row) => row[key]).map((row) => {
+      const copyId = String(row.copy_id || row.copyId || "").trim();
+      return [`${copyId}::${row[key]}`, row];
+    })).values()];
+  }
+
   function campusSortOrder(campusName) {
     const raw = String(campusName || "").trim();
     if (raw.includes("下沙") || raw.includes("杭州")) return 1;
@@ -503,6 +510,7 @@
     const code = String(row.building_code || "").trim();
     return {
       id: row.id || code || `building-${Date.now()}`,
+      copy_id: row.copy_id || row.copyId || "",
       building_code: code,
       building_name: row.building_name || code,
       campus_zone: row.campus_zone || "未分区",
@@ -521,6 +529,7 @@
     const segmentCode = String(row.segment_code || "").trim();
     return {
       id: row.id || `${buildingCode}__${floorCode}__${segmentCode}`,
+      copy_id: row.copy_id || row.copyId || "",
       building_code: buildingCode,
       floor_code: floorCode,
       segment_code: segmentCode,
@@ -545,6 +554,7 @@
     const spaceCode = String(row.space_code || "").trim();
     return {
       id: row.id || `${buildingCode}__${floorCode}__${spaceCode}`,
+      copy_id: row.copy_id || row.copyId || "",
       space_code: spaceCode,
       building_code: buildingCode,
       floor_code: floorCode,
@@ -569,6 +579,7 @@
     const code = String(row.lab_code || "").trim();
     return {
       id: row.id || code || `lab-${Date.now()}`,
+      copy_id: row.copy_id || row.copyId || "",
       lab_code: code,
       lab_name: row.lab_name || code,
       college: row.college || "未设置学院",
@@ -662,6 +673,7 @@
     const code = normalizeDictionaryCode(row.college_code || name, "COLLEGE");
     return {
       id: code,
+      copy_id: row.copy_id || row.copyId || "",
       college_code: code,
       college_name: name || code,
       color: normalizeColor(row.color || row.color_hex),
@@ -680,6 +692,7 @@
     const code = normalizeDictionaryCode(row.major_code || (collegeCode && name ? `${collegeCode}-${name}` : name), "MAJOR");
     return {
       id: code,
+      copy_id: row.copy_id || row.copyId || "",
       major_code: code,
       major_name: name || code,
       college_code: collegeCode,
@@ -698,6 +711,7 @@
     const code = /^[A-Z][A-Z0-9_-]*$/i.test(rawCode) && !/[\u3400-\u9fff]/.test(rawCode) ? rawCode.toUpperCase() : "";
     return {
       id: row.id || code || normalizeDictionaryCode(name, "TYPE"),
+      copy_id: row.copy_id || row.copyId || "",
       type_code: code,
       type_name: name || code,
       sort_order: numberValue(row.sort_order, 0),
@@ -859,9 +873,14 @@
   }
 
   function deriveBuildings(buildings, spaces, floorSegments) {
-    const byCode = new Map(buildings.map((row) => [row.building_code, row]));
-    for (const code of unique([...spaces.map((row) => row.building_code), ...floorSegments.map((row) => row.building_code)])) {
-      if (!byCode.has(code)) byCode.set(code, normalizeBuilding({ building_code: code, building_name: code, campus_zone: "未分区", building_number: 0, notes: "" }));
+    const scopedBuildingKey = (row) => `${String(row.copy_id || row.copyId || "").trim()}::${row.building_code}`;
+    const byCode = new Map(buildings.map((row) => [scopedBuildingKey(row), row]));
+    for (const row of [...spaces, ...floorSegments]) {
+      const code = row.building_code;
+      const key = scopedBuildingKey(row);
+      if (code && !byCode.has(key)) {
+        byCode.set(key, normalizeBuilding({ copy_id: row.copy_id || row.copyId || "", building_code: code, building_name: code, campus_zone: "未分区", building_number: 0, notes: "" }));
+      }
     }
     return [...byCode.values()].sort(compareBuildings);
   }
@@ -892,12 +911,12 @@
     const planAssignments = (raw.plan_assignments || []).map((row) => normalizeAssignment(projectRow("plan_assignments", row), relation));
     return {
       buildings: deriveBuildings(buildings, spaces, floorSegments),
-      floor_segments: dedupeBy(floorSegments, "id"),
-      spaces: dedupeBy(spaces, "id"),
-      labs: dedupeBy(labs, "id"),
-      colleges: dictionary.colleges,
-      majors: dictionary.majors,
-      lab_types: dictionary.lab_types,
+      floor_segments: copyScopedDedupeBy(floorSegments, "id"),
+      spaces: copyScopedDedupeBy(spaces, "id"),
+      labs: copyScopedDedupeBy(labs, "id"),
+      colleges: copyScopedDedupeBy(dictionary.colleges, "id"),
+      majors: copyScopedDedupeBy(dictionary.majors, "id"),
+      lab_types: copyScopedDedupeBy(dictionary.lab_types, "id"),
       plans: dedupeBy(plans, "id"),
       plan_assignments: dedupeBy(planAssignments, "id"),
       file_assets: Array.isArray(raw.file_assets) ? raw.file_assets : [],

@@ -1,6 +1,8 @@
 const { httpError, nowIso, toBoolean } = require("./http-utils");
 
 function createPlanCopyService(db, datasetService) {
+  const COPY_SCOPED_KEYS = ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "file_assets"];
+
   function visibleWhere(user) {
     if (user?.role === "admin") return "deleted_at IS NULL";
     if (user) return "(deleted_at IS NULL AND (is_baseline = 1 OR visibility = 'public' OR owner_user_id = ?))";
@@ -270,12 +272,12 @@ function createPlanCopyService(db, datasetService) {
   function mergeCopyDataset(dataset, copy, latestBaselineCode) {
     if (copy.dataset) {
       const copyDataset = datasetService.normalizeIncomingDataset(copy.dataset);
-      const deletedSpaceIds = new Set(copyDataset.deleted_space_ids || []);
+      const deletedSpaceIds = deletedSpaceRefValuesForCopy(copyDataset.deleted_space_ids || [], copy.id);
       if (deletedSpaceIds.size) {
-        dataset.deleted_space_ids = [...new Set([...(dataset.deleted_space_ids || []), ...deletedSpaceIds])];
-        dataset.spaces = (dataset.spaces || []).filter((space) => !deletedSpaceIds.has(space.id));
-        dataset.plan_assignments = (dataset.plan_assignments || []).map((assignment) => {
-          if (!deletedSpaceIds.has(assignment.space_id)) return assignment;
+        dataset.deleted_space_ids = [...new Set([...(dataset.deleted_space_ids || []), ...scopedDeletedSpaceRefs(copyDataset.deleted_space_ids || [], copy.id)])];
+        copyDataset.spaces = (copyDataset.spaces || []).filter((space) => !deletedSpaceIds.has(space.id) && !deletedSpaceIds.has(space.space_code));
+        copyDataset.plan_assignments = (copyDataset.plan_assignments || []).map((assignment) => {
+          if (!deletedSpaceIds.has(assignment.space_id) && !deletedSpaceIds.has(assignment.space_code)) return assignment;
           return {
             ...assignment,
             previous_space_code: assignment.previous_space_code || assignment.space_code || "",
@@ -286,9 +288,10 @@ function createPlanCopyService(db, datasetService) {
           };
         });
       }
-      for (const key of ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "file_assets"]) {
+      const activeDataset = datasetService.normalizeIncomingDataset(datasetService.getActiveDataset().dataset);
+      for (const key of COPY_SCOPED_KEYS) {
         if (!Array.isArray(dataset[key])) dataset[key] = [];
-        dataset[key].push(...(copyDataset[key] || []));
+        dataset[key].push(...copyScopedRows(key, copyDataset[key] || [], activeDataset[key] || [], copy.id));
       }
     }
     if (!Array.isArray(dataset.plans)) dataset.plans = [];
@@ -357,8 +360,13 @@ function createPlanCopyService(db, datasetService) {
       updated_at: now,
     }));
 
-    db.prepare("UPDATE plan_copies SET plan_code = ?, plan_json = ?, assignments_json = ? WHERE id = ?")
-      .run(planCode, JSON.stringify(plan), JSON.stringify(assignments), copyId);
+    const copyDataset = datasetService.normalizeIncomingDataset({
+      ...clone(source.dataset),
+      plans: [plan],
+      plan_assignments: assignments,
+    });
+    db.prepare("UPDATE plan_copies SET plan_code = ?, plan_json = ?, assignments_json = ?, dataset_json = ? WHERE id = ?")
+      .run(planCode, JSON.stringify(plan), JSON.stringify(assignments), JSON.stringify(copyDataset), copyId);
 
     return { copyId };
   }
@@ -482,34 +490,36 @@ function createPlanCopyService(db, datasetService) {
     return datasetService.saveActiveDataset(datasetService.normalizeIncomingDataset(nextDataset), user.username);
   }
 
-  function setManagedPlanBaseline(copyId, user) {
+  function setManagedPlanBaseline(copyId, user, isBaseline = true) {
     requireAdmin(user);
     const row = getOwnedCopy(copyId, user);
     const now = nowIso();
     const plan = JSON.parse(row.plan_json);
+    const baseline = isBaseline !== false;
     const nextPlan = {
       ...plan,
-      plan_type: "baseline",
-      is_locked: true,
-      is_default_compare_before: true,
+      plan_type: baseline ? "baseline" : "copy",
+      is_locked: baseline,
+      is_default_compare_before: baseline,
       is_default_compare_after: false,
       updated_at: now,
     };
     const nextDatasetJson = updateDatasetPlanName(row.dataset_json, row.plan_code, row.plan_name, row.description, nextPlan);
     db.prepare(`
       UPDATE plan_copies
-      SET is_baseline = 1, baselined_at = ?, baselined_by = ?, plan_json = ?, dataset_json = ?, updated_at = ?
+      SET is_baseline = ?, baselined_at = ?, baselined_by = ?, plan_json = ?, dataset_json = ?, updated_at = ?
       WHERE id = ?
-    `).run(now, user.username, JSON.stringify(nextPlan), nextDatasetJson, now, copyId);
+    `).run(baseline ? 1 : 0, baseline ? now : null, baseline ? user.username : null, JSON.stringify(nextPlan), nextDatasetJson, now, copyId);
   }
 
-  function setActiveManagedPlanBaseline(planCode, user) {
+  function setActiveManagedPlanBaseline(planCode, user, isBaseline = true) {
     requireAdmin(user);
     const active = datasetService.getActiveDataset();
     const dataset = datasetService.normalizeIncomingDataset(active.dataset);
     const code = String(planCode || "").trim();
     let found = false;
     const now = nowIso();
+    const baseline = isBaseline !== false;
     const nextDataset = {
       ...dataset,
       plans: (dataset.plans || []).map((plan) => {
@@ -517,9 +527,9 @@ function createPlanCopyService(db, datasetService) {
         found = true;
         return {
           ...plan,
-          plan_type: "baseline",
-          is_locked: true,
-          is_default_compare_before: true,
+          plan_type: baseline ? "baseline" : "draft",
+          is_locked: baseline,
+          is_default_compare_before: baseline,
           is_default_compare_after: false,
           updated_at: now,
         };
@@ -551,11 +561,13 @@ function createPlanCopyService(db, datasetService) {
     const assignments = normalized.plan_assignments.filter((assignment) => assignment.plan_code === row.plan_code);
     const now = nowIso();
     const revision = row.revision + 1;
-    const nextDatasetJson = row.dataset_json ? JSON.stringify({
+    const copyDatasetPayload = copyScopedDataset(normalized, copyId);
+    const nextDatasetJson = row.dataset_json ? JSON.stringify(datasetService.normalizeIncomingDataset({
       ...normalized,
+      ...copyDatasetPayload,
       plans: normalized.plans.filter((item) => item.plan_code === row.plan_code),
       plan_assignments: assignments,
-    }) : row.dataset_json;
+    })) : row.dataset_json;
 
     db.prepare(`
       UPDATE plan_copies
@@ -592,8 +604,10 @@ function createPlanCopyService(db, datasetService) {
       plan_code: row.plan_code,
       plan_id: row.plan_code,
     }));
+    const copyDatasetPayload = copyScopedDataset(normalized, copyId);
     const nextDataset = datasetService.normalizeIncomingDataset({
       ...normalized,
+      ...copyDatasetPayload,
       plans: [nextPlan],
       plan_assignments: nextAssignments,
     });
@@ -603,6 +617,62 @@ function createPlanCopyService(db, datasetService) {
       WHERE id = ?
     `).run(JSON.stringify(nextPlan), JSON.stringify(nextAssignments), JSON.stringify(nextDataset), revision, now, copyId);
     return { revision, updatedAt: now };
+  }
+
+  function copyScopedDataset(normalized, copyId) {
+    const active = datasetService.normalizeIncomingDataset(datasetService.getActiveDataset().dataset);
+    const next = {};
+    for (const key of COPY_SCOPED_KEYS) {
+      next[key] = copyScopedRows(key, normalized[key] || [], active[key] || [], copyId);
+    }
+    next.deleted_space_ids = scopedDeletedSpaceRefs(normalized.deleted_space_ids || [], copyId);
+    next.imports = normalized.imports || [];
+    return next;
+  }
+
+  function copyScopedRows(key, rows, activeRows, copyId) {
+    const activeById = new Map((activeRows || []).map((row) => [text(row.id), row]));
+    const activeByKey = new Map((activeRows || []).map((row) => [copyScopedCompareKey(key, row), row]).filter(([rowKey]) => rowKey));
+    return (rows || [])
+      .filter((row) => {
+        const rowCopyId = Number(row?.copy_id || row?.copyId || 0);
+        if (rowCopyId && rowCopyId !== copyId) return false;
+        if (rowCopyId === copyId) return true;
+        const activeRow = activeById.get(text(row.id)) || activeByKey.get(copyScopedCompareKey(key, row));
+        return !activeRow || !rowsEquivalentForCopy(activeRow, row);
+      })
+      .map((row) => markRowForCopy(row, copyId));
+  }
+
+  function copyScopedCompareKey(key, row) {
+    if (!row) return "";
+    if (key === "buildings") return buildingKey(row);
+    if (key === "floor_segments") return floorSegmentKey(row);
+    if (key === "spaces") return spacePhysicalKey(row);
+    if (key === "labs") return labKey(row);
+    if (key === "colleges") return collegeKey(row);
+    if (key === "majors") return majorKey(row);
+    if (key === "lab_types") return labTypeKey(row);
+    if (key === "file_assets") return rowIdKey(row);
+    return rowIdKey(row);
+  }
+
+  function rowsEquivalentForCopy(left, right) {
+    return JSON.stringify(unscopedRow(left)) === JSON.stringify(unscopedRow(right));
+  }
+
+  function unscopedRow(row) {
+    const { copy_id: _copyId, copyId: _copyIdCamel, ...rest } = row || {};
+    return Object.fromEntries(Object.entries(rest).sort(([left], [right]) => left.localeCompare(right)));
+  }
+
+  function markRowsForCopy(rows, copyId) {
+    return (rows || []).map((row) => markRowForCopy(row, copyId));
+  }
+
+  function markRowForCopy(row, copyId) {
+    const current = Number(row?.copy_id || row?.copyId || 0);
+    return current === copyId ? row : { ...row, copy_id: copyId };
   }
 
   function deleteCopy(copyId, user) {
@@ -651,6 +721,7 @@ function createPlanCopyService(db, datasetService) {
         plan: basePlan,
         assignments: base.plan_assignments.filter((row) => row.plan_code === basePlan.plan_code),
         copyId: null,
+        dataset: base,
       };
     }
 
@@ -663,6 +734,7 @@ function createPlanCopyService(db, datasetService) {
           plan: copy.plan,
           assignments: copy.assignments,
           copyId,
+          dataset: buildSingleCopyDataset(copy),
         };
       }
     }
@@ -699,15 +771,30 @@ function createPlanCopyService(db, datasetService) {
   }
 
   function buildSingleCopyDataset(copy) {
-    const base = copy.dataset ? clone(copy.dataset) : clone(datasetService.getActiveDataset().dataset);
-    const withoutCurrent = {
+    const base = baseDatasetForCopy(copy);
+    return datasetService.normalizeIncomingDataset({
       ...base,
-      plans: (base.plans || []).filter((plan) => plan.plan_code !== copy.planCode && plan.id !== copy.planCode),
-      plan_assignments: (base.plan_assignments || []).filter((assignment) => assignment.plan_code !== copy.planCode),
-    };
-    withoutCurrent.plans.push(copy.plan);
-    withoutCurrent.plan_assignments.push(...copy.assignments);
-    return datasetService.normalizeIncomingDataset(withoutCurrent);
+      plans: [copy.plan],
+      plan_assignments: copy.assignments,
+    });
+  }
+
+  function baseDatasetForCopy(copy, seen = new Set()) {
+    if (copy.dataset) return clone(copy.dataset);
+    if (copy.sourceCopyId && !seen.has(copy.sourceCopyId)) {
+      seen.add(copy.sourceCopyId);
+      const row = db.prepare(`
+        SELECT plan_copies.*, users.username AS owner_username, users.role AS owner_role
+        FROM plan_copies
+        JOIN users ON users.id = plan_copies.owner_user_id
+        WHERE plan_copies.id = ? AND plan_copies.deleted_at IS NULL
+      `).get(copy.sourceCopyId);
+      if (row) {
+        const source = publicCopy(row);
+        return baseDatasetForCopy(source, seen);
+      }
+    }
+    return clone(datasetService.getActiveDataset().dataset);
   }
 
   function publicCopy(row) {
@@ -814,6 +901,21 @@ function createPlanCopyService(db, datasetService) {
 
 function compactVisibleDataset(raw) {
   const dataset = { ...(raw || {}) };
+  const deletedSpaceRefs = (dataset.deleted_space_ids || []).map(parseDeletedSpaceRef).filter((ref) => ref.ref);
+  if (deletedSpaceRefs.length) {
+    dataset.spaces = (dataset.spaces || []).filter((space) => !deletedSpaceRefMatchesRow(deletedSpaceRefs, space));
+    dataset.plan_assignments = (dataset.plan_assignments || []).map((assignment) => {
+      if (!deletedSpaceRefMatchesAssignment(deletedSpaceRefs, assignment)) return assignment;
+      return {
+        ...assignment,
+        previous_space_code: assignment.previous_space_code || assignment.space_code || "",
+        previous_space_id: assignment.previous_space_id || assignment.space_id || "",
+        space_code: "",
+        space_id: "",
+        assignment_status: "Invalid",
+      };
+    });
+  }
   const buildings = compactRows(dataset.buildings, buildingKey, buildingScore);
   const floorSegments = compactRows(dataset.floor_segments, floorSegmentKey, floorSegmentScore);
   const spaces = compactRows(dataset.spaces, spacePhysicalKey, spaceScore, ["space_code"]);
@@ -928,38 +1030,44 @@ function spaceScore(row) {
 }
 
 function rowIdKey(row) {
-  return text(row.id);
+  return scopedRowKey(row, text(row.id));
 }
 
 function buildingKey(row) {
-  return text(row.building_code) || text(row.id);
+  return scopedRowKey(row, text(row.building_code) || text(row.id));
 }
 
 function floorSegmentKey(row) {
-  return joinKey([row.building_code, row.floor_code, row.segment_code]);
+  return scopedRowKey(row, joinKey([row.building_code, row.floor_code, row.segment_code]));
 }
 
 function labKey(row) {
-  return text(row.lab_code) || text(row.id);
+  return scopedRowKey(row, text(row.lab_code) || text(row.id));
 }
 
 function collegeKey(row) {
-  return text(row.college_code) || text(row.college_name) || text(row.id);
+  return scopedRowKey(row, text(row.college_code) || text(row.college_name) || text(row.id));
 }
 
 function majorKey(row) {
-  return text(row.major_code) || joinKey([row.college_code, row.major_name]) || text(row.id);
+  return scopedRowKey(row, text(row.major_code) || joinKey([row.college_code, row.major_name]) || text(row.id));
 }
 
 function labTypeKey(row) {
-  return text(row.type_code) || text(row.type_name) || text(row.id);
+  return scopedRowKey(row, text(row.type_code) || text(row.type_name) || text(row.id));
 }
 
 function spacePhysicalKey(row) {
   const frontDoor = text(row.front_door) || text(row.space_code);
   const rawRearDoor = text(row.rear_door);
   const rearDoor = rawRearDoor === frontDoor ? "" : rawRearDoor;
-  return joinKey([row.building_code, row.floor_code, frontDoor, rearDoor]);
+  return scopedRowKey(row, joinKey([row.building_code, row.floor_code, frontDoor, rearDoor]));
+}
+
+function scopedRowKey(row, key) {
+  if (!key) return "";
+  const copyId = text(row.copy_id) || text(row.copyId);
+  return copyId ? `copy:${copyId}::${key}` : key;
 }
 
 function joinKey(values) {
@@ -969,6 +1077,71 @@ function joinKey(values) {
 
 function text(value) {
   return String(value || "").trim();
+}
+
+function parseDeletedSpaceRef(value) {
+  const raw = text(value);
+  const match = raw.match(/^copy:(\d+)::(.+)$/);
+  if (!match) return { copyId: null, ref: raw };
+  return { copyId: Number(match[1]), ref: text(match[2]) };
+}
+
+function scopedDeletedSpaceRefs(refs, copyId) {
+  const values = new Set();
+  for (const value of refs || []) {
+    const parsed = parseDeletedSpaceRef(value);
+    if (!parsed.ref) continue;
+    if (parsed.copyId && parsed.copyId !== Number(copyId)) continue;
+    values.add(`copy:${Number(copyId)}::${parsed.ref}`);
+  }
+  return [...values];
+}
+
+function deletedSpaceRefValuesForCopy(refs, copyId) {
+  const values = new Set();
+  for (const value of refs || []) {
+    const parsed = parseDeletedSpaceRef(value);
+    if (!parsed.ref) continue;
+    if (parsed.copyId && parsed.copyId !== Number(copyId)) continue;
+    values.add(parsed.ref);
+  }
+  return values;
+}
+
+function rowCopyId(row) {
+  return Number(row?.copy_id || row?.copyId || 0);
+}
+
+function assignmentCopyId(row) {
+  const raw = text(row?.plan_id) || text(row?.plan_code);
+  const match = raw.match(/^copy-(\d+)$/);
+  return match ? Number(match[1]) : 0;
+}
+
+function deletedSpaceRefMatchesRow(refs, row) {
+  const copyId = rowCopyId(row);
+  for (const ref of refs || []) {
+    if (!ref.ref) continue;
+    if (ref.copyId) {
+      if (copyId !== ref.copyId) continue;
+    } else if (copyId) {
+      continue;
+    }
+    if (text(row?.id) === ref.ref || text(row?.space_code) === ref.ref) return true;
+  }
+  return false;
+}
+
+function deletedSpaceRefMatchesAssignment(refs, row) {
+  const copyId = assignmentCopyId(row);
+  for (const ref of refs || []) {
+    if (!ref.ref) continue;
+    if (ref.copyId) {
+      if (copyId !== ref.copyId) continue;
+    }
+    if (text(row?.space_id) === ref.ref || text(row?.space_code) === ref.ref) return true;
+  }
+  return false;
 }
 
 module.exports = { createPlanCopyService, compactVisibleDataset };
