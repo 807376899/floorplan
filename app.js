@@ -51,6 +51,7 @@ const PlanActions = window.FloorplanApp.PlanActions;
 const ManagedPlansModal = window.FloorplanApp.ManagedPlansModal;
 const PlanDiff = window.FloorplanApp.PlanDiff;
 const PlanDiffPanel = window.FloorplanApp.PlanDiffPanel;
+const DetailActions = window.FloorplanApp.DetailActions;
 const REMEMBERED_USER_KEY = "floorplan_remembered_user";
 const RAW_EDITOR_REPLACED_BY_BUSINESS = new Set(["spaces", "labs", "plan_assignments"]);
 const ADMIN_ONLY_RAW_EDITOR_KEYS = new Set(["colleges", "majors"]);
@@ -83,6 +84,11 @@ const state = {
   zoom: 1,
   mutedColleges: new Set(),
   detailsMode: "view",
+  detailEditor: {
+    mode: "view",
+    moreOpen: false,
+    errors: {},
+  },
   inspectorMode: "details",
   moveDraft: null,
   moveErrors: {},
@@ -1086,6 +1092,7 @@ function resetContextState() {
   state.editorHighlight = null;
   state.activePlanId = null;
   state.detailsMode = "view";
+  resetDetailEditorState();
   state.moveDraft = null;
   state.moveErrors = {};
   state.moveDirty = false;
@@ -1095,6 +1102,10 @@ function resetContextState() {
   state.moveDrag = null;
   state.pendingNavigation = null;
   state.planDeleteTargetId = null;
+}
+
+function resetDetailEditorState() {
+  state.detailEditor = { mode: "view", moreOpen: false, errors: {} };
 }
 
 function refreshStateAndRender(message, options = {}) {
@@ -1550,11 +1561,17 @@ function renderApp() {
     moveDirty: state.moveDirty,
     moveTargetOptions: moveTargetSpaceOptions(context),
     canEdit: canEditActivePlan(),
+    canAdmin: state.permissions.canAdmin,
+    detailsEdit: state.detailEditor,
+    detailEditOptions: buildDetailEditOptions(context),
     inspectorMode: state.inspectorMode,
     placementDragActive: state.moveDrag?.kind === "room" && state.moveDrag.active,
     onSetInspectorMode: setInspectorMode,
     onFocusRow: focusRowFromDetails,
     onOpenMove: openMoveMode,
+    onDetailAction: handleDetailAction,
+    onSubmitDetailEdit: submitDetailEditAction,
+    onCancelDetailEdit: cancelDetailEdit,
     onPlanSpace: planSelectedSpaceAction,
     onRenovateLab: renovateSelectedLabAction,
     onMoveFieldChange: updateMoveField,
@@ -1723,6 +1740,7 @@ function handleThumbSelect(planId, floorCode) {
     syncSelectedSpace();
     state.zoom = 1;
     state.detailsMode = "view";
+    resetDetailEditorState();
     syncMoveDraft(true);
     renderEditor();
     renderApp();
@@ -1740,6 +1758,7 @@ function handleSpaceSelect(spaceId) {
     state.selectedSpaceId = spaceId;
     state.businessEditor.selectedSpaceId = spaceId;
     state.detailsMode = "view";
+    resetDetailEditorState();
     state.inspectorMode = "details";
     syncMoveDraft(true);
     if (state.editorMode === "business") renderEditor();
@@ -1753,6 +1772,129 @@ function setInspectorMode(mode) {
   state.inspectorMode = nextMode;
   if (nextMode === "placement") state.moveBasket.isOpen = true;
   renderApp();
+}
+
+function buildDetailEditOptions(context) {
+  const copySegments = floorSegmentsForActivePlan()
+    .filter((segment) => isAssignableSegment(segment))
+    .filter((segment) =>
+      !context.space ||
+      (segment.building_code === context.space.building_code && segment.floor_code === context.space.floor_code)
+    )
+    .slice()
+    .sort((a, b) => compare(a.segment_code, b.segment_code));
+  const currentSegment = context.space?.segment_code;
+  const segmentOptions = copySegments.map((segment) => ({
+    value: segment.segment_code,
+    label: `${segment.segment_code} · ${segmentTypeLabel(segment.element_type)}`,
+    selected: segment.segment_code === currentSegment,
+  }));
+  if (currentSegment && !segmentOptions.some((item) => item.value === currentSegment)) {
+    segmentOptions.unshift({ value: currentSegment, label: currentSegment, selected: true });
+  }
+  const renovationMonth = DetailActions.effectiveDateToMonth(context.assignment?.effective_from, isoNow());
+  return {
+    segmentOptions,
+    renovationMonth,
+    spaceCodePreview: context.space ? generateSpaceCode(context.space, context.building) || context.space.space_code : "",
+  };
+}
+
+function handleDetailAction(action) {
+  if (!state.permissions.canAdmin || !canEditActivePlan()) {
+    updateStatus("当前账号没有编辑此方案的权限。");
+    return;
+  }
+  const context = getSelectedContext();
+  if (!context.space) {
+    updateStatus("请先选择要编辑的房间。");
+    return;
+  }
+  if (action === "toggle-more") {
+    state.detailEditor = { ...state.detailEditor, mode: "view", moreOpen: !state.detailEditor.moreOpen, errors: {} };
+    renderApp();
+    return;
+  }
+  if (action === "edit-space") {
+    state.detailEditor = { mode: "editSpace", moreOpen: false, errors: {} };
+    renderApp();
+    return;
+  }
+  if (action === "edit-lab") {
+    if (!context.lab || !context.assignment) {
+      updateStatus("当前房间没有可编辑的实验室。");
+      return;
+    }
+    state.detailEditor = { mode: "editLab", moreOpen: false, errors: {} };
+    renderApp();
+    return;
+  }
+  if (action === "renovate-room") {
+    if (!context.lab || !context.assignment) {
+      updateStatus("请选择已有已分配实验室的房间后再改建。");
+      return;
+    }
+    state.detailEditor = { mode: "renovateRoom", moreOpen: false, errors: {} };
+    renderApp();
+    return;
+  }
+  if (action === "merge-space") updateStatus("合并房间将在后续迭代开放。");
+  if (action === "split-space") updateStatus("拆分房间将在后续迭代开放。");
+}
+
+function cancelDetailEdit() {
+  resetDetailEditorState();
+  renderApp();
+}
+
+async function submitDetailEditAction(mode, formData) {
+  if (!state.permissions.canAdmin || !canEditActivePlan()) {
+    updateStatus("当前账号没有编辑此方案的权限。");
+    return;
+  }
+  const context = getSelectedContext();
+  if (!context.space) {
+    updateStatus("请先选择要编辑的房间。");
+    return;
+  }
+  const previousData = cloneDataset(state.data);
+  const previousRevision = state.serverRevision;
+  const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
+  const deps = {
+    normalizeLab,
+    normalizeSpace,
+    normalizeAssignment: (row) => normalizeAssignment(row, relationMaps(state.data)),
+    generateSpaceCode,
+    generateUnitCode,
+    isoNow,
+    copyScope: copyScopeForActivePlan(),
+  };
+  const result = mode === "editLab"
+    ? DetailActions.applyDetailLabEdit(state.data, context, formData, deps)
+    : mode === "renovateRoom"
+      ? DetailActions.applyDetailRenovation(state.data, context, formData, deps)
+      : DetailActions.applyDetailSpaceEdit(state.data, context, formData, deps);
+  if (!result.ok) {
+    state.detailEditor = { ...state.detailEditor, errors: { form: result.message || "保存失败，请检查表单。" } };
+    renderApp();
+    updateStatus(result.message || "保存失败，请检查表单。");
+    return;
+  }
+  state.data = normalizeDataset(state.data);
+  if (mode === "editSpace" && result.space?.id) {
+    state.selectedSpaceId = result.space.id;
+    state.businessEditor.selectedSpaceId = result.space.id;
+  }
+  resetDetailEditorState();
+  renderEditor();
+  renderApp();
+  const changeNote = mode === "editLab" ? "编辑实验室详情" : mode === "renovateRoom" ? "改建房间" : "编辑房间详情";
+  const saveOk = await saveWithRollback(previousData, previousRevision, changeNote, `${changeNote}失败`);
+  if (!saveOk) {
+    state.planCopies = previousCopies;
+    return;
+  }
+  refreshStateAndRender(`${changeNote}已保存。`, { stamp: false, forceMoveReset: true });
 }
 
 function openMoveMode(...args) {
@@ -1864,6 +2006,7 @@ function updateMoveField(field, value) {
 
 function cancelMoveMode() {
   state.detailsMode = "view";
+  resetDetailEditorState();
   state.moveDraft = null;
   state.moveErrors = {};
   state.moveDirty = false;
@@ -2178,6 +2321,7 @@ function discardAndContinuePendingAction() {
 
 function discardMoveChanges() {
   state.detailsMode = "view";
+  resetDetailEditorState();
   state.moveDraft = null;
   state.moveErrors = {};
   state.moveDirty = false;

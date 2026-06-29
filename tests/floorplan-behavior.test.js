@@ -14,6 +14,7 @@ const ManagedPlansModal = require("../js/app/managed-plans-modal");
 const BusinessEdit = require("../js/app/business-edit");
 const RawEditor = require("../js/app/raw-editor");
 const PlanScope = require("../js/app/plan-scope");
+const DetailActions = require("../js/app/detail-actions");
 const { buildPlanDiff } = require("../js/app/plan-diff");
 const { renderPlanDiffPanel } = require("../js/app/plan-diff-panel");
 
@@ -39,6 +40,10 @@ class StubElement {
 
   querySelectorAll() {
     return [];
+  }
+
+  querySelector() {
+    return null;
   }
 }
 
@@ -1398,6 +1403,235 @@ test("thumbnail previews fit without an internal scroll container", () => {
   assert.doesNotMatch(thumbRule.groups.body, /overflow\s*:\s*auto/);
   assert.match(thumbRule.groups.body, /overflow\s*:\s*hidden/);
   assert.match(thumbRule.groups.body, /aspect-ratio\s*:/);
+});
+
+test("medium viewport stacks compare plans while floor thumbnails scroll horizontally", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
+
+  assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.compare-columns\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
+  assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.compare-column\s*\{[\s\S]*?grid-template-columns:\s*minmax\(220px,\s*280px\) minmax\(0,\s*1fr\)/);
+  assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?grid-auto-flow:\s*column/);
+  assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-x:\s*auto/);
+});
+
+test("admin details render inline edit actions and disabled split merge menu", () => {
+  const { FloorplanRender } = loadBrowserModules();
+  const detailsEl = new StubElement();
+  const context = {
+    building: { building_code: "B0101", building_name: "测试楼" },
+    activePlan: { id: "plan-1", plan_code: "PLAN001", plan_name: "基线" },
+    space: { id: "space-1", building_code: "B0101", floor_code: "1", space_code: "00101010101", front_door: "101", rear_door: "", length_m: 8, width_m: 6, area_m2: 48, network_segment: "10.0.0.0/24", current_status: "active" },
+    lab: { id: "lab-1", lab_code: "UNIT000001", lab_name: "网络实验室", college: "信息学院", major: "软件工程", director: "张三", seat_count: 40, computer_count: 40 },
+    assignment: { id: "assign-1", plan_id: "plan-1", lab_id: "lab-1", space_id: "space-1", assignment_status: "assigned", effective_from: "2026-05-01" },
+  };
+
+  FloorplanRender.renderDetailsPanel({
+    detailsEl,
+    context,
+    mode: "view",
+    canEdit: true,
+    canAdmin: true,
+    detailsEdit: { mode: "view", moreOpen: true, errors: {} },
+    moveBasket: { items: [] },
+  });
+
+  assert.match(detailsEl.innerHTML, /data-detail-action="edit-lab"/);
+  assert.match(detailsEl.innerHTML, /data-detail-action="renovate-room"/);
+  assert.match(detailsEl.innerHTML, /data-detail-action="edit-space"/);
+  assert.match(detailsEl.innerHTML, /data-detail-action="merge-space"[^>]*disabled/);
+  assert.match(detailsEl.innerHTML, /data-detail-action="split-space"[^>]*disabled/);
+  assert.match(detailsEl.innerHTML, /暂未开放/);
+
+  FloorplanRender.renderDetailsPanel({
+    detailsEl,
+    context,
+    mode: "view",
+    canEdit: true,
+    canAdmin: false,
+    detailsEdit: { mode: "view", moreOpen: true, errors: {} },
+    moveBasket: { items: [] },
+  });
+
+  assert.doesNotMatch(detailsEl.innerHTML, /data-detail-action="edit-lab"/);
+  assert.doesNotMatch(detailsEl.innerHTML, /data-detail-action="edit-space"/);
+});
+
+test("admin details render lab and room edit forms inline", () => {
+  const { FloorplanRender } = loadBrowserModules();
+  const detailsEl = new StubElement();
+  const context = {
+    building: { building_code: "B0101", building_name: "测试楼" },
+    space: { id: "space-1", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", space_code: "00101010101", front_door: "101", rear_door: "", side: "north", offset_m: 0, length_m: 8, width_m: 6, area_m2: 48, network_segment: "10.0.0.0/24", current_status: "active" },
+    lab: { id: "lab-1", lab_code: "UNIT000001", lab_name: "网络实验室", college: "信息学院", major: "软件工程", director: "张三", seat_count: 40, computer_count: 40 },
+    assignment: { id: "assign-1", effective_from: "2026-05-01" },
+  };
+
+  FloorplanRender.renderDetailsPanel({
+    detailsEl,
+    context,
+    mode: "view",
+    canEdit: true,
+    canAdmin: true,
+    detailsEdit: { mode: "editLab", moreOpen: false, errors: {} },
+    detailEditOptions: { renovationMonth: "2026-05" },
+    moveBasket: { items: [] },
+  });
+
+  assert.match(detailsEl.innerHTML, /id="detailEditLabForm"/);
+  assert.match(detailsEl.innerHTML, /name="labName"/);
+  assert.match(detailsEl.innerHTML, /name="renovationMonth"/);
+  assert.match(detailsEl.innerHTML, /value="2026-05"/);
+
+  FloorplanRender.renderDetailsPanel({
+    detailsEl,
+    context,
+    mode: "view",
+    canEdit: true,
+    canAdmin: true,
+    detailsEdit: { mode: "editSpace", moreOpen: false, errors: {} },
+    detailEditOptions: {
+      segmentOptions: [{ value: "EW01010101", label: "一层东走廊", selected: true }],
+      spaceCodePreview: "00101010101",
+    },
+    moveBasket: { items: [] },
+  });
+
+  assert.match(detailsEl.innerHTML, /id="detailEditSpaceForm"/);
+  assert.match(detailsEl.innerHTML, /name="frontDoor"/);
+  assert.match(detailsEl.innerHTML, /name="areaM2"/);
+  assert.match(detailsEl.innerHTML, /空间编码预览/);
+});
+
+test("detail lab edit updates lab fields and assignment renovation month", () => {
+  const dataset = {
+    labs: [{ id: "lab-1", lab_code: "UNIT000001", lab_name: "旧实验室", college: "信息学院", major: "", director: "", seat_count: 20, computer_count: 10 }],
+    spaces: [{ id: "space-1", space_code: "00101010101" }],
+    plans: [{ id: "plan-1", plan_code: "PLAN001" }],
+    plan_assignments: [{ id: "assign-1", plan_id: "plan-1", lab_id: "lab-1", space_id: "space-1", lab_code: "UNIT000001", space_code: "00101010101", assignment_status: "assigned", effective_from: "" }],
+  };
+
+  const result = DetailActions.applyDetailLabEdit(dataset, {
+    lab: dataset.labs[0],
+    assignment: dataset.plan_assignments[0],
+  }, {
+    labName: "新实验室",
+    college: "计算机学院",
+    major: "软件工程",
+    director: "李四",
+    seatCount: "42",
+    computerCount: "40",
+    renovationMonth: "2026-06",
+  }, {
+    normalizeLab: (row) => row,
+    normalizeAssignment: (row) => row,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(dataset.labs[0].lab_name, "新实验室");
+  assert.equal(dataset.labs[0].college, "计算机学院");
+  assert.equal(dataset.labs[0].seat_count, 42);
+  assert.equal(dataset.plan_assignments[0].effective_from, "2026-06-01");
+});
+
+test("detail renovation invalidates old assignment and binds a new lab to the room", () => {
+  const dataset = {
+    labs: [{ id: "lab-1", lab_code: "UNIT000001", lab_name: "旧实验室", college: "信息学院", seat_count: 20, computer_count: 10 }],
+    spaces: [{ id: "space-1", space_code: "00101010101", front_door: "101" }],
+    plans: [{ id: "plan-1", plan_code: "PLAN001" }],
+    plan_assignments: [{ id: "assign-1", plan_id: "plan-1", lab_id: "lab-1", space_id: "space-1", lab_code: "UNIT000001", space_code: "00101010101", assignment_status: "assigned", effective_from: "2025-01-01" }],
+  };
+
+  const result = DetailActions.applyDetailRenovation(dataset, {
+    activePlan: dataset.plans[0],
+    lab: dataset.labs[0],
+    space: dataset.spaces[0],
+    assignment: dataset.plan_assignments[0],
+  }, {
+    labName: "",
+    college: "",
+    major: "",
+    director: "",
+    seatCount: "",
+    computerCount: "",
+    renovationMonth: "",
+  }, {
+    isoNow: () => "2026-06-29T08:00:00Z",
+    generateUnitCode: () => "UNIT000002",
+    normalizeLab: (row) => ({ id: row.id || row.lab_code, ...row }),
+    normalizeAssignment: (row) => ({ id: row.id || `${row.plan_code}-${row.lab_code}`, ...row }),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(dataset.labs.length, 2);
+  assert.equal(dataset.labs[1].lab_name, "待改建房间");
+  assert.equal(dataset.labs[1].college, "信息学院");
+  assert.equal(dataset.plan_assignments[0].assignment_status, "Invalid");
+  assert.equal(dataset.plan_assignments[0].space_code, "");
+  assert.equal(dataset.plan_assignments[1].lab_code, "UNIT000002");
+  assert.equal(dataset.plan_assignments[1].space_code, "00101010101");
+  assert.equal(dataset.plan_assignments[1].effective_from, "2026-06-01");
+});
+
+test("detail space edit migrates assignment references and calculates area from dimensions", () => {
+  const dataset = {
+    buildings: [{ building_code: "B0101", campus_zone: "下沙校区", building_number: 1 }],
+    floor_segments: [{ id: "seg-1", segment_code: "EW01010101" }],
+    spaces: [{ id: "space-1", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", space_code: "OLD101", front_door: "101", rear_door: "", side: "north", offset_m: 0, length_m: 8, width_m: 6, area_m2: 48, network_segment: "", current_status: "active" }],
+    labs: [],
+    plans: [{ id: "plan-1", plan_code: "PLAN001" }],
+    plan_assignments: [{ id: "assign-1", plan_id: "plan-1", space_id: "space-1", space_code: "OLD101", assignment_status: "assigned" }],
+  };
+
+  const result = DetailActions.applyDetailSpaceEdit(dataset, {
+    building: dataset.buildings[0],
+    space: dataset.spaces[0],
+  }, {
+    frontDoor: "103",
+    rearDoor: "",
+    segmentCode: "EW01010101",
+    side: "south",
+    offsetM: "2.5",
+    lengthM: "9",
+    widthM: "7",
+    areaM2: "50",
+    networkSegment: "10.1.0.0/24",
+    currentStatus: "active",
+  }, {
+    generateSpaceCode: () => "00101010303",
+    normalizeSpace: (row) => row,
+    normalizeAssignment: (row) => row,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(dataset.spaces[0].space_code, "00101010303");
+  assert.equal(dataset.spaces[0].rear_door, "");
+  assert.equal(dataset.spaces[0].side, "south");
+  assert.equal(dataset.spaces[0].area_m2, 63);
+  assert.equal(dataset.plan_assignments[0].space_code, "00101010303");
+});
+
+test("detail space edit rejects clearing existing dimensions", () => {
+  const dataset = {
+    spaces: [{ id: "space-1", space_code: "OLD101", front_door: "101", length_m: 8, width_m: 6, area_m2: 48 }],
+    plan_assignments: [],
+  };
+
+  const result = DetailActions.applyDetailSpaceEdit(dataset, {
+    building: {},
+    space: dataset.spaces[0],
+  }, {
+    frontDoor: "101",
+    lengthM: "",
+    widthM: "6",
+    areaM2: "48",
+  }, {
+    generateSpaceCode: () => "OLD101",
+    normalizeSpace: (row) => row,
+    normalizeAssignment: (row) => row,
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.message, /长宽/);
 });
 
 test("thumbnail list keeps existing DOM and scroll when render input is unchanged", () => {

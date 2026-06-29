@@ -280,8 +280,14 @@
       moveDirty,
       moveTargetOptions = [],
       canEdit,
+      canAdmin = false,
+      detailsEdit = { mode: "view", moreOpen: false, errors: {} },
+      detailEditOptions = {},
       onFocusRow,
       onOpenMove,
+      onDetailAction,
+      onSubmitDetailEdit,
+      onCancelDetailEdit,
       onMoveFieldChange,
       onConfirmMove,
       onCancelMove,
@@ -327,7 +333,16 @@
       return;
     }
 
-    renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove, moveBasket, onSetInspectorMode);
+    if (detailsEdit?.mode && detailsEdit.mode !== "view") {
+      renderDetailEditPanel(detailsEl, context, canEdit && canAdmin, detailsEdit, detailEditOptions, moveBasket, {
+        onSubmitDetailEdit,
+        onCancelDetailEdit,
+        onSetInspectorMode,
+      });
+      return;
+    }
+
+    renderReadonlyDetails(detailsEl, context, canEdit, canAdmin, detailsEdit, onFocusRow, onOpenMove, onDetailAction, moveBasket, onSetInspectorMode);
   }
 
   function inspectorTabsHtml(activeMode, count) {
@@ -346,10 +361,11 @@
     });
   }
 
-  function renderReadonlyDetails(detailsEl, context, canEdit, onFocusRow, onOpenMove, moveBasket, onSetInspectorMode) {
+  function renderReadonlyDetails(detailsEl, context, canEdit, canAdmin, detailsEdit, onFocusRow, onOpenMove, onDetailAction, moveBasket, onSetInspectorMode) {
     const { building, space, lab, assignment } = context;
     const pageTitle = lab?.lab_name || "未规划";
     const canMove = Boolean(canEdit && assignment && lab);
+    const canAdminEdit = Boolean(canEdit && canAdmin && space);
     const detailRows = [detailLine("门牌", doorRangeLabel(space) || "未填写")];
 
     if (lab) {
@@ -382,6 +398,7 @@
       </div>
 
       <div class="details-scroll">
+        ${canAdminEdit ? detailActionBarHtml(Boolean(lab && assignment), detailsEdit?.moreOpen) : ""}
         <section class="details-card details-card-compact">
           <div class="details-card-head">
             <div>
@@ -399,6 +416,133 @@
 
     </div>`;
     bindInspectorTabs(detailsEl, onSetInspectorMode);
+    bindDetailActionButtons(detailsEl, onDetailAction);
+  }
+
+  function detailActionBarHtml(hasLab, moreOpen) {
+    return `<div class="detail-admin-actions">
+      ${hasLab ? `<button type="button" class="secondary-button compact-button" data-detail-action="edit-lab">编辑实验室</button>` : ""}
+      ${hasLab ? `<button type="button" class="secondary-button compact-button" data-detail-action="renovate-room">改建房间</button>` : ""}
+      <div class="detail-more-wrap">
+        <button type="button" class="secondary-button compact-button" data-detail-action="toggle-more" aria-expanded="${moreOpen ? "true" : "false"}">更多</button>
+        ${moreOpen ? `<div class="detail-more-menu">
+          <button type="button" data-detail-action="edit-space">编辑房间</button>
+          <button type="button" data-detail-action="merge-space" disabled>合并房间<span>暂未开放</span></button>
+          <button type="button" data-detail-action="split-space" disabled>拆分房间<span>暂未开放</span></button>
+        </div>` : ""}
+      </div>
+    </div>`;
+  }
+
+  function bindDetailActionButtons(root, onDetailAction) {
+    root.querySelectorAll("[data-detail-action]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        if (button.disabled) return;
+        onDetailAction?.(button.dataset.detailAction);
+      });
+    });
+  }
+
+  function renderDetailEditPanel(detailsEl, context, canAdminEdit, detailsEdit, options, moveBasket, handlers) {
+    const mode = detailsEdit?.mode || "view";
+    if (!canAdminEdit) {
+      renderReadonlyDetails(detailsEl, context, false, false, { mode: "view" }, null, null, null, moveBasket, handlers.onSetInspectorMode);
+      return;
+    }
+    const title = mode === "editSpace" ? "编辑房间" : mode === "renovateRoom" ? "改建房间" : "编辑实验室";
+    const formHtml = mode === "editSpace"
+      ? spaceEditFormHtml(context, options, detailsEdit.errors || {})
+      : labEditFormHtml(context, options, detailsEdit.errors || {}, mode === "renovateRoom");
+    detailsEl.innerHTML = `<div class="details-panel is-editing" data-move-basket-dropzone="true">
+      <div class="details-header">
+        <div>
+          <h2>${escapeHtml(title)}</h2>
+        </div>
+        ${inspectorTabsHtml("details", moveBasket.items?.length || 0)}
+      </div>
+      <div class="details-scroll">
+        <section class="details-card detail-edit-card">
+          ${formHtml}
+        </section>
+      </div>
+    </div>`;
+    bindInspectorTabs(detailsEl, handlers.onSetInspectorMode);
+    const form = detailsEl.querySelector("form[data-detail-edit-mode]");
+    form?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      handlers.onSubmitDetailEdit?.(mode, new FormData(form));
+    });
+    detailsEl.querySelector("[data-detail-cancel]")?.addEventListener("click", (event) => {
+      event.preventDefault();
+      handlers.onCancelDetailEdit?.();
+    });
+  }
+
+  function labEditFormHtml(context, options, errors, isRenovation) {
+    const lab = context.lab || {};
+    const month = options.renovationMonth || "";
+    const defaultName = isRenovation ? "待改建房间" : lab.lab_name || "";
+    return `<form id="${isRenovation ? "detailRenovateRoomForm" : "detailEditLabForm"}" class="detail-edit-form" data-detail-edit-mode="${isRenovation ? "renovateRoom" : "editLab"}">
+      <div class="detail-form-grid">
+        ${detailInput("实验室名称", "labName", defaultName, "text")}
+        ${detailInput("所属学院", "college", isRenovation ? lab.college || "" : lab.college || "", "text")}
+        ${detailInput("专业", "major", isRenovation ? "" : lab.major || "", "text")}
+        ${detailInput("负责人", "director", isRenovation ? "" : lab.director || "", "text")}
+        ${detailInput("座位数", "seatCount", isRenovation ? "" : lab.seat_count ?? "", "number", "1")}
+        ${detailInput("电脑数", "computerCount", isRenovation ? "" : lab.computer_count ?? "", "number", "1")}
+        ${detailInput("改建年月", "renovationMonth", month, "month")}
+      </div>
+      ${errors.form ? `<p class="detail-form-error">${escapeHtml(errors.form)}</p>` : ""}
+      <div class="details-actions">
+        <button type="submit" class="primary-button">保存</button>
+        <button type="button" data-detail-cancel>取消</button>
+      </div>
+    </form>`;
+  }
+
+  function spaceEditFormHtml(context, options, errors) {
+    const space = context.space || {};
+    const segmentOptions = options.segmentOptions || [];
+    const segmentHtml = segmentOptions.length
+      ? segmentOptions.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === space.segment_code || item.selected ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")
+      : `<option value="${escapeHtml(space.segment_code || "")}">${escapeHtml(space.segment_code || "未设置骨架")}</option>`;
+    return `<form id="detailEditSpaceForm" class="detail-edit-form" data-detail-edit-mode="editSpace">
+      <div class="space-code-preview"><span>空间编码预览</span><strong>${escapeHtml(options.spaceCodePreview || space.space_code || "")}</strong></div>
+      <div class="detail-form-grid">
+        ${detailInput("前门牌", "frontDoor", space.front_door || "", "text")}
+        ${detailInput("后门牌", "rearDoor", space.rear_door || "", "text")}
+        <label class="detail-field"><span>骨架</span><select name="segmentCode">${segmentHtml}</select></label>
+        <label class="detail-field"><span>所在侧</span><select name="side">
+          ${optionHtml("north", "北侧", space.side)}
+          ${optionHtml("south", "南侧", space.side)}
+          ${optionHtml("east", "东侧", space.side)}
+          ${optionHtml("west", "西侧", space.side)}
+        </select></label>
+        ${detailInput("偏移", "offsetM", space.offset_m ?? "", "number", "0.1")}
+        ${detailInput("长度", "lengthM", space.length_m ?? "", "number", "0.1")}
+        ${detailInput("宽度", "widthM", space.width_m ?? "", "number", "0.1")}
+        ${detailInput("面积", "areaM2", space.area_m2 ?? "", "number", "0.1")}
+        ${detailInput("网段", "networkSegment", space.network_segment || "", "text")}
+        <label class="detail-field"><span>物理状态</span><select name="currentStatus">
+          ${optionHtml("active", "可用", space.current_status)}
+          ${optionHtml("unavailable", "不可用", space.current_status)}
+        </select></label>
+      </div>
+      ${errors.form ? `<p class="detail-form-error">${escapeHtml(errors.form)}</p>` : ""}
+      <div class="details-actions">
+        <button type="submit" class="primary-button">保存</button>
+        <button type="button" data-detail-cancel>取消</button>
+      </div>
+    </form>`;
+  }
+
+  function detailInput(label, name, value, type, step = "") {
+    return `<label class="detail-field"><span>${escapeHtml(label)}</span><input name="${escapeHtml(name)}" type="${escapeHtml(type)}" value="${escapeHtml(value ?? "")}" ${step ? `step="${escapeHtml(step)}"` : ""} /></label>`;
+  }
+
+  function optionHtml(value, label, selectedValue) {
+    return `<option value="${escapeHtml(value)}" ${String(selectedValue || "active") === value ? "selected" : ""}>${escapeHtml(label)}</option>`;
   }
 
   function renderPlacementPanel(detailsEl, moveBasket, canEdit, placementDragActive, handlers) {
