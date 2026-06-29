@@ -1439,6 +1439,7 @@ test("admin details render inline edit actions and disabled split merge menu", (
   assert.match(detailsEl.innerHTML, /data-detail-action="renovate-room"/);
   assert.match(detailsEl.innerHTML, /data-detail-action="create-space"[^>]*>新增房间</);
   assert.match(detailsEl.innerHTML, /data-detail-action="edit-space"/);
+  assert.match(detailsEl.innerHTML, /data-detail-action="delete-space"[^>]*>删除房间</);
   assert.match(detailsEl.innerHTML, /data-detail-action="merge-space"[^>]*disabled/);
   assert.match(detailsEl.innerHTML, /data-detail-action="split-space"[^>]*disabled/);
   assert.match(detailsEl.innerHTML, /暂未开放/);
@@ -1446,6 +1447,13 @@ test("admin details render inline edit actions and disabled split merge menu", (
     detailsEl.innerHTML.indexOf("details-card details-card-compact") < detailsEl.innerHTML.indexOf("detail-admin-actions"),
     "detail actions should render below the details card"
   );
+  const scrollStart = detailsEl.innerHTML.indexOf('<div class="details-scroll">');
+  const scrollEnd = detailsEl.innerHTML.indexOf('<div class="detail-action-region">');
+  assert.ok(scrollStart >= 0 && scrollEnd > scrollStart, "expected detail action region after details scroll");
+  const scrollHtml = detailsEl.innerHTML.slice(scrollStart, scrollEnd);
+  assert.doesNotMatch(scrollHtml, /detail-admin-actions/);
+  assert.match(detailsEl.innerHTML, /class="detail-more-panel"/);
+  assert.doesNotMatch(detailsEl.innerHTML, /class="detail-more-menu"/);
 
   FloorplanRender.renderDetailsPanel({
     detailsEl,
@@ -1533,7 +1541,17 @@ test("admin details render lab and room edit forms inline", () => {
     canEdit: true,
     canAdmin: true,
     detailsEdit: { mode: "editLab", moreOpen: false, errors: {} },
-    detailEditOptions: { renovationMonth: "2026-05" },
+    detailEditOptions: {
+      renovationMonth: "2026-05",
+      collegeOptions: [
+        { value: "信息学院", label: "信息学院" },
+        { value: "计算机学院", label: "计算机学院" },
+      ],
+      majorOptionsByCollege: {
+        信息学院: ["软件工程", "网络工程"],
+        计算机学院: ["人工智能"],
+      },
+    },
     moveBasket: { items: [] },
   });
 
@@ -1542,6 +1560,11 @@ test("admin details render lab and room edit forms inline", () => {
   assert.match(detailsEl.innerHTML, /101/);
   assert.match(detailsEl.innerHTML, /00101010101/);
   assert.match(detailsEl.innerHTML, /name="labName"/);
+  assert.match(detailsEl.innerHTML, /<select name="college"/);
+  assert.match(detailsEl.innerHTML, /<select name="major"/);
+  assert.doesNotMatch(detailsEl.innerHTML, /<input name="major"/);
+  assert.match(detailsEl.innerHTML, /<option value="软件工程" selected>软件工程<\/option>/);
+  assert.doesNotMatch(detailsEl.innerHTML, /<option value="人工智能"/);
   assert.match(detailsEl.innerHTML, /name="renovationMonth"/);
   assert.match(detailsEl.innerHTML, /value="2026-05"/);
 
@@ -1613,6 +1636,42 @@ test("detail lab edit updates lab fields and assignment renovation month", () =>
   assert.equal(dataset.labs[0].college, "计算机学院");
   assert.equal(dataset.labs[0].seat_count, 42);
   assert.equal(dataset.plan_assignments[0].effective_from, "2026-06-01");
+});
+
+test("detail delete room removes the selected space for the active plan and invalidates assignments", () => {
+  const dataset = {
+    spaces: [
+      { id: "space-1", space_code: "00101010101", front_door: "101" },
+      { id: "space-2", space_code: "00101010102", front_door: "102" },
+    ],
+    labs: [{ id: "lab-1", lab_code: "UNIT000001", lab_name: "网络实验室" }],
+    plans: [
+      { id: "plan-1", plan_code: "PLAN001" },
+      { id: "plan-2", plan_code: "PLAN002" },
+    ],
+    plan_assignments: [
+      { id: "assign-1", plan_id: "plan-1", lab_id: "lab-1", space_id: "space-1", lab_code: "UNIT000001", space_code: "00101010101", assignment_status: "assigned" },
+      { id: "assign-2", plan_id: "plan-2", lab_id: "lab-1", space_id: "space-1", lab_code: "UNIT000001", space_code: "00101010101", assignment_status: "assigned" },
+    ],
+    deleted_space_ids: [],
+  };
+
+  const result = DetailActions.applyDetailDeleteSpace(dataset, {
+    activePlan: dataset.plans[0],
+    space: dataset.spaces[0],
+  }, {
+    copyScope: { copy_id: 8 },
+    normalizeAssignment: (row) => row,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(dataset.spaces.map((row) => row.id), ["space-2"]);
+  assert.deepEqual(dataset.deleted_space_ids.sort(), ["copy:8::00101010101", "copy:8::space-1"]);
+  assert.equal(dataset.plan_assignments[0].assignment_status, "Invalid");
+  assert.equal(dataset.plan_assignments[0].previous_space_code, "00101010101");
+  assert.equal(dataset.plan_assignments[0].space_code, "");
+  assert.equal(dataset.plan_assignments[1].assignment_status, "assigned");
+  assert.equal(dataset.labs.length, 1);
 });
 
 test("detail renovation invalidates old assignment and binds a new lab to the room", () => {

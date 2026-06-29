@@ -1269,29 +1269,34 @@ button:disabled {
   gap: 8px;
 }
 
-.detail-more-wrap {
-  position: relative;
+.detail-action-region {
+  display: grid;
+  gap: 8px;
+  flex: 0 0 auto;
+  border-top: 1px solid rgba(215, 222, 231, 0.85);
+  padding-top: 10px;
 }
 
-.detail-more-menu {
-  position: absolute;
-  z-index: 5;
-  top: calc(100% + 6px);
-  right: 0;
+.detail-more-wrap {
+  display: contents;
+}
+
+.detail-more-panel {
+  flex: 1 1 100%;
+  min-width: 0;
   display: grid;
-  min-width: 154px;
-  gap: 4px;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fff;
-  box-shadow: var(--shadow);
-  padding: 6px;
+  background: rgba(248, 250, 252, 0.96);
+  padding: 8px;
 }
 
-.detail-more-menu button {
+.detail-more-panel button {
   justify-content: space-between;
   min-height: 34px;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
   box-shadow: none;
@@ -1300,12 +1305,18 @@ button:disabled {
   text-align: left;
 }
 
-.detail-more-menu button:disabled {
+.detail-more-panel button:disabled {
   color: var(--muted);
   cursor: not-allowed;
 }
 
-.detail-more-menu span {
+.detail-more-panel button.is-danger {
+  border-color: rgba(185, 28, 28, 0.2);
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.detail-more-panel span {
   margin-left: 10px;
   color: var(--muted);
   font-size: 11px;

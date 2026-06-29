@@ -329,13 +329,13 @@
     if (!context.space) {
       detailsEl.innerHTML = `<div class="details-empty" data-move-basket-dropzone="true">
         ${inspectorTabsHtml("details", moveBasket.items?.length || 0)}
-        <div>
-          <h2>当前选中对象</h2>
-          <p>点击主图中的空间，在这里查看当前方案下的空间、实验室和分配信息。</p>
+        <div class="details-scroll">
+          <div>
+            <h2>当前选中对象</h2>
+            <p>点击主图中的空间，在这里查看当前方案下的空间、实验室和分配信息。</p>
+          </div>
         </div>
-        ${canEditDetails || (canEdit && canAdmin) ? `<div class="detail-admin-actions detail-empty-actions">
-          <button type="button" class="secondary-button compact-button" data-detail-action="create-space">新增房间</button>
-        </div>` : ""}
+        ${canEditDetails || (canEdit && canAdmin) ? `<div class="detail-action-region">${detailActionBarHtml(false, false, true, false)}</div>` : ""}
       </div>`;
       bindInspectorTabs(detailsEl, onSetInspectorMode);
       bindDetailActionButtons(detailsEl, onDetailAction);
@@ -425,27 +425,29 @@
             ${detailRows.join("")}
           </div>
         </section>
-        ${canDetailEdit ? detailActionBarHtml(Boolean(lab && assignment), detailsEdit?.moreOpen, true) : ""}
       </div>
+      ${canDetailEdit ? `<div class="detail-action-region">${detailActionBarHtml(Boolean(lab && assignment), detailsEdit?.moreOpen, true, true)}</div>` : ""}
 
     </div>`;
     bindInspectorTabs(detailsEl, onSetInspectorMode);
     bindDetailActionButtons(detailsEl, onDetailAction);
   }
 
-  function detailActionBarHtml(hasLab, moreOpen, includeCreate) {
+  function detailActionBarHtml(hasLab, moreOpen, includeCreate, includeMore = true) {
     return `<div class="detail-admin-actions">
       ${hasLab ? `<button type="button" class="secondary-button compact-button" data-detail-action="edit-lab">编辑实验室</button>` : ""}
       ${hasLab ? `<button type="button" class="secondary-button compact-button" data-detail-action="renovate-room">改建房间</button>` : ""}
       ${includeCreate ? `<button type="button" class="secondary-button compact-button" data-detail-action="create-space">新增房间</button>` : ""}
+      ${includeMore ? `
       <div class="detail-more-wrap">
         <button type="button" class="secondary-button compact-button" data-detail-action="toggle-more" aria-expanded="${moreOpen ? "true" : "false"}">更多</button>
-        ${moreOpen ? `<div class="detail-more-menu">
+        ${moreOpen ? `<div class="detail-more-panel">
           <button type="button" data-detail-action="edit-space">编辑房间</button>
           <button type="button" data-detail-action="merge-space" disabled>合并房间<span>暂未开放</span></button>
           <button type="button" data-detail-action="split-space" disabled>拆分房间<span>暂未开放</span></button>
+          <button type="button" class="is-danger" data-detail-action="delete-space">删除房间</button>
         </div>` : ""}
-      </div>
+      </div>` : ""}
     </div>`;
   }
 
@@ -466,11 +468,12 @@
       return;
     }
     const title = mode === "createSpace" ? "新增房间" : mode === "editSpace" ? "编辑房间" : mode === "renovateRoom" ? "改建房间" : "编辑实验室";
+    const draft = detailsEdit?.draft || {};
     const formHtml = mode === "createSpace"
-      ? spaceEditFormHtml(context, options, detailsEdit.errors || {}, true)
+      ? spaceEditFormHtml(context, options, detailsEdit.errors || {}, true, draft)
       : mode === "editSpace"
-      ? spaceEditFormHtml(context, options, detailsEdit.errors || {})
-      : labEditFormHtml(context, options, detailsEdit.errors || {}, mode === "renovateRoom");
+      ? spaceEditFormHtml(context, options, detailsEdit.errors || {}, false, draft)
+      : labEditFormHtml(context, options, detailsEdit.errors || {}, mode === "renovateRoom", draft);
     detailsEl.innerHTML = `<div class="details-panel is-editing" data-move-basket-dropzone="true">
       <div class="details-header">
         <div>
@@ -490,25 +493,33 @@
       event.preventDefault();
       handlers.onSubmitDetailEdit?.(mode, new FormData(form));
     });
+    const collegeSelect = detailsEl.querySelector('select[name="college"]');
+    const majorSelect = detailsEl.querySelector('select[name="major"]');
+    collegeSelect?.addEventListener("change", () => {
+      if (!majorSelect) return;
+      majorSelect.innerHTML = detailMajorOptionsHtml(options, collegeSelect.value, majorSelect.value);
+    });
     detailsEl.querySelector("[data-detail-cancel]")?.addEventListener("click", (event) => {
       event.preventDefault();
       handlers.onCancelDetailEdit?.();
     });
   }
 
-  function labEditFormHtml(context, options, errors, isRenovation) {
+  function labEditFormHtml(context, options, errors, isRenovation, draft = {}) {
     const lab = context.lab || {};
-    const month = options.renovationMonth || "";
-    const defaultName = isRenovation ? "待改建房间" : lab.lab_name || "";
+    const month = draft.renovationMonth ?? options.renovationMonth ?? "";
+    const defaultName = draft.labName ?? (isRenovation ? "待改建房间" : lab.lab_name || "");
+    const selectedCollege = draft.college ?? lab.college ?? "";
+    const selectedMajor = draft.major ?? (isRenovation ? "" : lab.major || "");
     return `<form id="${isRenovation ? "detailRenovateRoomForm" : "detailEditLabForm"}" class="detail-edit-form" data-detail-edit-mode="${isRenovation ? "renovateRoom" : "editLab"}">
       ${roomContextHtml(context)}
       <div class="detail-form-grid">
         ${detailInput("实验室名称", "labName", defaultName, "text")}
-        ${detailInput("所属学院", "college", isRenovation ? lab.college || "" : lab.college || "", "text")}
-        ${detailInput("专业", "major", isRenovation ? "" : lab.major || "", "text")}
-        ${detailInput("负责人", "director", isRenovation ? "" : lab.director || "", "text")}
-        ${detailInput("座位数", "seatCount", isRenovation ? "" : lab.seat_count ?? "", "number", "1")}
-        ${detailInput("电脑数", "computerCount", isRenovation ? "" : lab.computer_count ?? "", "number", "1")}
+        ${detailSelect("所属学院", "college", detailCollegeOptionsHtml(options, selectedCollege))}
+        ${detailSelect("专业", "major", detailMajorOptionsHtml(options, selectedCollege, selectedMajor))}
+        ${detailInput("负责人", "director", draft.director ?? (isRenovation ? "" : lab.director || ""), "text")}
+        ${detailInput("座位数", "seatCount", draft.seatCount ?? (isRenovation ? "" : lab.seat_count ?? ""), "number", "1")}
+        ${detailInput("电脑数", "computerCount", draft.computerCount ?? (isRenovation ? "" : lab.computer_count ?? ""), "number", "1")}
         ${detailInput("改建年月", "renovationMonth", month, "month")}
       </div>
       ${errors.form ? `<p class="detail-form-error">${escapeHtml(errors.form)}</p>` : ""}
@@ -519,33 +530,35 @@
     </form>`;
   }
 
-  function spaceEditFormHtml(context, options, errors, isCreate = false) {
+  function spaceEditFormHtml(context, options, errors, isCreate = false, draft = {}) {
     const space = isCreate ? (options.createSpaceDraft || {}) : (context.space || {});
+    const valueFor = (key, fallback) => draft[key] ?? fallback;
     const segmentOptions = options.segmentOptions || [];
+    const selectedSegment = valueFor("segmentCode", space.segment_code || "");
     const segmentHtml = segmentOptions.length
-      ? segmentOptions.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === space.segment_code || item.selected ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")
-      : `<option value="${escapeHtml(space.segment_code || "")}">${escapeHtml(space.segment_code || "未设置骨架")}</option>`;
+      ? segmentOptions.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === selectedSegment || (!selectedSegment && item.selected) ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")
+      : `<option value="${escapeHtml(selectedSegment)}">${escapeHtml(selectedSegment || "未设置骨架")}</option>`;
     return `<form id="${isCreate ? "detailCreateSpaceForm" : "detailEditSpaceForm"}" class="detail-edit-form" data-detail-edit-mode="${isCreate ? "createSpace" : "editSpace"}">
       ${isCreate ? "" : roomContextHtml(context)}
       <div class="space-code-preview"><span>空间编码预览</span><strong>${escapeHtml(options.spaceCodePreview || space.space_code || "")}</strong></div>
       <div class="detail-form-grid">
-        ${detailInput("前门牌", "frontDoor", space.front_door || "", "text")}
-        ${detailInput("后门牌", "rearDoor", space.rear_door || "", "text")}
+        ${detailInput("前门牌", "frontDoor", valueFor("frontDoor", space.front_door || ""), "text")}
+        ${detailInput("后门牌", "rearDoor", valueFor("rearDoor", space.rear_door || ""), "text")}
         <label class="detail-field"><span>骨架</span><select name="segmentCode">${segmentHtml}</select></label>
         <label class="detail-field"><span>所在侧</span><select name="side">
-          ${optionHtml("north", "北侧", space.side)}
-          ${optionHtml("south", "南侧", space.side)}
-          ${optionHtml("east", "东侧", space.side)}
-          ${optionHtml("west", "西侧", space.side)}
+          ${optionHtml("north", "北侧", valueFor("side", space.side))}
+          ${optionHtml("south", "南侧", valueFor("side", space.side))}
+          ${optionHtml("east", "东侧", valueFor("side", space.side))}
+          ${optionHtml("west", "西侧", valueFor("side", space.side))}
         </select></label>
-        ${detailInput("偏移", "offsetM", space.offset_m ?? "", "number", "0.1")}
-        ${detailInput("长度", "lengthM", space.length_m ?? "", "number", "0.1")}
-        ${detailInput("宽度", "widthM", space.width_m ?? "", "number", "0.1")}
-        ${detailInput("面积", "areaM2", space.area_m2 ?? "", "number", "0.1")}
-        ${detailInput("网段", "networkSegment", space.network_segment || "", "text")}
+        ${detailInput("偏移", "offsetM", valueFor("offsetM", space.offset_m ?? ""), "number", "0.1")}
+        ${detailInput("长度", "lengthM", valueFor("lengthM", space.length_m ?? ""), "number", "0.1")}
+        ${detailInput("宽度", "widthM", valueFor("widthM", space.width_m ?? ""), "number", "0.1")}
+        ${detailInput("面积", "areaM2", valueFor("areaM2", space.area_m2 ?? ""), "number", "0.1")}
+        ${detailInput("网段", "networkSegment", valueFor("networkSegment", space.network_segment || ""), "text")}
         <label class="detail-field"><span>物理状态</span><select name="currentStatus">
-          ${optionHtml("active", "可用", space.current_status)}
-          ${optionHtml("unavailable", "不可用", space.current_status)}
+          ${optionHtml("active", "可用", valueFor("currentStatus", space.current_status))}
+          ${optionHtml("unavailable", "不可用", valueFor("currentStatus", space.current_status))}
         </select></label>
       </div>
       ${errors.form ? `<p class="detail-form-error">${escapeHtml(errors.form)}</p>` : ""}
@@ -568,6 +581,29 @@
 
   function detailInput(label, name, value, type, step = "") {
     return `<label class="detail-field"><span>${escapeHtml(label)}</span><input name="${escapeHtml(name)}" type="${escapeHtml(type)}" value="${escapeHtml(value ?? "")}" ${step ? `step="${escapeHtml(step)}"` : ""} /></label>`;
+  }
+
+  function detailSelect(label, name, optionsHtml) {
+    return `<label class="detail-field"><span>${escapeHtml(label)}</span><select name="${escapeHtml(name)}">${optionsHtml}</select></label>`;
+  }
+
+  function detailCollegeOptionsHtml(options, selectedCollege) {
+    const rows = options.collegeOptions || [];
+    const values = rows.map((row) => row.value).filter(Boolean);
+    if (selectedCollege && !values.includes(selectedCollege)) values.unshift(selectedCollege);
+    const optionRows = [`<option value="" ${selectedCollege ? "" : "selected"}>请选择学院</option>`];
+    return optionRows.concat(values.map((value) => {
+      const label = rows.find((row) => row.value === value)?.label || value;
+      return `<option value="${escapeHtml(value)}" ${value === selectedCollege ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    })).join("");
+  }
+
+  function detailMajorOptionsHtml(options, selectedCollege, selectedMajor) {
+    const byCollege = options.majorOptionsByCollege || {};
+    const values = (byCollege[selectedCollege] || []).slice();
+    if (selectedMajor && !values.includes(selectedMajor)) values.unshift(selectedMajor);
+    const optionRows = [`<option value="" ${selectedMajor ? "" : "selected"}>${selectedCollege ? "未选择专业" : "请先选择学院"}</option>`];
+    return optionRows.concat(values.map((value) => `<option value="${escapeHtml(value)}" ${value === selectedMajor ? "selected" : ""}>${escapeHtml(value)}</option>`)).join("");
   }
 
   function optionHtml(value, label, selectedValue) {

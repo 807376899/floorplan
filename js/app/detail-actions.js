@@ -224,6 +224,37 @@
     return { ok: true, space: normalized };
   }
 
+  function applyDetailDeleteSpace(dataset, context, deps = {}) {
+    const activePlan = context.activePlan;
+    const space = context.space;
+    if (!activePlan || !space) return { ok: false, message: "请先选择要删除的房间。" };
+    const spaceRefs = [space.id, space.space_code].filter(Boolean).map((value) => String(value));
+    if (!spaceRefs.length) return { ok: false, message: "当前房间缺少可删除的稳定标识。" };
+    const copyId = deps.copyScope?.copy_id || deps.copyId || null;
+    const deletedRefs = copyId ? spaceRefs.map((ref) => `copy:${copyId}::${ref}`) : spaceRefs;
+    dataset.deleted_space_ids = [...new Set([...(dataset.deleted_space_ids || []), ...deletedRefs])];
+    dataset.spaces = (dataset.spaces || []).filter((row) =>
+      !spaceRefs.includes(String(row.id || "")) &&
+      !spaceRefs.includes(String(row.space_code || ""))
+    );
+    dataset.plan_assignments = (dataset.plan_assignments || []).map((row) => {
+      if (
+        row.plan_id !== activePlan.id &&
+        row.plan_code !== activePlan.plan_code
+      ) return row;
+      if (!spaceRefs.includes(String(row.space_id || "")) && !spaceRefs.includes(String(row.space_code || ""))) return row;
+      const invalidated = {
+        ...row,
+        previous_space_code: row.space_code || row.previous_space_code,
+        space_code: "",
+        space_id: "",
+        assignment_status: "Invalid",
+      };
+      return deps.normalizeAssignment ? deps.normalizeAssignment(invalidated) : invalidated;
+    });
+    return { ok: true, space };
+  }
+
   const api = {
     monthToEffectiveDate,
     effectiveDateToMonth,
@@ -232,6 +263,7 @@
     applyDetailRenovation,
     applyDetailSpaceEdit,
     applyDetailCreateSpace,
+    applyDetailDeleteSpace,
   };
 
   global.FloorplanApp = global.FloorplanApp || {};

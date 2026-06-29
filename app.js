@@ -1794,6 +1794,14 @@ function buildDetailEditOptions(context) {
     segmentOptions.unshift({ value: currentSegment, label: currentSegment, selected: true });
   }
   const renovationMonth = DetailActions.effectiveDateToMonth(context.assignment?.effective_from, isoNow());
+  const collegeOptions = activeCollegeOptions().map((row) => ({
+    value: row.college_name,
+    label: row.college_name,
+  }));
+  const majorOptionsByCollege = {};
+  for (const college of collegeOptions) {
+    majorOptionsByCollege[college.value] = activeMajorOptions(college.value).map((row) => row.major_name);
+  }
   const createSpaceDraft = {
     building_code: context.buildingCode,
     floor_code: context.floorCode,
@@ -1811,6 +1819,8 @@ function buildDetailEditOptions(context) {
   return {
     segmentOptions,
     renovationMonth,
+    collegeOptions,
+    majorOptionsByCollege,
     createSpaceDraft,
     spaceCodePreview: context.space ? generateSpaceCode(context.space, context.building) || context.space.space_code : "",
   };
@@ -1854,6 +1864,10 @@ function handleDetailAction(action) {
     renderApp();
     return;
   }
+  if (action === "delete-space") {
+    void deleteDetailSpaceAction();
+    return;
+  }
   if (action === "renovate-room") {
     if (!context.lab || !context.assignment) {
       updateStatus("请选择已有已分配实验室的房间后再改建。");
@@ -1865,6 +1879,43 @@ function handleDetailAction(action) {
   }
   if (action === "merge-space") updateStatus("合并房间将在后续迭代开放。");
   if (action === "split-space") updateStatus("拆分房间将在后续迭代开放。");
+}
+
+async function deleteDetailSpaceAction() {
+  const context = getSelectedContext();
+  if (!canDeleteSpaceInActivePlan()) {
+    updateStatus("只能删除当前账号可管理方案中的房间。");
+    return;
+  }
+  if (!context.activePlan || !context.space) {
+    updateStatus("请先选择要删除的房间。");
+    return;
+  }
+  const label = context.space.front_door || context.space.space_code;
+  if (!window.confirm(`确认从当前方案删除房间“${label}”？相关落位会标记为失效，实验室资料会保留。`)) return;
+  const previousData = cloneDataset(state.data);
+  const previousRevision = state.serverRevision;
+  const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
+  const result = DetailActions.applyDetailDeleteSpace(state.data, context, {
+    copyScope: copyScopeForActivePlan(),
+    normalizeAssignment: (row) => normalizeAssignment(row, relationMaps(state.data)),
+  });
+  if (!result.ok) {
+    updateStatus(result.message || "删除房间失败。");
+    return;
+  }
+  state.data = normalizeDataset(state.data);
+  const saveOk = await saveWithRollback(previousData, previousRevision, "删除房间", "删除房间失败");
+  if (!saveOk) {
+    state.planCopies = previousCopies;
+    return;
+  }
+  state.selectedSpaceId = null;
+  state.businessEditor.selectedSpaceId = "";
+  state.businessEditor.newSpaceId = "";
+  resetDetailEditorState();
+  syncSelectedSpace();
+  refreshStateAndRender(`${label} 已从当前方案删除。`, { stamp: false, forceMoveReset: true });
 }
 
 function cancelDetailEdit() {
@@ -1885,6 +1936,7 @@ async function submitDetailEditAction(mode, formData) {
   const previousData = cloneDataset(state.data);
   const previousRevision = state.serverRevision;
   const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
+  const draft = DetailActions.formDataToDraft(formData);
   const deps = {
     normalizeLab,
     normalizeSpace,
@@ -1904,7 +1956,7 @@ async function submitDetailEditAction(mode, formData) {
         ? DetailActions.applyDetailCreateSpace(state.data, context, formData, deps)
         : DetailActions.applyDetailSpaceEdit(state.data, context, formData, deps);
   if (!result.ok) {
-    state.detailEditor = { ...state.detailEditor, errors: { form: result.message || "保存失败，请检查表单。" } };
+    state.detailEditor = { ...state.detailEditor, draft, errors: { form: result.message || "保存失败，请检查表单。" } };
     renderApp();
     updateStatus(result.message || "保存失败，请检查表单。");
     return;
@@ -1915,15 +1967,20 @@ async function submitDetailEditAction(mode, formData) {
     state.businessEditor.selectedSpaceId = result.space.id;
     if (mode === "createSpace") state.businessEditor.newSpaceId = result.space.id;
   }
-  resetDetailEditorState();
-  renderEditor();
-  renderApp();
   const changeNote = mode === "editLab" ? "编辑实验室详情" : mode === "renovateRoom" ? "改建房间" : mode === "createSpace" ? "新增房间" : "编辑房间详情";
-  const saveOk = await saveWithRollback(previousData, previousRevision, changeNote, `${changeNote}失败`);
-  if (!saveOk) {
+  try {
+    await saveDatasetToServer(changeNote);
+  } catch (error) {
+    state.data = normalizeDataset(previousData);
+    state.serverRevision = previousRevision;
     state.planCopies = previousCopies;
+    state.detailEditor = { ...state.detailEditor, draft, errors: { form: `${changeNote}失败：${error.message}` } };
+    renderEditor();
+    renderApp();
+    updateStatus(`${changeNote}失败：${error.message}`);
     return;
   }
+  resetDetailEditorState();
   refreshStateAndRender(`${changeNote}已保存。`, { stamp: false, forceMoveReset: true });
 }
 
