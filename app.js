@@ -1562,6 +1562,7 @@ function renderApp() {
     moveTargetOptions: moveTargetSpaceOptions(context),
     canEdit: canEditActivePlan(),
     canAdmin: state.permissions.canAdmin,
+    canEditDetails: canEditDetailPanel(),
     detailsEdit: state.detailEditor,
     detailEditOptions: buildDetailEditOptions(context),
     inspectorMode: state.inspectorMode,
@@ -1678,7 +1679,7 @@ function getSelectedContext() {
   ) || null;
   const assignment = activePlan && space ? state.data.plan_assignments.find((row) => row.plan_id === activePlan.id && row.space_id === space.id && row.assignment_status === "assigned") || null : null;
   const lab = assignment ? activeData.labs.find((row) => row.id === assignment.lab_id) || null : null;
-  return { building, activePlan, space, assignment, lab };
+  return { building, activePlan, space, assignment, lab, buildingCode: els.buildingSelect.value, floorCode: els.floorSelect.value };
 }
 
 function moveTargetKey(context) {
@@ -1778,8 +1779,8 @@ function buildDetailEditOptions(context) {
   const copySegments = floorSegmentsForActivePlan()
     .filter((segment) => isAssignableSegment(segment))
     .filter((segment) =>
-      !context.space ||
-      (segment.building_code === context.space.building_code && segment.floor_code === context.space.floor_code)
+      segment.building_code === (context.space?.building_code || context.buildingCode) &&
+      segment.floor_code === (context.space?.floor_code || context.floorCode)
     )
     .slice()
     .sort((a, b) => compare(a.segment_code, b.segment_code));
@@ -1793,19 +1794,43 @@ function buildDetailEditOptions(context) {
     segmentOptions.unshift({ value: currentSegment, label: currentSegment, selected: true });
   }
   const renovationMonth = DetailActions.effectiveDateToMonth(context.assignment?.effective_from, isoNow());
+  const createSpaceDraft = {
+    building_code: context.buildingCode,
+    floor_code: context.floorCode,
+    segment_code: segmentOptions[0]?.value || "",
+    front_door: "",
+    rear_door: "",
+    side: "south",
+    offset_m: 0,
+    length_m: 8,
+    width_m: 6,
+    area_m2: 48,
+    network_segment: "",
+    current_status: "active",
+  };
   return {
     segmentOptions,
     renovationMonth,
+    createSpaceDraft,
     spaceCodePreview: context.space ? generateSpaceCode(context.space, context.building) || context.space.space_code : "",
   };
 }
 
+function canEditDetailPanel() {
+  return Boolean(canEditActivePlan() && canEditBusinessBaseData() && (state.permissions.canAdmin || state.permissions.role === "editor"));
+}
+
 function handleDetailAction(action) {
-  if (!state.permissions.canAdmin || !canEditActivePlan()) {
+  if (!canEditDetailPanel()) {
     updateStatus("当前账号没有编辑此方案的权限。");
     return;
   }
   const context = getSelectedContext();
+  if (action === "create-space") {
+    state.detailEditor = { mode: "createSpace", moreOpen: false, errors: {} };
+    renderApp();
+    return;
+  }
   if (!context.space) {
     updateStatus("请先选择要编辑的房间。");
     return;
@@ -1848,12 +1873,12 @@ function cancelDetailEdit() {
 }
 
 async function submitDetailEditAction(mode, formData) {
-  if (!state.permissions.canAdmin || !canEditActivePlan()) {
+  if (!canEditDetailPanel()) {
     updateStatus("当前账号没有编辑此方案的权限。");
     return;
   }
   const context = getSelectedContext();
-  if (!context.space) {
+  if (mode !== "createSpace" && !context.space) {
     updateStatus("请先选择要编辑的房间。");
     return;
   }
@@ -1866,14 +1891,18 @@ async function submitDetailEditAction(mode, formData) {
     normalizeAssignment: (row) => normalizeAssignment(row, relationMaps(state.data)),
     generateSpaceCode,
     generateUnitCode,
+    isAssignableSegment,
     isoNow,
     copyScope: copyScopeForActivePlan(),
+    clearDeletedSpaceRefs,
   };
   const result = mode === "editLab"
     ? DetailActions.applyDetailLabEdit(state.data, context, formData, deps)
     : mode === "renovateRoom"
       ? DetailActions.applyDetailRenovation(state.data, context, formData, deps)
-      : DetailActions.applyDetailSpaceEdit(state.data, context, formData, deps);
+      : mode === "createSpace"
+        ? DetailActions.applyDetailCreateSpace(state.data, context, formData, deps)
+        : DetailActions.applyDetailSpaceEdit(state.data, context, formData, deps);
   if (!result.ok) {
     state.detailEditor = { ...state.detailEditor, errors: { form: result.message || "保存失败，请检查表单。" } };
     renderApp();
@@ -1881,14 +1910,15 @@ async function submitDetailEditAction(mode, formData) {
     return;
   }
   state.data = normalizeDataset(state.data);
-  if (mode === "editSpace" && result.space?.id) {
+  if ((mode === "editSpace" || mode === "createSpace") && result.space?.id) {
     state.selectedSpaceId = result.space.id;
     state.businessEditor.selectedSpaceId = result.space.id;
+    if (mode === "createSpace") state.businessEditor.newSpaceId = result.space.id;
   }
   resetDetailEditorState();
   renderEditor();
   renderApp();
-  const changeNote = mode === "editLab" ? "编辑实验室详情" : mode === "renovateRoom" ? "改建房间" : "编辑房间详情";
+  const changeNote = mode === "editLab" ? "编辑实验室详情" : mode === "renovateRoom" ? "改建房间" : mode === "createSpace" ? "新增房间" : "编辑房间详情";
   const saveOk = await saveWithRollback(previousData, previousRevision, changeNote, `${changeNote}失败`);
   if (!saveOk) {
     state.planCopies = previousCopies;
@@ -2632,6 +2662,10 @@ function assignedAssignmentForSpace(...args) {
 
 function deriveBusinessSpaceStatus(...args) {
   return BusinessEditorController.deriveBusinessSpaceStatus(...args);
+}
+
+function clearDeletedSpaceRefs(...args) {
+  return BusinessEditorController.clearDeletedSpaceRefs(...args);
 }
 
 function canEditBusinessBaseData(...args) {

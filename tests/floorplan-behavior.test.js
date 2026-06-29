@@ -1437,10 +1437,15 @@ test("admin details render inline edit actions and disabled split merge menu", (
 
   assert.match(detailsEl.innerHTML, /data-detail-action="edit-lab"/);
   assert.match(detailsEl.innerHTML, /data-detail-action="renovate-room"/);
+  assert.match(detailsEl.innerHTML, /data-detail-action="create-space"[^>]*>新增房间</);
   assert.match(detailsEl.innerHTML, /data-detail-action="edit-space"/);
   assert.match(detailsEl.innerHTML, /data-detail-action="merge-space"[^>]*disabled/);
   assert.match(detailsEl.innerHTML, /data-detail-action="split-space"[^>]*disabled/);
   assert.match(detailsEl.innerHTML, /暂未开放/);
+  assert.ok(
+    detailsEl.innerHTML.indexOf("details-card details-card-compact") < detailsEl.innerHTML.indexOf("detail-admin-actions"),
+    "detail actions should render below the details card"
+  );
 
   FloorplanRender.renderDetailsPanel({
     detailsEl,
@@ -1448,12 +1453,67 @@ test("admin details render inline edit actions and disabled split merge menu", (
     mode: "view",
     canEdit: true,
     canAdmin: false,
+    canEditDetails: false,
     detailsEdit: { mode: "view", moreOpen: true, errors: {} },
     moveBasket: { items: [] },
   });
 
   assert.doesNotMatch(detailsEl.innerHTML, /data-detail-action="edit-lab"/);
   assert.doesNotMatch(detailsEl.innerHTML, /data-detail-action="edit-space"/);
+});
+
+test("editor-owned editable plan renders detail actions without admin role", () => {
+  const { FloorplanRender } = loadBrowserModules();
+  const detailsEl = new StubElement();
+  const context = {
+    building: { building_code: "B0101", building_name: "测试楼" },
+    activePlan: { id: "copy-1", plan_code: "copy-1", plan_name: "我的方案" },
+    space: { id: "space-1", building_code: "B0101", floor_code: "1", space_code: "00101010101", front_door: "101", rear_door: "", length_m: 8, width_m: 6, area_m2: 48, network_segment: "", current_status: "active" },
+    lab: { id: "lab-1", lab_code: "UNIT000001", lab_name: "网络实验室", college: "信息学院", seat_count: 40, computer_count: 40 },
+    assignment: { id: "assign-1", plan_id: "copy-1", lab_id: "lab-1", space_id: "space-1", assignment_status: "assigned" },
+  };
+
+  FloorplanRender.renderDetailsPanel({
+    detailsEl,
+    context,
+    mode: "view",
+    canEdit: true,
+    canAdmin: false,
+    canEditDetails: true,
+    detailsEdit: { mode: "view", moreOpen: false, errors: {} },
+    moveBasket: { items: [] },
+  });
+
+  assert.match(detailsEl.innerHTML, /data-detail-action="edit-lab"/);
+  assert.match(detailsEl.innerHTML, /data-detail-action="renovate-room"/);
+  assert.match(detailsEl.innerHTML, /data-detail-action="create-space"[^>]*>新增房间</);
+});
+
+test("empty details panel only exposes create room when editable", () => {
+  const { FloorplanRender } = loadBrowserModules();
+  const detailsEl = new StubElement();
+  const context = {
+    building: { building_code: "B0101", building_name: "测试楼" },
+    activePlan: { id: "copy-1", plan_code: "copy-1", plan_name: "我的方案" },
+    space: null,
+    lab: null,
+    assignment: null,
+  };
+
+  FloorplanRender.renderDetailsPanel({
+    detailsEl,
+    context,
+    mode: "view",
+    canEdit: true,
+    canEditDetails: true,
+    detailsEdit: { mode: "view", moreOpen: false, errors: {} },
+    moveBasket: { items: [] },
+  });
+
+  assert.match(detailsEl.innerHTML, /data-detail-action="create-space"[^>]*>新增房间</);
+  assert.doesNotMatch(detailsEl.innerHTML, /data-detail-action="edit-lab"/);
+  assert.doesNotMatch(detailsEl.innerHTML, /data-detail-action="renovate-room"/);
+  assert.doesNotMatch(detailsEl.innerHTML, /data-detail-action="toggle-more"/);
 });
 
 test("admin details render lab and room edit forms inline", () => {
@@ -1478,6 +1538,9 @@ test("admin details render lab and room edit forms inline", () => {
   });
 
   assert.match(detailsEl.innerHTML, /id="detailEditLabForm"/);
+  assert.match(detailsEl.innerHTML, /当前房间/);
+  assert.match(detailsEl.innerHTML, /101/);
+  assert.match(detailsEl.innerHTML, /00101010101/);
   assert.match(detailsEl.innerHTML, /name="labName"/);
   assert.match(detailsEl.innerHTML, /name="renovationMonth"/);
   assert.match(detailsEl.innerHTML, /value="2026-05"/);
@@ -1500,6 +1563,25 @@ test("admin details render lab and room edit forms inline", () => {
   assert.match(detailsEl.innerHTML, /name="frontDoor"/);
   assert.match(detailsEl.innerHTML, /name="areaM2"/);
   assert.match(detailsEl.innerHTML, /空间编码预览/);
+
+  FloorplanRender.renderDetailsPanel({
+    detailsEl,
+    context: { ...context, space: null, lab: null, assignment: null },
+    mode: "view",
+    canEdit: true,
+    canEditDetails: true,
+    detailsEdit: { mode: "createSpace", moreOpen: false, errors: {} },
+    detailEditOptions: {
+      createSpaceDraft: { building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "", rear_door: "", side: "south", offset_m: 0, length_m: 8, width_m: 6, area_m2: 48, network_segment: "", current_status: "active" },
+      segmentOptions: [{ value: "EW01010101", label: "一层东走廊", selected: true }],
+      spaceCodePreview: "填写门牌后生成",
+    },
+    moveBasket: { items: [] },
+  });
+
+  assert.match(detailsEl.innerHTML, /id="detailCreateSpaceForm"/);
+  assert.match(detailsEl.innerHTML, /新增房间/);
+  assert.match(detailsEl.innerHTML, /name="frontDoor"/);
 });
 
 test("detail lab edit updates lab fields and assignment renovation month", () => {
@@ -1632,6 +1714,82 @@ test("detail space edit rejects clearing existing dimensions", () => {
 
   assert.equal(result.ok, false);
   assert.match(result.message, /长宽/);
+});
+
+test("detail create room creates an unplanned room with generated code and copy scope", () => {
+  const dataset = {
+    buildings: [{ building_code: "B0101", campus_zone: "下沙校区", building_number: 1 }],
+    floor_segments: [{ id: "seg-1", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", element_type: "corridor" }],
+    spaces: [],
+    plan_assignments: [],
+  };
+
+  const result = DetailActions.applyDetailCreateSpace(dataset, {
+    building: dataset.buildings[0],
+    buildingCode: "B0101",
+    floorCode: "1",
+  }, {
+    frontDoor: "105",
+    rearDoor: "",
+    segmentCode: "EW01010101",
+    side: "north",
+    offsetM: "4.5",
+    lengthM: "9",
+    widthM: "7",
+    areaM2: "50",
+    networkSegment: "10.2.0.0/24",
+    currentStatus: "active",
+  }, {
+    copyScope: { copy_id: 7 },
+    generateSpaceCode: () => "00101010505",
+    normalizeSpace: (row) => ({ id: row.id || row.space_code, ...row }),
+    isoNow: () => "2026-06-30T08:00:00Z",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(dataset.spaces.length, 1);
+  assert.equal(dataset.spaces[0].copy_id, 7);
+  assert.equal(dataset.spaces[0].space_code, "00101010505");
+  assert.equal(dataset.spaces[0].building_code, "B0101");
+  assert.equal(dataset.spaces[0].floor_code, "1");
+  assert.equal(dataset.spaces[0].area_m2, 63);
+  assert.equal(dataset.plan_assignments.length, 0);
+});
+
+test("detail create room rejects missing assignable segment and invalid generated code", () => {
+  const dataset = { buildings: [], floor_segments: [], spaces: [], plan_assignments: [] };
+
+  const noSegment = DetailActions.applyDetailCreateSpace(dataset, {
+    buildingCode: "B0101",
+    floorCode: "1",
+  }, {
+    frontDoor: "105",
+    segmentCode: "",
+  }, {
+    generateSpaceCode: () => "00101010505",
+    normalizeSpace: (row) => row,
+  });
+
+  assert.equal(noSegment.ok, false);
+  assert.match(noSegment.message, /骨架/);
+
+  const noCode = DetailActions.applyDetailCreateSpace({
+    buildings: [],
+    floor_segments: [{ building_code: "B0101", floor_code: "1", segment_code: "EW01010101", element_type: "corridor" }],
+    spaces: [],
+  }, {
+    buildingCode: "B0101",
+    floorCode: "1",
+  }, {
+    frontDoor: "",
+    segmentCode: "EW01010101",
+  }, {
+    generateSpaceCode: () => "",
+    normalizeSpace: (row) => row,
+  });
+
+  assert.equal(noCode.ok, false);
+  assert.match(noCode.message, /门牌/);
 });
 
 test("thumbnail list keeps existing DOM and scroll when render input is unchanged", () => {

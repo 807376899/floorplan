@@ -1321,6 +1321,31 @@ button:disabled {
   gap: 12px;
 }
 
+.detail-room-context {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.detail-room-context span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.detail-room-context strong {
+  color: var(--ink-soft);
+  font-size: 15px;
+}
+
+.detail-room-context small {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .detail-form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

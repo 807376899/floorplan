@@ -177,6 +177,53 @@
     return { ok: true, space: dataset.spaces[spaceIndex], oldCode, nextCode };
   }
 
+  function applyDetailCreateSpace(dataset, context, rawDraft, deps = {}) {
+    const draft = formDataToDraft(rawDraft);
+    const buildingCode = stringValue(context.buildingCode || context.building?.building_code);
+    const floorCode = stringValue(context.floorCode);
+    const segmentCode = stringValue(draft.segmentCode);
+    if (!buildingCode || !floorCode) return { ok: false, message: "请先选择教学楼和楼层。" };
+    if (!segmentCode) return { ok: false, message: "新增房间必须选择可绑定的走廊骨架。" };
+    const segment = (dataset.floor_segments || []).find((row) =>
+      row.building_code === buildingCode &&
+      row.floor_code === floorCode &&
+      row.segment_code === segmentCode
+    );
+    const assignable = deps.isAssignableSegment ? deps.isAssignableSegment(segment) : Boolean(segment && !["stairs", "elevator", "other"].includes(String(segment.element_type || "corridor")));
+    if (!assignable) return { ok: false, message: "新增房间必须绑定到走廊骨架。" };
+    const lengthM = numberOrBlank(draft.lengthM);
+    const widthM = numberOrBlank(draft.widthM);
+    if (stringValue(draft.lengthM) && lengthM === "") return { ok: false, message: "房间长度必须是数字。" };
+    if (stringValue(draft.widthM) && widthM === "") return { ok: false, message: "房间宽度必须是数字。" };
+    const manualArea = numberOrBlank(draft.areaM2);
+    const areaM2 = lengthM !== "" && widthM !== "" ? Number((lengthM * widthM).toFixed(2)) : manualArea;
+    const nextSpace = {
+      ...(deps.copyScope || {}),
+      building_code: buildingCode,
+      floor_code: floorCode,
+      segment_code: segmentCode,
+      front_door: stringValue(draft.frontDoor),
+      rear_door: stringValue(draft.rearDoor),
+      side: stringValue(draft.side) || "south",
+      offset_m: numberOrBlank(draft.offsetM) || 0,
+      length_m: lengthM === "" ? 8 : lengthM,
+      width_m: widthM === "" ? 6 : widthM,
+      area_m2: areaM2 === "" ? 48 : areaM2,
+      network_segment: stringValue(draft.networkSegment),
+      current_status: stringValue(draft.currentStatus) || "active",
+      created_at: deps.isoNow?.() || "",
+    };
+    const nextCode = deps.generateSpaceCode ? deps.generateSpaceCode(nextSpace, context.building) : "";
+    if (!nextCode) return { ok: false, message: "前门牌不能为空，无法生成空间编码。" };
+    const duplicate = (dataset.spaces || []).find((row) => row.space_code === nextCode);
+    if (duplicate) return { ok: false, message: `空间编码 ${nextCode} 已存在，请检查门牌。` };
+    nextSpace.space_code = nextCode;
+    const normalized = deps.normalizeSpace ? deps.normalizeSpace(nextSpace) : nextSpace;
+    dataset.spaces = [...(dataset.spaces || []), normalized];
+    deps.clearDeletedSpaceRefs?.(dataset, normalized, [], deps.copyScope?.copy_id || null);
+    return { ok: true, space: normalized };
+  }
+
   const api = {
     monthToEffectiveDate,
     effectiveDateToMonth,
@@ -184,6 +231,7 @@
     applyDetailLabEdit,
     applyDetailRenovation,
     applyDetailSpaceEdit,
+    applyDetailCreateSpace,
   };
 
   global.FloorplanApp = global.FloorplanApp || {};

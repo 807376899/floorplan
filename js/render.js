@@ -281,6 +281,7 @@
       moveTargetOptions = [],
       canEdit,
       canAdmin = false,
+      canEditDetails = false,
       detailsEdit = { mode: "view", moreOpen: false, errors: {} },
       detailEditOptions = {},
       onFocusRow,
@@ -316,6 +317,15 @@
       return;
     }
 
+    if (detailsEdit?.mode === "createSpace") {
+      renderDetailEditPanel(detailsEl, context, Boolean(canEditDetails || (canEdit && canAdmin)), detailsEdit, detailEditOptions, moveBasket, {
+        onSubmitDetailEdit,
+        onCancelDetailEdit,
+        onSetInspectorMode,
+      });
+      return;
+    }
+
     if (!context.space) {
       detailsEl.innerHTML = `<div class="details-empty" data-move-basket-dropzone="true">
         ${inspectorTabsHtml("details", moveBasket.items?.length || 0)}
@@ -323,8 +333,12 @@
           <h2>当前选中对象</h2>
           <p>点击主图中的空间，在这里查看当前方案下的空间、实验室和分配信息。</p>
         </div>
+        ${canEditDetails || (canEdit && canAdmin) ? `<div class="detail-admin-actions detail-empty-actions">
+          <button type="button" class="secondary-button compact-button" data-detail-action="create-space">新增房间</button>
+        </div>` : ""}
       </div>`;
       bindInspectorTabs(detailsEl, onSetInspectorMode);
+      bindDetailActionButtons(detailsEl, onDetailAction);
       return;
     }
 
@@ -334,7 +348,7 @@
     }
 
     if (detailsEdit?.mode && detailsEdit.mode !== "view") {
-      renderDetailEditPanel(detailsEl, context, canEdit && canAdmin, detailsEdit, detailEditOptions, moveBasket, {
+      renderDetailEditPanel(detailsEl, context, Boolean(canEditDetails || (canEdit && canAdmin)), detailsEdit, detailEditOptions, moveBasket, {
         onSubmitDetailEdit,
         onCancelDetailEdit,
         onSetInspectorMode,
@@ -342,7 +356,7 @@
       return;
     }
 
-    renderReadonlyDetails(detailsEl, context, canEdit, canAdmin, detailsEdit, onFocusRow, onOpenMove, onDetailAction, moveBasket, onSetInspectorMode);
+    renderReadonlyDetails(detailsEl, context, canEdit, Boolean(canEditDetails || (canEdit && canAdmin)), detailsEdit, onFocusRow, onOpenMove, onDetailAction, moveBasket, onSetInspectorMode);
   }
 
   function inspectorTabsHtml(activeMode, count) {
@@ -361,11 +375,11 @@
     });
   }
 
-  function renderReadonlyDetails(detailsEl, context, canEdit, canAdmin, detailsEdit, onFocusRow, onOpenMove, onDetailAction, moveBasket, onSetInspectorMode) {
+  function renderReadonlyDetails(detailsEl, context, canEdit, canEditDetails, detailsEdit, onFocusRow, onOpenMove, onDetailAction, moveBasket, onSetInspectorMode) {
     const { building, space, lab, assignment } = context;
     const pageTitle = lab?.lab_name || "未规划";
     const canMove = Boolean(canEdit && assignment && lab);
-    const canAdminEdit = Boolean(canEdit && canAdmin && space);
+    const canDetailEdit = Boolean(canEditDetails && space);
     const detailRows = [detailLine("门牌", doorRangeLabel(space) || "未填写")];
 
     if (lab) {
@@ -398,7 +412,6 @@
       </div>
 
       <div class="details-scroll">
-        ${canAdminEdit ? detailActionBarHtml(Boolean(lab && assignment), detailsEdit?.moreOpen) : ""}
         <section class="details-card details-card-compact">
           <div class="details-card-head">
             <div>
@@ -412,6 +425,7 @@
             ${detailRows.join("")}
           </div>
         </section>
+        ${canDetailEdit ? detailActionBarHtml(Boolean(lab && assignment), detailsEdit?.moreOpen, true) : ""}
       </div>
 
     </div>`;
@@ -419,10 +433,11 @@
     bindDetailActionButtons(detailsEl, onDetailAction);
   }
 
-  function detailActionBarHtml(hasLab, moreOpen) {
+  function detailActionBarHtml(hasLab, moreOpen, includeCreate) {
     return `<div class="detail-admin-actions">
       ${hasLab ? `<button type="button" class="secondary-button compact-button" data-detail-action="edit-lab">编辑实验室</button>` : ""}
       ${hasLab ? `<button type="button" class="secondary-button compact-button" data-detail-action="renovate-room">改建房间</button>` : ""}
+      ${includeCreate ? `<button type="button" class="secondary-button compact-button" data-detail-action="create-space">新增房间</button>` : ""}
       <div class="detail-more-wrap">
         <button type="button" class="secondary-button compact-button" data-detail-action="toggle-more" aria-expanded="${moreOpen ? "true" : "false"}">更多</button>
         ${moreOpen ? `<div class="detail-more-menu">
@@ -450,8 +465,10 @@
       renderReadonlyDetails(detailsEl, context, false, false, { mode: "view" }, null, null, null, moveBasket, handlers.onSetInspectorMode);
       return;
     }
-    const title = mode === "editSpace" ? "编辑房间" : mode === "renovateRoom" ? "改建房间" : "编辑实验室";
-    const formHtml = mode === "editSpace"
+    const title = mode === "createSpace" ? "新增房间" : mode === "editSpace" ? "编辑房间" : mode === "renovateRoom" ? "改建房间" : "编辑实验室";
+    const formHtml = mode === "createSpace"
+      ? spaceEditFormHtml(context, options, detailsEdit.errors || {}, true)
+      : mode === "editSpace"
       ? spaceEditFormHtml(context, options, detailsEdit.errors || {})
       : labEditFormHtml(context, options, detailsEdit.errors || {}, mode === "renovateRoom");
     detailsEl.innerHTML = `<div class="details-panel is-editing" data-move-basket-dropzone="true">
@@ -484,6 +501,7 @@
     const month = options.renovationMonth || "";
     const defaultName = isRenovation ? "待改建房间" : lab.lab_name || "";
     return `<form id="${isRenovation ? "detailRenovateRoomForm" : "detailEditLabForm"}" class="detail-edit-form" data-detail-edit-mode="${isRenovation ? "renovateRoom" : "editLab"}">
+      ${roomContextHtml(context)}
       <div class="detail-form-grid">
         ${detailInput("实验室名称", "labName", defaultName, "text")}
         ${detailInput("所属学院", "college", isRenovation ? lab.college || "" : lab.college || "", "text")}
@@ -501,13 +519,14 @@
     </form>`;
   }
 
-  function spaceEditFormHtml(context, options, errors) {
-    const space = context.space || {};
+  function spaceEditFormHtml(context, options, errors, isCreate = false) {
+    const space = isCreate ? (options.createSpaceDraft || {}) : (context.space || {});
     const segmentOptions = options.segmentOptions || [];
     const segmentHtml = segmentOptions.length
       ? segmentOptions.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === space.segment_code || item.selected ? "selected" : ""}>${escapeHtml(item.label)}</option>`).join("")
       : `<option value="${escapeHtml(space.segment_code || "")}">${escapeHtml(space.segment_code || "未设置骨架")}</option>`;
-    return `<form id="detailEditSpaceForm" class="detail-edit-form" data-detail-edit-mode="editSpace">
+    return `<form id="${isCreate ? "detailCreateSpaceForm" : "detailEditSpaceForm"}" class="detail-edit-form" data-detail-edit-mode="${isCreate ? "createSpace" : "editSpace"}">
+      ${isCreate ? "" : roomContextHtml(context)}
       <div class="space-code-preview"><span>空间编码预览</span><strong>${escapeHtml(options.spaceCodePreview || space.space_code || "")}</strong></div>
       <div class="detail-form-grid">
         ${detailInput("前门牌", "frontDoor", space.front_door || "", "text")}
@@ -535,6 +554,16 @@
         <button type="button" data-detail-cancel>取消</button>
       </div>
     </form>`;
+  }
+
+  function roomContextHtml(context) {
+    const space = context.space || {};
+    const building = context.building || {};
+    return `<div class="detail-room-context">
+      <span>当前房间</span>
+      <strong>${escapeHtml(doorRangeLabel(space) || space.space_code || "未选中房间")}</strong>
+      <small>${escapeHtml(`${building.building_name || building.building_code || ""} · ${space.floor_code || ""} · ${space.space_code || ""}`)}</small>
+    </div>`;
   }
 
   function detailInput(label, name, value, type, step = "") {
