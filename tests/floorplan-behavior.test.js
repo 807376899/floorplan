@@ -6,6 +6,7 @@ const vm = require("node:vm");
 const { DatabaseSync } = require("node:sqlite");
 const { createDatasetService } = require("../server/dataset-service");
 const { compactVisibleDataset, createPlanCopyService } = require("../server/plan-copy-service");
+const RelationalStore = require("../server/relational-store");
 const { colorMap: buildLegendColorMap, renderLegend: renderLegendOnly } = require("../js/app/legend-colors");
 const { createRenderThumbList } = require("../js/app/thumbnails");
 const PlanManagement = require("../js/app/plan-management");
@@ -102,6 +103,22 @@ function createPlanCopyTestDb() {
   return db;
 }
 
+function createActiveDatasetTestDb(initialDataset) {
+  const db = createPlanCopyTestDb();
+  db.exec(`
+    CREATE TABLE active_dataset (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      revision INTEGER NOT NULL,
+      dataset_json TEXT NOT NULL,
+      updated_by TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  db.prepare("INSERT INTO active_dataset (id, revision, dataset_json, updated_by, updated_at) VALUES (1, 1, ?, 'system', '2026-06-01T00:00:00Z')")
+    .run(JSON.stringify(initialDataset));
+  return db;
+}
+
 function createDatasetServiceStub() {
   const active = {
     revision: 1,
@@ -176,6 +193,40 @@ function insertPlanCopyRow(db, options) {
     options.isBaseline ? now : null,
     options.isBaseline ? "admin" : null
   );
+}
+
+function copiedReferenceDataset(copyId, overrides = {}) {
+  const planCode = overrides.planCode || `copy-${copyId}`;
+  return {
+    buildings: [
+      { id: `copy:${copyId}::B0101`, copy_id: copyId, building_code: "B0101", building_name: "明德楼", campus_zone: "下沙校区", building_number: 1, sort_order: 1 },
+    ],
+    floor_segments: [
+      { id: `copy:${copyId}::seg-1`, copy_id: copyId, building_code: "B0101", floor_code: "1", segment_code: "EW01010101", start_x_m: 0, start_y_m: 0, end_x_m: 20, end_y_m: 0, width_m: 2.4, element_type: "corridor" },
+    ],
+    spaces: [
+      { id: `copy:${copyId}::space-${copyId}`, copy_id: copyId, building_code: "B0101", floor_code: "1", segment_code: "EW01010101", space_code: `00101010${copyId}${copyId}`, front_door: `10${copyId}`, rear_door: "", length_m: 8, width_m: 6, area_m2: 48, network_segment: "", current_status: "active" },
+    ],
+    labs: [
+      { id: `copy:${copyId}::lab-${copyId}`, copy_id: copyId, lab_code: `UNIT00000${copyId}`, lab_name: `用途单元${copyId}`, college: "统一学院", major: "智能建造", lab_type: "实验室", director: "", seat_count: 20, computer_count: 10 },
+    ],
+    colleges: [
+      { id: `copy:${copyId}::COL-A`, copy_id: copyId, college_code: "COL-A", college_name: "统一学院", color: copyId === 1 ? "#2563EB" : "#DC2626", status: "active" },
+    ],
+    majors: [
+      { id: `copy:${copyId}::MAJ-A`, copy_id: copyId, major_code: "MAJ-A", major_name: "智能建造", college_code: "COL-A", status: "active" },
+    ],
+    lab_types: [
+      { id: `copy:${copyId}::USE0001`, copy_id: copyId, type_code: "USE0001", type_name: "实验室", status: "active" },
+    ],
+    plans: [{ id: planCode, copy_id: copyId, plan_code: planCode, plan_name: `方案${copyId}` }],
+    plan_assignments: [
+      { id: `${planCode}__UNIT00000${copyId}`, plan_id: planCode, plan_code: planCode, lab_code: `UNIT00000${copyId}`, space_code: `00101010${copyId}${copyId}`, assignment_status: "assigned" },
+    ],
+    file_assets: [],
+    imports: [],
+    deleted_space_ids: [],
+  };
 }
 
 test("building sort uses campus groups then editable sort order", () => {
@@ -805,6 +856,141 @@ test("visible datasets keep college colors stable for visitor editor and admin",
   assert.notEqual(visitorColors["统一学院"], visitorColors["另一个学院"]);
 });
 
+test("relational backfill stores shared reference rows once across plan copies", () => {
+  const db = createPlanCopyTestDb();
+  RelationalStore.ensureRelationalSchema(db);
+  const datasetService = createDatasetServiceStubWithNormalizer();
+  const copy1 = copiedReferenceDataset(1, { planCode: "copy-1" });
+  const copy2 = copiedReferenceDataset(2, { planCode: "copy-2" });
+  insertPlanCopyRow(db, {
+    id: 1,
+    planCode: "copy-1",
+    planName: "方案1",
+    visibility: "public",
+    dataset: copy1,
+    assignments: copy1.plan_assignments,
+  });
+  insertPlanCopyRow(db, {
+    id: 2,
+    planCode: "copy-2",
+    planName: "方案2",
+    visibility: "public",
+    dataset: copy2,
+    assignments: copy2.plan_assignments,
+  });
+
+  const service = createPlanCopyService(db, datasetService);
+  const visible = service.buildVisibleDataset({ id: 1, username: "admin", role: "admin" }).dataset;
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM buildings WHERE building_code = 'B0101'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM floor_segments WHERE building_code = 'B0101' AND floor_code = '1' AND segment_code = 'EW01010101'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM colleges WHERE college_code = 'COL-A'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plans WHERE plan_code IN ('copy-1', 'copy-2')").get().count, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_assignments").get().count, 2);
+  assert.equal(visible.buildings.filter((row) => row.building_code === "B0101").length, 1);
+});
+
+test("admin visible dataset projects global buildings once even when copies carry duplicates", () => {
+  const db = createPlanCopyTestDb();
+  RelationalStore.ensureRelationalSchema(db);
+  const datasetService = createDatasetServiceStubWithNormalizer();
+  for (const copyId of [1, 2, 3]) {
+    const dataset = copiedReferenceDataset(copyId, { planCode: `copy-${copyId}` });
+    insertPlanCopyRow(db, {
+      id: copyId,
+      planCode: `copy-${copyId}`,
+      planName: `方案${copyId}`,
+      visibility: "public",
+      dataset,
+      assignments: dataset.plan_assignments,
+    });
+  }
+
+  const service = createPlanCopyService(db, datasetService);
+  const visible = service.buildVisibleDataset({ id: 1, username: "admin", role: "admin" }).dataset;
+
+  assert.deepEqual(visible.buildings.map((row) => row.building_code), ["B0101"]);
+  assert.equal(visible.buildings[0].copy_id || "", "");
+  assert.equal(visible.floor_segments.filter((row) => row.segment_code === "EW01010101").length, 1);
+  assert.equal(visible.colleges.filter((row) => row.college_code === "COL-A").length, 1);
+});
+
+test("saving copy datasets synchronizes relational plan tables immediately", () => {
+  const db = createPlanCopyTestDb();
+  RelationalStore.ensureRelationalSchema(db);
+  const datasetService = createDatasetServiceStubWithNormalizer();
+  const originalDataset = copiedReferenceDataset(1, { planCode: "copy-1" });
+  insertPlanCopyRow(db, {
+    id: 1,
+    planCode: "copy-1",
+    planName: "方案1",
+    visibility: "public",
+    dataset: originalDataset,
+    assignments: originalDataset.plan_assignments,
+  });
+  const nextDataset = copiedReferenceDataset(1, { planCode: "copy-1" });
+  nextDataset.spaces[0] = { ...nextDataset.spaces[0], network_segment: "10.0.1.0/24" };
+  nextDataset.plan_assignments[0] = { ...nextDataset.plan_assignments[0], effective_from: "2026-06" };
+  const service = createPlanCopyService(db, datasetService);
+
+  service.saveCopyDataset(1, { expectedRevision: 1, dataset: nextDataset }, { id: 1, username: "admin", role: "admin" });
+
+  assert.equal(db.prepare("SELECT network_segment FROM spaces WHERE space_code = ?").get(nextDataset.spaces[0].space_code).network_segment, "10.0.1.0/24");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_space_overrides WHERE plan_id = 'copy-1'").get().count, 1);
+  assert.equal(db.prepare("SELECT effective_from FROM plan_assignments WHERE plan_id = 'copy-1' AND lab_code = 'UNIT000001'").get().effective_from, "2026-06");
+});
+
+test("saving active datasets synchronizes global relational reference tables immediately", () => {
+  const initial = createDatasetServiceStubWithNormalizer().getActiveDataset().dataset;
+  const db = createActiveDatasetTestDb(initial);
+  RelationalStore.ensureRelationalSchema(db);
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const nextDataset = datasetService.normalizeIncomingDataset({
+    ...initial,
+    buildings: [{ id: "B0102", building_code: "B0102", building_name: "关系楼", campus_zone: "下沙校区", building_number: 2, sort_order: 3 }],
+    floor_segments: [{ id: "B0102__1__EW01020101", building_code: "B0102", floor_code: "1", segment_code: "EW01020101", element_type: "corridor" }],
+    colleges: [{ id: "COL-R", college_code: "COL-R", college_name: "关系学院", color: "#2563EB" }],
+    majors: [{ id: "MAJ-R", major_code: "MAJ-R", major_name: "关系专业", college_code: "COL-R" }],
+    lab_types: [{ id: "USE-R", type_code: "USE-R", type_name: "关系用途" }],
+  });
+
+  datasetService.saveActiveDataset(nextDataset, "admin", { expectedRevision: 1 });
+
+  assert.equal(db.prepare("SELECT building_name FROM buildings WHERE building_code = 'B0102'").get().building_name, "关系楼");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM floor_segments WHERE building_code = 'B0102' AND segment_code = 'EW01020101'").get().count, 1);
+  assert.equal(db.prepare("SELECT college_name FROM colleges WHERE college_code = 'COL-R'").get().college_name, "关系学院");
+  assert.equal(db.prepare("SELECT major_name FROM majors WHERE major_code = 'MAJ-R'").get().major_name, "关系专业");
+  assert.equal(db.prepare("SELECT type_name FROM lab_types WHERE type_code = 'USE-R'").get().type_name, "关系用途");
+});
+
+test("saving copy datasets removes stale relational deleted-space tombstones for the copy", () => {
+  const db = createPlanCopyTestDb();
+  RelationalStore.ensureRelationalSchema(db);
+  const datasetService = createDatasetServiceStubWithNormalizer();
+  const originalDataset = copiedReferenceDataset(1, { planCode: "copy-1" });
+  originalDataset.deleted_space_ids = ["copy:1::00101010101"];
+  insertPlanCopyRow(db, {
+    id: 1,
+    planCode: "copy-1",
+    planName: "方案1",
+    visibility: "public",
+    dataset: originalDataset,
+    assignments: originalDataset.plan_assignments,
+  });
+  const service = createPlanCopyService(db, datasetService);
+  service.buildVisibleDataset({ id: 1, username: "admin", role: "admin" });
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_deleted_spaces WHERE plan_id = 'copy-1'").get().count, 1);
+
+  const nextDataset = copiedReferenceDataset(1, { planCode: "copy-1" });
+  nextDataset.deleted_space_ids = [];
+  service.saveCopyDataset(1, { expectedRevision: 1, dataset: nextDataset }, { id: 1, username: "admin", role: "admin" });
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_deleted_spaces WHERE plan_id = 'copy-1'").get().count, 0);
+});
+
 test("copy datasets do not reintroduce spaces marked deleted", () => {
   const db = createPlanCopyTestDb();
   const datasetService = createDatasetServiceStub();
@@ -1045,7 +1231,8 @@ test("visible copy datasets keep same-id structural rows per copy", () => {
 
   const visible = service.buildVisibleDataset({ id: 1, username: "admin", role: "admin" }).dataset;
 
-  assert.deepEqual(visible.floor_segments.map((row) => Number(row.copy_id)).sort(), [1, 2]);
+  assert.deepEqual(visible.floor_segments.map((row) => row.segment_code), ["EW1"]);
+  assert.equal(visible.floor_segments[0].copy_id || "", "");
   assert.deepEqual(visible.spaces.map((row) => Number(row.copy_id)).sort(), [1, 2]);
   assert.deepEqual(visible.labs.map((row) => Number(row.copy_id)).sort(), [1, 2]);
 });

@@ -1,5 +1,6 @@
 const fs = require("fs");
 const { DatabaseSync } = require("node:sqlite");
+const { ensureRelationalSchema } = require("./relational-store");
 
 function openDatabase(config) {
   fs.mkdirSync(config.dataDir, { recursive: true });
@@ -83,6 +84,7 @@ function openDatabase(config) {
     );
   `);
   migratePlanCopies(db);
+  ensureRelationalSchema(db);
   return db;
 }
 

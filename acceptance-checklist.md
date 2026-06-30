@@ -146,6 +146,16 @@
 - [ ] Saving active data after viewing a merged copy dataset does not write copy-specific buildings, floor segments, spaces, labs, plans, or assignments into `active_dataset`.
 - [ ] Admin manage plans lists every non-deleted plan copy even after its `plan_code` is normalized to `PLAN...`, and delete/rename/baseline actions still target the correct copy id.
 
+## Hybrid Relational Storage Acceptance
+
+- [ ] SQLite initialization creates the relational business tables for buildings, floor skeletons, colleges, majors, use types, spaces, use units, plans, plan overrides, assignments, and plan-scoped deleted spaces.
+- [ ] Existing JSON plan-copy data is backfilled or synchronized into relational tables without duplicating the same `building_code` or same floor skeleton semantic key across visible plan copies.
+- [ ] `/api/bootstrap` and `/api/dataset/active` continue returning the existing `dataset` JSON shape while projecting global shared reference rows from relational storage when available.
+- [ ] Admin viewing multiple plans sees each teaching building only once in the raw teaching-building table, even when several visible plan copies contain that building in legacy JSON payloads.
+- [ ] Saving active raw maintenance data immediately updates relational global reference tables for buildings, floor skeletons, colleges, majors, and use types.
+- [ ] Spaces, use units, assignments, and deleted-space tombstones remain plan-scoped so editing or deleting a room in one non-baseline copy does not affect other plans.
+- [ ] When a copy save clears a deleted-space tombstone, `plan_deleted_spaces` removes the stale tombstone for that copy.
+
 ## Admin Correction Acceptance
 
 - [ ] Existing spaces in detail editing show door/code summary fields and no longer show the old "refresh space code on save" checkbox.

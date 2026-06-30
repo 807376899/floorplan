@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { nowIso, toBoolean, httpError } = require("./http-utils");
+const RelationalStore = require("./relational-store");
 
 const COLLEGE_COLORS = [
   "#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#0891b2", "#be123c", "#4d7c0f",
@@ -46,6 +47,7 @@ function createDatasetService(db, config, audit) {
     const updatedAt = nowIso();
     db.prepare("UPDATE active_dataset SET revision = ?, dataset_json = ?, updated_by = ?, updated_at = ? WHERE id = 1")
       .run(revision, JSON.stringify(dataset), actor, updatedAt);
+    RelationalStore.syncFromVisibleDataset(db, normalizeIncomingDataset(dataset), []);
     return { revision, updatedAt, dataset, maintenance: buildMaintenance(dataset) };
   }
 
@@ -59,6 +61,7 @@ function createDatasetService(db, config, audit) {
     }
     db.prepare("INSERT INTO active_dataset (id, revision, dataset_json, updated_by, updated_at) VALUES (1, 1, ?, 'system', ?)")
       .run(JSON.stringify(seed), nowIso());
+    RelationalStore.syncFromVisibleDataset(db, seed, []);
     snapshotService.createSnapshot("baseline", "初始基线快照", seed, 1, "system", 1);
     audit.writeAudit("dataset_seeded", "system", "127.0.0.1", { summary: summarizeDataset(seed) });
   }

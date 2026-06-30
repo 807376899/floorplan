@@ -1,7 +1,9 @@
 const { httpError, nowIso, toBoolean } = require("./http-utils");
+const RelationalStore = require("./relational-store");
 
 function createPlanCopyService(db, datasetService) {
   const COPY_SCOPED_KEYS = ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "file_assets"];
+  RelationalStore.ensureRelationalSchema(db);
 
   function visibleWhere(user) {
     if (user?.role === "admin") return "deleted_at IS NULL";
@@ -175,8 +177,10 @@ function createPlanCopyService(db, datasetService) {
     const latestBaselineCode = copies.find((copy) => copy.isBaseline)?.planCode || "";
     for (const copy of copies.slice().reverse()) mergeCopyDataset(dataset, copy, latestBaselineCode);
     const visibleDataset = compactVisibleDataset(datasetService.normalizeIncomingDataset(dataset));
+    RelationalStore.syncFromVisibleDataset(db, visibleDataset, copies);
+    const projectedDataset = RelationalStore.projectGlobalReferenceRows(db, visibleDataset);
     return {
-      dataset: datasetService.normalizeIncomingDataset(visibleDataset),
+      dataset: datasetService.normalizeIncomingDataset(projectedDataset),
       copies: copies.map((copy) => stripPayload(copy, user)),
       revision: active.revision,
       updatedBy: active.updatedBy,
@@ -574,6 +578,10 @@ function createPlanCopyService(db, datasetService) {
       SET assignments_json = ?, dataset_json = ?, revision = ?, updated_at = ?
       WHERE id = ?
     `).run(JSON.stringify(assignments), nextDatasetJson, revision, now, copyId);
+    const relationDataset = nextDatasetJson
+      ? JSON.parse(nextDatasetJson)
+      : datasetService.normalizeIncomingDataset({ ...normalized, plans: [plan], plan_assignments: assignments });
+    syncSavedCopyDataset(row, plan, assignments, relationDataset, revision, now);
     return { revision, updatedAt: now };
   }
 
@@ -616,7 +624,20 @@ function createPlanCopyService(db, datasetService) {
       SET plan_json = ?, assignments_json = ?, dataset_json = ?, revision = ?, updated_at = ?
       WHERE id = ?
     `).run(JSON.stringify(nextPlan), JSON.stringify(nextAssignments), JSON.stringify(nextDataset), revision, now, copyId);
+    syncSavedCopyDataset(row, nextPlan, nextAssignments, nextDataset, revision, now);
     return { revision, updatedAt: now };
+  }
+
+  function syncSavedCopyDataset(row, plan, assignments, dataset, revision, updatedAt) {
+    const copy = publicCopy({
+      ...row,
+      revision,
+      updated_at: updatedAt,
+      plan_json: JSON.stringify(plan),
+      assignments_json: JSON.stringify(assignments),
+      dataset_json: JSON.stringify(dataset),
+    });
+    RelationalStore.syncFromVisibleDataset(db, datasetService.normalizeIncomingDataset(dataset), [copy]);
   }
 
   function copyScopedDataset(normalized, copyId) {

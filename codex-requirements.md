@@ -169,6 +169,16 @@
 - Admin plan management must include both active dataset plans and non-deleted plan copies. Admin can rename, delete, and baseline either kind through the manage plans UI, while the server must keep at least one manageable plan available.
 - When building codes change, all bound floor segment and space `building_code` references must be migrated. Saving after normalization must not leave the old building row visible through stale plan-copy data.
 
+## Hybrid Relational Storage
+
+- Core business entities must gradually move to relational tables. `buildings`, `floor_segments`, `colleges`, `majors`, `lab_types`, `spaces`, `labs`, `plans`, `plan_space_overrides`, `plan_lab_overrides`, `plan_assignments`, and `plan_deleted_spaces` are the target source-of-truth tables; JSON remains for import drafts, snapshots, compatibility export, projection, and rollback.
+- The frontend API may continue returning the existing `dataset` JSON shape, but service code must project that shape from relational/global data where available instead of treating every plan-copy JSON payload as a separate authoritative copy of all reference rows.
+- Teaching buildings, floor skeletons, colleges, majors, and use types are global shared reference data. They must not be duplicated per plan copy in the visible raw editor; admin seeing multiple visible plans must still see one row for the same `building_code` and one row for the same floor skeleton semantic key.
+- Saving the active dataset from raw global maintenance must immediately synchronize `buildings`, `floor_segments`, `colleges`, `majors`, and `lab_types` into relational tables; the system must not wait for a later read path to backfill those rows.
+- Plan copies only express differences for spaces, use units, assignments, and deletion tombstones. Deleting a room in one plan copy must record plan-scoped deletion metadata and must not delete the global physical-space baseline or hide the same room in other plans.
+- Plan-scoped deleted-space rows must mirror the current saved copy payload. When a detail action or create-room flow clears a copy tombstone, `plan_deleted_spaces` for that plan must remove the stale tombstone instead of preserving an old hide rule.
+- Relational schema and service logic must remain SQLite-compatible for current local deployment while avoiding SQLite-only JSON-query business logic so the schema can later move to PostgreSQL.
+
 ## Admin Correction Usability
 
 - Detail editing must not expose a generic "refresh space code on save" checkbox for existing spaces. Existing spaces should show stable door/code summary fields by default, with an admin-only explicit correction action when door text was entered incorrectly.
