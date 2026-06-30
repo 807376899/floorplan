@@ -7,7 +7,7 @@ const backupsDir = path.join(dataDir, "backups");
 
 module.exports = {
   root,
-  port: Number(process.env.PORT || 5173),
+  port: Number(process.env.PORT || 3000),
   dataDir,
   uploadsDir,
   backupsDir,

@@ -9,6 +9,7 @@ const { createSnapshotService } = require("./server/snapshot-service");
 const { createImportService } = require("./server/import-service");
 const { createPlanCopyService } = require("./server/plan-copy-service");
 const { createRouteApi } = require("./server/routes");
+const { formatListenError } = require("./server/listen-errors");
 
 // server.js 只负责装配依赖和启动 HTTP 服务；业务逻辑放在 server/*-service.js 中。
 const db = openDatabase(config);
@@ -26,7 +27,7 @@ auth.seedUsers();
 dataset.seedDataset(snapshots);
 snapshots.ensureScheduledBackup();
 
-http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
     const pathname = decodeURIComponent(url.pathname);
@@ -46,7 +47,17 @@ http.createServer(async (req, res) => {
       message: error.message || "Server error",
     });
   }
-}).listen(config.port, () => {
+});
+
+server.on("error", (error) => {
+  if (error && (error.code === "EACCES" || error.code === "EADDRINUSE")) {
+    console.error(formatListenError(error));
+    process.exit(1);
+  }
+  throw error;
+});
+
+server.listen(config.port, () => {
   console.log(`floorplan server running at http://127.0.0.1:${config.port}`);
 });
 

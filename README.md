@@ -4,7 +4,7 @@
 
 ## 当前能力
 
-- 服务端使用 Node 内置 `node:sqlite` 持久化数据，默认运行在 `http://localhost:5173`。
+- 服务端使用 Node 内置 `node:sqlite` 持久化数据，本机直接运行默认访问 `http://localhost:3000`。
 - 未登录用户只有浏览权限，只能查看共享基线和已公开的方案副本；界面不会显示“上传数据包”，后端上传接口也只允许 `admin` 调用。
 - `editor` 可以创建、编辑、公开、私有化、删除自己创建的方案副本，但不能上传数据包或管理用户。
 - `admin` 可以维护共享基线、上传 `.xlsx` / `.json` 数据包、管理导入草稿、管理用户、管理快照和执行维护操作。
@@ -57,7 +57,14 @@ npm start
 node server.js
 ```
 
-访问 [http://localhost:5173](http://localhost:5173)。
+访问 [http://localhost:3000](http://localhost:3000)。
+
+如果需要改端口，可在启动前设置 `PORT`。Windows 上如果遇到 `EACCES`，通常是端口落入系统保留范围，换成 `3000` 或其他可用端口即可：
+
+```powershell
+$env:PORT = "3000"
+npm start
+```
 
 ## 测试
 
@@ -286,7 +293,7 @@ Get-ChildItem server, js, scripts
 Windows PowerShell 当前窗口临时设置：
 
 ```powershell
-$env:PORT = "5173"
+$env:PORT = "3000"
 $env:FLOORPLAN_ADMIN_USER = "admin"
 $env:FLOORPLAN_ADMIN_PASSWORD = "change-this-admin-password"
 $env:FLOORPLAN_EDITOR_USER = "editor"
@@ -296,7 +303,7 @@ $env:FLOORPLAN_EDITOR_PASSWORD = "change-this-editor-password"
 Linux 当前 shell 临时设置：
 
 ```bash
-export PORT=5173
+export PORT=3000
 export FLOORPLAN_ADMIN_USER=admin
 export FLOORPLAN_ADMIN_PASSWORD='change-this-admin-password'
 export FLOORPLAN_EDITOR_USER=editor
@@ -316,10 +323,10 @@ node server.js
 访问：
 
 ```text
-http://服务器IP:5173
+http://服务器IP:3000
 ```
 
-如果服务器有防火墙或云安全组，需要放行 TCP `5173` 端口。
+如果服务器有防火墙或云安全组，需要放行实际配置的 TCP 端口，例如直接运行默认的 `3000`。
 
 ### 6. 后台运行
 

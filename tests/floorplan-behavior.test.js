@@ -1638,6 +1638,43 @@ test("detail lab edit updates lab fields and assignment renovation month", () =>
   assert.equal(dataset.plan_assignments[0].effective_from, "2026-06-01");
 });
 
+test("detail lab edit targets the active copy when duplicate lab ids exist", () => {
+  const dataset = {
+    labs: [
+      { id: "lab-1", copy_id: 3, lab_code: "UNIT000001", lab_name: "其他副本实验室", college: "信息学院", major: "", director: "旧负责人-3", seat_count: 20, computer_count: 10 },
+      { id: "lab-1", copy_id: 6, lab_code: "UNIT000001", lab_name: "当前副本实验室", college: "信息学院", major: "", director: "旧负责人-6", seat_count: 20, computer_count: 10 },
+    ],
+    spaces: [],
+    plans: [{ id: "copy-6", plan_code: "copy-6", copy_id: 6 }],
+    plan_assignments: [{ id: "assign-1", plan_id: "copy-6", lab_id: "lab-1", lab_code: "UNIT000001", assignment_status: "assigned", effective_from: "" }],
+  };
+
+  const result = DetailActions.applyDetailLabEdit(dataset, {
+    activePlan: dataset.plans[0],
+    lab: dataset.labs[1],
+    assignment: dataset.plan_assignments[0],
+  }, {
+    labName: "当前副本实验室",
+    college: "信息学院",
+    major: "",
+    director: "新负责人",
+    seatCount: "25",
+    computerCount: "22",
+    renovationMonth: "2026-06",
+  }, {
+    copyScope: { copy_id: 6 },
+    normalizeLab: (row) => row,
+    normalizeAssignment: (row) => row,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(dataset.labs[0].director, "旧负责人-3");
+  assert.equal(dataset.labs[0].seat_count, 20);
+  assert.equal(dataset.labs[1].director, "新负责人");
+  assert.equal(dataset.labs[1].seat_count, 25);
+  assert.equal(dataset.plan_assignments[0].effective_from, "2026-06-01");
+});
+
 test("detail delete room removes the selected space for the active plan and invalidates assignments", () => {
   const dataset = {
     spaces: [
@@ -1672,6 +1709,43 @@ test("detail delete room removes the selected space for the active plan and inva
   assert.equal(dataset.plan_assignments[0].space_code, "");
   assert.equal(dataset.plan_assignments[1].assignment_status, "assigned");
   assert.equal(dataset.labs.length, 1);
+});
+
+test("detail space edit targets the active copy when duplicate space ids exist", () => {
+  const dataset = {
+    spaces: [
+      { id: "space-1", copy_id: 3, space_code: "00101010101", building_code: "B0101", floor_code: "1", front_door: "101", rear_door: "", segment_code: "EW1", side: "north", offset_m: 0, length_m: 8, width_m: 6, area_m2: 48, network_segment: "old-3", current_status: "active" },
+      { id: "space-1", copy_id: 6, space_code: "00101010101", building_code: "B0101", floor_code: "1", front_door: "101", rear_door: "", segment_code: "EW1", side: "north", offset_m: 0, length_m: 8, width_m: 6, area_m2: 48, network_segment: "old-6", current_status: "active" },
+    ],
+    plans: [{ id: "copy-6", plan_code: "copy-6", copy_id: 6 }],
+    plan_assignments: [{ id: "assign-1", plan_id: "copy-6", space_id: "space-1", space_code: "00101010101", assignment_status: "assigned" }],
+  };
+
+  const result = DetailActions.applyDetailSpaceEdit(dataset, {
+    activePlan: dataset.plans[0],
+    building: { building_code: "B0101" },
+    space: dataset.spaces[1],
+  }, {
+    frontDoor: "101",
+    rearDoor: "",
+    segmentCode: "EW1",
+    side: "north",
+    offsetM: "0",
+    lengthM: "8",
+    widthM: "6",
+    areaM2: "48",
+    networkSegment: "new-6",
+    currentStatus: "active",
+  }, {
+    copyScope: { copy_id: 6 },
+    generateSpaceCode: () => "00101010101",
+    normalizeSpace: (row) => row,
+    normalizeAssignment: (row) => row,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(dataset.spaces[0].network_segment, "old-3");
+  assert.equal(dataset.spaces[1].network_segment, "new-6");
 });
 
 test("detail renovation invalidates old assignment and binds a new lab to the room", () => {

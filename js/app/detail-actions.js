@@ -41,9 +41,32 @@
     return { ...formData };
   }
 
+  function copyIdFromDeps(deps = {}) {
+    return Number(deps.copyScope?.copy_id || deps.copyScope?.copyId || deps.copyId || 0);
+  }
+
+  function rowCopyId(row) {
+    return Number(row?.copy_id || row?.copyId || 0);
+  }
+
+  function matchingRowIndex(rows, target, keys, deps = {}) {
+    const copyId = copyIdFromDeps(deps);
+    const matchesIdentity = (row) => keys.some((key) => {
+      const value = String(target?.[key] || "").trim();
+      return value && String(row?.[key] || "").trim() === value;
+    });
+    if (copyId) {
+      const scopedIndex = (rows || []).findIndex((row) => rowCopyId(row) === copyId && matchesIdentity(row));
+      if (scopedIndex >= 0) return scopedIndex;
+      const baseIndex = (rows || []).findIndex((row) => !rowCopyId(row) && matchesIdentity(row));
+      if (baseIndex >= 0) return baseIndex;
+    }
+    return (rows || []).findIndex(matchesIdentity);
+  }
+
   function applyDetailLabEdit(dataset, context, rawDraft, deps = {}) {
     const draft = formDataToDraft(rawDraft);
-    const labIndex = (dataset.labs || []).findIndex((row) => row.id === context.lab?.id || row.lab_code === context.lab?.lab_code);
+    const labIndex = matchingRowIndex(dataset.labs || [], context.lab, ["id", "lab_code"], deps);
     if (labIndex < 0) return { ok: false, message: "未找到要编辑的实验室。" };
     const currentLab = dataset.labs[labIndex];
     const nextLab = {
@@ -134,7 +157,7 @@
   function applyDetailSpaceEdit(dataset, context, rawDraft, deps = {}) {
     const draft = formDataToDraft(rawDraft);
     const space = context.space;
-    const spaceIndex = (dataset.spaces || []).findIndex((row) => row.id === space?.id || row.space_code === space?.space_code);
+    const spaceIndex = matchingRowIndex(dataset.spaces || [], space, ["id", "space_code"], deps);
     if (spaceIndex < 0) return { ok: false, message: "未找到要编辑的房间。" };
     if (space.length_m !== "" && space.length_m !== undefined && !stringValue(draft.lengthM)) {
       return { ok: false, message: "已有房间的长宽不能清空。" };
@@ -230,13 +253,22 @@
     if (!activePlan || !space) return { ok: false, message: "请先选择要删除的房间。" };
     const spaceRefs = [space.id, space.space_code].filter(Boolean).map((value) => String(value));
     if (!spaceRefs.length) return { ok: false, message: "当前房间缺少可删除的稳定标识。" };
-    const copyId = deps.copyScope?.copy_id || deps.copyId || null;
+    const copyId = copyIdFromDeps(deps);
     const deletedRefs = copyId ? spaceRefs.map((ref) => `copy:${copyId}::${ref}`) : spaceRefs;
     dataset.deleted_space_ids = [...new Set([...(dataset.deleted_space_ids || []), ...deletedRefs])];
-    dataset.spaces = (dataset.spaces || []).filter((row) =>
-      !spaceRefs.includes(String(row.id || "")) &&
-      !spaceRefs.includes(String(row.space_code || ""))
+    const hasScopedSpace = copyId && (dataset.spaces || []).some((row) =>
+      rowCopyId(row) === copyId &&
+      (spaceRefs.includes(String(row.id || "")) || spaceRefs.includes(String(row.space_code || "")))
     );
+    dataset.spaces = (dataset.spaces || []).filter((row) => {
+      if (copyId) {
+        const rowCopy = rowCopyId(row);
+        if (rowCopy && rowCopy !== copyId) return true;
+        if (!rowCopy && hasScopedSpace) return true;
+      }
+      return !spaceRefs.includes(String(row.id || "")) &&
+        !spaceRefs.includes(String(row.space_code || ""));
+    });
     dataset.plan_assignments = (dataset.plan_assignments || []).map((row) => {
       if (
         row.plan_id !== activePlan.id &&
