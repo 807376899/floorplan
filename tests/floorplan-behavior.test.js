@@ -11,7 +11,6 @@ const { createRenderThumbList } = require("../js/app/thumbnails");
 const PlanManagement = require("../js/app/plan-management");
 const PlanActions = require("../js/app/plan-actions");
 const ManagedPlansModal = require("../js/app/managed-plans-modal");
-const BusinessEdit = require("../js/app/business-edit");
 const RawEditor = require("../js/app/raw-editor");
 const PlanScope = require("../js/app/plan-scope");
 const DetailActions = require("../js/app/detail-actions");
@@ -159,11 +158,13 @@ function insertPlanCopyRow(db, options) {
       id, owner_user_id, plan_code, plan_name, description, visibility, revision,
       plan_json, assignments_json, source_plan_code, source_copy_id, created_at, updated_at,
       source_type, dataset_json, import_draft_id, is_baseline, baselined_at, baselined_by, deleted_at
-    ) VALUES (?, 1, ?, ?, '', 'private', 1, ?, ?, ?, ?, ?, ?, 'copy', ?, NULL, ?, ?, ?, NULL)
+    ) VALUES (?, ?, ?, ?, '', ?, 1, ?, ?, ?, ?, ?, ?, 'copy', ?, NULL, ?, ?, ?, NULL)
   `).run(
     options.id,
+    options.ownerUserId || 1,
     options.planCode,
     options.planName,
+    options.visibility || "private",
     JSON.stringify(plan),
     JSON.stringify(options.assignments || []),
     options.sourcePlanCode || "",
@@ -240,6 +241,34 @@ test("college dictionaries initialize unique editable colors", () => {
   assert.equal(colors.length, 3);
   assert.equal(new Set(colors).size, colors.length);
   colors.forEach((color) => assert.match(color, /^#[0-9a-f]{6}$/i));
+});
+
+test("college colors stay stable for the same college across copy scoped rows", () => {
+  const { FloorplanDomain } = loadBrowserModules();
+  const dataset = FloorplanDomain.normalizeDataset({
+    buildings: [],
+    floor_segments: [],
+    spaces: [],
+    labs: [],
+    colleges: [
+      { id: "college-a", copy_id: 1, college_code: "COL-A", college_name: "统一学院", color: "#111111" },
+      { id: "college-a", copy_id: 2, college_code: "COL-A", college_name: "统一学院", color: "#222222" },
+      { id: "college-b", copy_id: 1, college_code: "COL-B", college_name: "另一个学院", color: "#111111" },
+    ],
+    majors: [],
+    lab_types: [],
+    plans: [],
+    plan_assignments: [],
+  });
+
+  const sameCollegeColors = dataset.colleges
+    .filter((college) => college.college_name === "统一学院")
+    .map((college) => college.color);
+  const uniqueByCollege = new Map(dataset.colleges.map((college) => [college.college_name, college.color]));
+
+  assert.equal(new Set(sameCollegeColors).size, 1);
+  assert.notEqual(uniqueByCollege.get("统一学院"), uniqueByCollege.get("另一个学院"));
+  dataset.colleges.forEach((college) => assert.match(college.color, /^#[0-9a-f]{6}$/i));
 });
 
 test("browser dataset normalization preserves copy scoped structural rows", () => {
@@ -322,6 +351,28 @@ test("legend color module maps dictionary colors and renders muted legend state"
   assert.equal(colors["自定义学院"], "#123abc");
   assert.match(legendEl.innerHTML, /legend-item is-muted/);
   assert.match(legendEl.innerHTML, /title="正常显示"/);
+});
+
+test("legend color map is stable for duplicate college dictionaries regardless of order", () => {
+  const dataA = {
+    colleges: [
+      { college_code: "COL-A", college_name: "统一学院", color: "#111111", copy_id: 1 },
+      { college_code: "COL-A", college_name: "统一学院", color: "#222222", copy_id: 2 },
+      { college_code: "COL-B", college_name: "另一个学院", color: "#111111", copy_id: 1 },
+    ],
+    labs: [
+      { id: "lab-a", lab_code: "LAB-A", college: "统一学院" },
+      { id: "lab-b", lab_code: "LAB-B", college: "另一个学院" },
+    ],
+  };
+  const dataB = { ...dataA, colleges: dataA.colleges.slice().reverse() };
+
+  const colorsA = buildLegendColorMap(dataA);
+  const colorsB = buildLegendColorMap(dataB);
+
+  assert.equal(colorsA["统一学院"], colorsB["统一学院"]);
+  assert.equal(colorsA["另一个学院"], colorsB["另一个学院"]);
+  assert.notEqual(colorsA["统一学院"], colorsA["另一个学院"]);
 });
 
 test("legend-driven college highlight can mute a selected college", () => {
@@ -603,110 +654,8 @@ test("managed plan preview starts from a floor used by the selected plan", () =>
   });
 });
 
-test("business edit reads form drafts without changing save semantics", () => {
-  const formData = new Map([
-    ["selectedSpaceId", " space-1 "],
-    ["labCode", ""],
-    ["moveNote", "  "],
-    ["effectiveFrom", "2026-06-27"],
-    ["replaceConflict", "on"],
-    ["spaceCodeCorrection", "on"],
-    ["segmentCode", "EW01010101"],
-    ["frontDoor", " 101 "],
-    ["rearDoor", ""],
-    ["spaceStatus", "active"],
-    ["spaceSide", "north"],
-    ["offsetM", "12.5"],
-    ["lengthM", "8"],
-    ["widthM", "6"],
-    ["networkSegment", " 10.0.0.0/24 "],
-    ["spaceNotes", " note "],
-    ["labName", " AI Lab "],
-    ["college", " 信息学院 "],
-    ["major", " 软件工程 "],
-    ["labType", " 实验室 "],
-    ["director", " 张三 "],
-    ["labStatus", "planning"],
-    ["seatCount", "30"],
-    ["computerCount", "28"],
-  ]);
-
-  const draft = BusinessEdit.readBusinessFormDraft(formData, { id: "space-1", segment_code: "OLD" }, false);
-
-  assert.equal(draft.selectedSpaceId, "space-1");
-  assert.equal(draft.labCode, "");
-  assert.equal(draft.assignmentStatus, "Invalid");
-  assert.equal(draft.replaceConflict, true);
-  assert.equal(draft.shouldRefreshSpaceCode, true);
-  assert.deepEqual(draft.space, {
-    segment_code: "EW01010101",
-    front_door: "101",
-    rear_door: "",
-    current_status: "active",
-    side: "north",
-    offset_m: "12.5",
-    length_m: "8",
-    width_m: "6",
-    network_segment: "10.0.0.0/24",
-    notes: "note",
-  });
-  assert.deepEqual(draft.lab, {
-    lab_name: "AI Lab",
-    college: "信息学院",
-    major: "软件工程",
-    lab_type: "实验室",
-    director: "张三",
-    status: "planning",
-    seat_count: "30",
-    computer_count: "28",
-  });
-});
-
-test("business edit renders segment selector for existing editable spaces", () => {
-  global.canDeleteSpaceInActivePlan = () => false;
-  const controller = BusinessEdit.createBusinessEditor({
-    state: {},
-    els: {},
-    compare: (a, b) => String(a).localeCompare(String(b)),
-    escapeHtml: (value) => String(value ?? ""),
-    segmentTypeLabel: (type) => ({ corridor: "走廊" }[type] || type),
-    spaceStatusLabel: (status) => status,
-    sideLabel: (side) => side,
-  });
-
-  const html = controller.businessSpaceSectionHtml({
-    selectedSpace: {
-      id: "space-1",
-      segment_code: "EW1",
-      front_door: "101",
-      rear_door: "",
-      space_code: "S101",
-      current_status: "active",
-      side: "north",
-      offset_m: 0,
-      length_m: 8,
-      width_m: 6,
-      network_segment: "",
-      notes: "",
-    },
-    segmentOptions: [
-      { segment_code: "EW1", element_type: "corridor" },
-      { segment_code: "EW2", element_type: "corridor" },
-    ],
-    canEditBase: true,
-    isNewSpace: false,
-    isCorrectingSpaceCode: false,
-    canCorrectSpaceCode: true,
-    previewSpaceCode: "S101",
-  });
-
-  assert.match(html, /<select name="segmentCode"/);
-  assert.doesNotMatch(html, /<select name="segmentCode" disabled/);
-  assert.match(html, /value="EW2"/);
-});
-
-test("business edit allows admin to delete spaces in non-baseline active plans", () => {
-  assert.equal(BusinessEdit.canDeleteSpaceForActivePlan({
+test("detail actions allow admin to delete spaces in non-baseline active plans", () => {
+  assert.equal(DetailActions.canDeleteSpaceForActivePlan({
     serverMode: true,
     permissions: { canAdmin: true, canEdit: true },
     activePlan: { plan_type: "draft", is_locked: false },
@@ -715,15 +664,15 @@ test("business edit allows admin to delete spaces in non-baseline active plans",
   }), true);
 });
 
-test("business edit allows admin to delete spaces in baseline plans", () => {
-  assert.equal(BusinessEdit.canDeleteSpaceForActivePlan({
+test("detail actions allow admin to delete spaces in baseline plans", () => {
+  assert.equal(DetailActions.canDeleteSpaceForActivePlan({
     serverMode: true,
     permissions: { canAdmin: true, canEdit: true },
     activePlan: { plan_type: "baseline", is_locked: true },
     copy: null,
     canEditCopy: false,
   }), true);
-  assert.equal(BusinessEdit.canDeleteSpaceForActivePlan({
+  assert.equal(DetailActions.canDeleteSpaceForActivePlan({
     serverMode: true,
     permissions: { canAdmin: true, canEdit: true },
     activePlan: { plan_type: "baseline", is_locked: true },
@@ -732,12 +681,12 @@ test("business edit allows admin to delete spaces in baseline plans", () => {
   }), true);
 });
 
-test("business edit re-adding a deleted space clears its tombstones", () => {
+test("detail create room clears deleted space tombstones", () => {
   const dataset = {
     deleted_space_ids: ["space-old", "101", "copy:6::space-old", "copy:6::101", "copy:2::101", "space-other"],
   };
 
-  BusinessEdit.clearDeletedSpaceRefs(dataset, { id: "space-new", space_code: "101" }, ["space-old"], 6);
+  DetailActions.clearDeletedSpaceRefs(dataset, { id: "space-new", space_code: "101" }, ["space-old"], 6);
 
   assert.deepEqual(dataset.deleted_space_ids, ["copy:2::101", "space-other"]);
 });
@@ -794,6 +743,66 @@ test("copy-backed managed plan preview falls back to the source copy dataset", (
   assert.equal(result.dataset.floor_segments.length, 1);
   assert.equal(result.dataset.buildings.length, 1);
   assert.equal(result.dataset.plans[0].plan_code, "copy-3");
+});
+
+test("visible datasets keep college colors stable for visitor editor and admin", () => {
+  const db = createPlanCopyTestDb();
+  db.prepare("INSERT INTO users (id, username, role) VALUES (2, 'editor', 'editor')").run();
+  const datasetService = createDatasetServiceStubWithNormalizer();
+  datasetService.getActiveDataset().dataset = {
+    buildings: [],
+    floor_segments: [],
+    spaces: [],
+    labs: [],
+    colleges: [],
+    majors: [],
+    lab_types: [],
+    plans: [],
+    plan_assignments: [],
+    file_assets: [],
+    imports: [],
+    deleted_space_ids: [],
+  };
+  const copyDataset = (copyId, color) => ({
+    ...datasetService.getActiveDataset().dataset,
+    colleges: [
+      { id: "college-a", copy_id: copyId, college_code: "COL-A", college_name: "统一学院", color },
+      { id: "college-b", copy_id: copyId, college_code: "COL-B", college_name: "另一个学院", color: "#111111" },
+    ],
+    plans: [{ id: `copy-${copyId}`, copy_id: copyId, plan_code: `copy-${copyId}`, plan_name: `副本${copyId}` }],
+  });
+  insertPlanCopyRow(db, {
+    id: 1,
+    planCode: "copy-1",
+    planName: "公开基线",
+    visibility: "public",
+    isBaseline: true,
+    dataset: copyDataset(1, "#111111"),
+  });
+  insertPlanCopyRow(db, {
+    id: 2,
+    planCode: "copy-2",
+    planName: "公开副本",
+    visibility: "public",
+    dataset: copyDataset(2, "#222222"),
+  });
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑用户私有副本",
+    dataset: copyDataset(8, "#333333"),
+  });
+  const service = createPlanCopyService(db, datasetService);
+  const colorsFor = (user) => buildLegendColorMap(service.buildVisibleDataset(user).dataset);
+
+  const visitorColors = colorsFor(null);
+  const editorColors = colorsFor({ id: 2, username: "editor", role: "editor" });
+  const adminColors = colorsFor({ id: 1, username: "admin", role: "admin" });
+
+  assert.equal(visitorColors["统一学院"], editorColors["统一学院"]);
+  assert.equal(visitorColors["统一学院"], adminColors["统一学院"]);
+  assert.notEqual(visitorColors["统一学院"], visitorColors["另一个学院"]);
 });
 
 test("copy datasets do not reintroduce spaces marked deleted", () => {
@@ -1087,46 +1096,6 @@ test("saving copy assignments rewrites stale structural payload as copy scoped",
   assert.equal(saved.spaces[0].copy_id, 1);
 });
 
-test("raw business add space marks local copy-owned rows before saving", () => {
-  const state = {
-    editorMode: "business",
-    editorKey: "spaces",
-    permissions: { canEdit: true },
-    data: {
-      buildings: [{ building_code: "B0101" }],
-      floor_segments: [{ id: "seg-1", building_code: "B0101", floor_code: "1", segment_code: "EW1", element_type: "corridor" }],
-      spaces: [],
-      labs: [],
-      colleges: [],
-      majors: [],
-      lab_types: [],
-      plans: [{ id: "copy-2", plan_code: "copy-2", copy_id: 2 }],
-      plan_assignments: [],
-      file_assets: [],
-      imports: [],
-      deleted_space_ids: [],
-    },
-    businessEditor: {},
-  };
-  const controller = RawEditor.createRawEditor({
-    state,
-    els: { buildingSelect: { value: "B0101" }, floorSelect: { value: "1" } },
-    normalizeSpace: (row) => ({ ...row, id: row.id || row.space_code }),
-    normalizeDataset: (dataset) => dataset,
-    firstAssignableSegmentCode: () => "EW1",
-    canEditBusinessBaseData: () => true,
-    isoNow: () => "2026-06-28T00:00:00Z",
-    copyScopeForActivePlan: () => ({ copy_id: 2 }),
-    refreshStateAndRender: () => {},
-    updateStatus: () => {},
-  });
-
-  controller.addEditorRow();
-
-  assert.equal(state.data.spaces.length, 1);
-  assert.equal(state.data.spaces[0].copy_id, 2);
-});
-
 test("copy dataset save keeps newly added spaces readable only in the owning copy", () => {
   const db = createPlanCopyTestDb();
   const datasetService = createDatasetServiceStubWithNormalizer();
@@ -1192,99 +1161,6 @@ test("copy dataset save keeps newly added spaces readable only in the owning cop
 
   assert.ok(copy1.spaces.some((space) => space.id === "space-new" && Number(space.copy_id) === 1));
   assert.equal(copy2.spaces.some((space) => space.id === "space-new"), false);
-});
-
-test("business editor scrolls the selected space card into view", () => {
-  let scrolled = false;
-  const editorState = {
-    activePlanId: "copy-1",
-    selectedSpaceId: "space-2",
-    permissions: { canAdmin: true },
-    data: {
-      buildings: [{ building_code: "B0101", building_name: "测试楼" }],
-      floor_segments: [{ id: "seg-1", building_code: "B0101", floor_code: "1", segment_code: "EW1", element_type: "corridor" }],
-      spaces: [
-        { id: "space-1", building_code: "B0101", floor_code: "1", segment_code: "EW1", front_door: "101", current_status: "active" },
-        { id: "space-2", building_code: "B0101", floor_code: "1", segment_code: "EW1", front_door: "102", current_status: "active" },
-      ],
-      labs: [],
-      colleges: [],
-      majors: [],
-      lab_types: [],
-      plans: [{ id: "copy-1", plan_code: "copy-1", plan_name: "副本A" }],
-      plan_assignments: [],
-      deleted_space_ids: [],
-    },
-    businessEditor: { selectedSpaceId: "space-2" },
-  };
-  const selectedButton = {
-    dataset: { businessSpaceId: "space-2" },
-    addEventListener() {},
-    scrollIntoView(options) {
-      scrolled = options?.block === "nearest";
-    },
-  };
-  const editor = BusinessEdit.createBusinessEditor({
-    state: editorState,
-    els: {
-      buildingSelect: { value: "B0101" },
-      floorSelect: { value: "1" },
-      dataEditor: {
-        innerHTML: "",
-        querySelectorAll(selector) {
-          if (selector === "[data-business-space-id]") return [selectedButton];
-          return [];
-        },
-        querySelector(selector) {
-          if (selector === '[data-business-space-id].is-active') return selectedButton;
-          return null;
-        },
-      },
-    },
-    compare: (a, b) => String(a).localeCompare(String(b), "zh-CN", { numeric: true }),
-    normalizeBuilding: (row) => row,
-    normalizeSegment: (row) => row,
-    normalizeSpace: (row) => row,
-    normalizeLab: (row) => row,
-    normalizeAssignment: (row) => row,
-    relationMaps: () => ({}),
-    generateBuildingCode: () => "B0101",
-    generateSpaceCode: (space) => space.space_code || space.front_door,
-    generateSegmentCode: () => "EW1",
-    generateUnitCode: () => "UNIT000001",
-    isAssignableSegment: (segment) => segment.element_type === "corridor",
-    unique: (values) => [...new Set(values.filter(Boolean))],
-    escapeHtml: (value) => String(value ?? ""),
-    isoNow: () => "2026-06-28T00:00:00Z",
-    segmentTypeLabel: () => "走廊",
-    spaceStatusLabel: () => "可用",
-    sideLabel: () => "",
-    buildingByCode: () => ({ building_code: "B0101", building_name: "测试楼" }),
-    planById: () => ({ id: "copy-1", plan_code: "copy-1", plan_name: "副本A" }),
-    activePlanCopyMeta: () => ({ id: 1 }),
-    spacesForActivePlan: (plan) => PlanScope.filterRowsForPlan(editorState.data.spaces, plan),
-    floorSegmentsForActivePlan: (plan) => PlanScope.filterRowsForPlan(editorState.data.floor_segments, plan),
-    canEditPlanDataset: () => true,
-    canEditActivePlan: () => true,
-    canEditBusinessBaseData: () => true,
-    canDeleteSpaceInActivePlan: () => true,
-    assignmentRowsForPlan: () => [],
-    renderEditor() {},
-    renderApp() {},
-    refreshStateAndRender() {},
-    updateStatus() {},
-    planSelectedSpaceAction() {},
-    renovateSelectedLabAction() {},
-    syncSelectedSpace() {},
-    saveWithRollback: async () => true,
-    savePlanAssignmentsWithRollback: async () => true,
-    cloneDataset: (dataset) => JSON.parse(JSON.stringify(dataset)),
-    normalizeDataset: (dataset) => dataset,
-  });
-
-  editor.renderBusinessAssignmentEditor();
-
-  assert.equal(scrolled, true);
 });
 
 test("managed plan baseline service persists cancellation", () => {
@@ -1412,6 +1288,30 @@ test("medium viewport stacks compare plans while floor thumbnails scroll horizon
   assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.compare-column\s*\{[\s\S]*?grid-template-columns:\s*minmax\(220px,\s*280px\) minmax\(0,\s*1fr\)/);
   assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?grid-auto-flow:\s*column/);
   assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-x:\s*auto/);
+});
+
+test("data editor no longer exposes the business edit tab or script", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const rawEditorSource = fs.readFileSync(path.join(__dirname, "..", "js", "app", "raw-editor.js"), "utf8");
+
+  assert.doesNotMatch(html, /business-edit\.js/);
+  assert.doesNotMatch(appSource, />业务编辑</);
+  assert.doesNotMatch(appSource, /editorMode:\s*"business"/);
+  assert.doesNotMatch(rawEditorSource, /state\.editorMode === "business"/);
+  assert.match(rawEditorSource, /els\.addRowBtn\.textContent = "新增行"/);
+  assert.match(rawEditorSource, /els\.applyTableBtn\.textContent = "应用修改"/);
+  assert.match(rawEditorSource, /els\.downloadSheetBtn\.hidden = false/);
+});
+
+test("detail more panel closes from outside click and escape", () => {
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+
+  assert.match(appSource, /document\.addEventListener\("click",\s*handleDocumentClick/);
+  assert.match(appSource, /document\.addEventListener\("keydown",\s*handleDocumentKeydown/);
+  assert.match(appSource, /closest\("\.detail-more-wrap"\)/);
+  assert.match(appSource, /state\.detailEditor\.moreOpen = false/);
+  assert.match(appSource, /event\.key === "Escape"/);
 });
 
 test("admin details render inline edit actions and disabled split merge menu", () => {

@@ -43,7 +43,6 @@ const ImportExport = window.FloorplanApp.ImportExport;
 const Canvas = window.FloorplanApp.Canvas;
 const MoveBasket = window.FloorplanApp.MoveBasket;
 const MoveControllerModule = window.FloorplanApp.MoveController;
-const BusinessEdit = window.FloorplanApp.BusinessEdit;
 const RawEditor = window.FloorplanApp.RawEditor;
 const PlanManagement = window.FloorplanApp.PlanManagement;
 const PlanScope = window.FloorplanApp.PlanScope;
@@ -70,15 +69,9 @@ const state = {
     textRepairSourceLabel: "",
   },
   selectedSpaceId: null,
-  editorMode: "business",
-  editorKey: "spaces",
+  editorMode: "raw",
+  editorKey: "buildings",
   editorHighlight: null,
-  businessEditor: {
-    selectedAssignmentId: "",
-    selectedSpaceId: "",
-    newSpaceId: "",
-    spaceCorrectionId: "",
-  },
   activePlanId: null,
   planViewMode: "single",
   zoom: 1,
@@ -162,49 +155,6 @@ const MoveController = MoveControllerModule.createMoveController({
   saveActivePlanCopyToServer,
   saveDatasetToServer,
 });
-const BusinessEditorController = BusinessEdit.createBusinessEditor({
-  state,
-  els,
-  compare,
-  normalizeBuilding,
-  normalizeSegment,
-  normalizeSpace,
-  normalizeLab,
-  normalizeAssignment,
-  relationMaps,
-  generateBuildingCode,
-  generateSpaceCode,
-  generateSegmentCode,
-  generateUnitCode,
-  isAssignableSegment,
-  unique,
-  escapeHtml,
-  isoNow,
-  segmentTypeLabel,
-  spaceStatusLabel,
-  sideLabel,
-  buildingByCode,
-  planById,
-  activePlanCopyMeta,
-  spacesForActivePlan,
-  floorSegmentsForActivePlan,
-  canEditPlanDataset,
-  canEditActivePlan,
-  canEditBusinessBaseData,
-  canDeleteSpaceInActivePlan,
-  assignmentRowsForPlan,
-  renderEditor,
-  renderApp,
-  refreshStateAndRender,
-  updateStatus,
-  planSelectedSpaceAction,
-  renovateSelectedLabAction,
-  syncSelectedSpace,
-  saveWithRollback,
-  savePlanAssignmentsWithRollback,
-  cloneDataset,
-  normalizeDataset,
-});
 const RawEditorController = RawEditor.createRawEditor({
   state,
   els,
@@ -235,11 +185,7 @@ const RawEditorController = RawEditor.createRawEditor({
   normalizeAssignment,
   relationMaps,
   isAssignableSegment,
-  renderBusinessAssignmentEditor,
-  canEditActivePlan,
-  canEditBusinessBaseData,
   canEditEditorKey,
-  applyBusinessAssignmentForm,
   buildingByCode,
   planById,
   activePlanCopyMeta,
@@ -266,6 +212,8 @@ renderEditorTabs();
 bootstrap();
 
 function bindEvents() {
+  document.addEventListener("click", handleDocumentClick);
+  document.addEventListener("keydown", handleDocumentKeydown);
   els.packageFileInput.addEventListener("change", (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -358,6 +306,20 @@ function bindEvents() {
   els.cancelNewUnplacedLabBtn.addEventListener("click", closeNewUnplacedLabModal);
 
   window.addEventListener("resize", () => els.floorplan.classList.contains("is-fit") && Canvas.applyCanvasMode(state, els));
+}
+
+function handleDocumentClick(event) {
+  if (!state.detailEditor.moreOpen) return;
+  if (event.target && event.target.closest(".detail-more-wrap")) return;
+  state.detailEditor.moreOpen = false;
+  renderApp();
+}
+
+function handleDocumentKeydown(event) {
+  if (!state.detailEditor.moreOpen) return;
+  if (!(event.key === "Escape")) return;
+  state.detailEditor.moreOpen = false;
+  renderApp();
 }
 
 async function bootstrap() {
@@ -632,7 +594,6 @@ function handleSelectChange(event, applyChange) {
 
 function onPlanSelectorChange() {
   ensureActivePlan();
-  state.businessEditor.selectedAssignmentId = "";
   syncSelectedSpace();
   syncMoveDraft(true);
   renderEditor();
@@ -1439,21 +1400,21 @@ function renderCompareChrome() {
 }
 
 function renderEditorTabs() {
-  if (state.editorMode === "raw" && !canViewRawEditorKey(state.editorKey)) {
-    state.editorMode = "business";
-    state.editorKey = "buildings";
+  const visibleDefinitions = visibleRawEditorDefinitions();
+  if (state.editorMode !== "raw" || !canViewRawEditorKey(state.editorKey)) {
+    state.editorMode = "raw";
+    state.editorKey = visibleDefinitions[0]?.key || "buildings";
   }
-  els.editorTabs.innerHTML = [
-    `<button type="button" data-mode="business" class="${state.editorMode === "business" ? "is-active" : ""}">业务编辑</button>`,
-    ...visibleRawEditorDefinitions().map(({ key, label }) => `<button type="button" data-mode="raw" data-key="${key}" class="${state.editorMode === "raw" && state.editorKey === key ? "is-active" : ""}">${escapeHtml(label)}</button>`),
-  ].join("");
+  els.editorTabs.innerHTML = visibleDefinitions
+    .map(({ key, label }) => `<button type="button" data-mode="raw" data-key="${key}" class="${state.editorKey === key ? "is-active" : ""}">${escapeHtml(label)}</button>`)
+    .join("");
   els.editorTabs.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => {
-    const mode = button.dataset.mode === "raw" ? "raw" : "business";
+    const mode = "raw";
     const key = button.dataset.key || state.editorKey;
     if (state.editorMode === mode && state.editorKey === key) return;
     runWithUnsavedGuard(() => {
       state.editorMode = mode;
-      if (mode === "raw") state.editorKey = key;
+      state.editorKey = key;
       state.editorHighlight = null;
       renderEditorTabs();
       renderEditor();
@@ -1736,7 +1697,6 @@ function syncMoveDraft(...args) {
 function handleThumbSelect(planId, floorCode) {
   runWithUnsavedGuard(() => {
     state.activePlanId = planId;
-    state.businessEditor.selectedAssignmentId = "";
     els.floorSelect.value = floorCode;
     syncSelectedSpace();
     state.zoom = 1;
@@ -1757,12 +1717,10 @@ function handleSpaceSelect(spaceId) {
   if (spaceId === state.selectedSpaceId && state.inspectorMode === "details") return;
   runWithUnsavedGuard(() => {
     state.selectedSpaceId = spaceId;
-    state.businessEditor.selectedSpaceId = spaceId;
     state.detailsMode = "view";
     resetDetailEditorState();
     state.inspectorMode = "details";
     syncMoveDraft(true);
-    if (state.editorMode === "business") renderEditor();
     renderApp();
   });
 }
@@ -1911,8 +1869,6 @@ async function deleteDetailSpaceAction() {
     return;
   }
   state.selectedSpaceId = null;
-  state.businessEditor.selectedSpaceId = "";
-  state.businessEditor.newSpaceId = "";
   resetDetailEditorState();
   syncSelectedSpace();
   refreshStateAndRender(`${label} 已从当前方案删除。`, { stamp: false, forceMoveReset: true });
@@ -1964,8 +1920,6 @@ async function submitDetailEditAction(mode, formData) {
   state.data = normalizeDataset(state.data);
   if ((mode === "editSpace" || mode === "createSpace") && result.space?.id) {
     state.selectedSpaceId = result.space.id;
-    state.businessEditor.selectedSpaceId = result.space.id;
-    if (mode === "createSpace") state.businessEditor.newSpaceId = result.space.id;
   }
   const changeNote = mode === "editLab" ? "编辑实验室详情" : mode === "renovateRoom" ? "改建房间" : mode === "createSpace" ? "新增房间" : "编辑房间详情";
   try {
@@ -2315,7 +2269,6 @@ async function savePlaceholderLabForSpace(space, college, options = {}) {
     return;
   }
   state.selectedSpaceId = space.id;
-  state.businessEditor.selectedSpaceId = space.id;
   refreshStateAndRender(options.successMessage || "已保存规划。", { stamp: false, forceMoveReset: true });
 }
 
@@ -2593,160 +2546,77 @@ function syncEditorActionButtons(...args) {
   return RawEditorController.syncEditorActionButtons(...args);
 }
 
-function renderBusinessAssignmentEditor(...args) {
-  return BusinessEditorController.renderBusinessAssignmentEditor(...args);
+function firstAssignableSegmentCode(buildingCode, floorCode) {
+  return floorSegmentsForActivePlan().find((row) =>
+    row.building_code === buildingCode &&
+    row.floor_code === floorCode &&
+    isAssignableSegment(row)
+  )?.segment_code || "";
 }
 
-function businessSpaceSectionHtml(...args) {
-  return BusinessEditorController.businessSpaceSectionHtml(...args);
+function nextBuildingNumber() {
+  return state.data.buildings.reduce((max, building) => Math.max(max, Number(building.building_number) || 0), 0) + 1;
 }
 
-function updateSpaceCodePreview(...args) {
-  return BusinessEditorController.updateSpaceCodePreview(...args);
+function nextGeneratedBuildingDraft() {
+  const buildingNumber = nextBuildingNumber();
+  const draft = {
+    building_code: "",
+    building_name: "新增教学楼",
+    campus_zone: "下沙校区",
+    building_number: buildingNumber,
+    notes: "",
+  };
+  draft.building_code = generateBuildingCode(draft);
+  return draft;
 }
 
-function currentFloorSpaces(...args) {
-  return BusinessEditorController.currentFloorSpaces(...args);
+function nextSegmentCodeForDraft(draft, building = buildingByCode(draft.building_code)) {
+  return generateSegmentCode(draft, building || { building_code: draft.building_code }, state.data.floor_segments);
 }
 
-function currentFloorSegments(...args) {
-  return BusinessEditorController.currentFloorSegments(...args);
+function nextUnitCode() {
+  return generateUnitCode(state.data.labs);
 }
 
-function currentAssignableSegments(...args) {
-  return BusinessEditorController.currentAssignableSegments(...args);
+function activeCollegeOptions() {
+  return (state.data.colleges || [])
+    .filter((row) => row.status !== "inactive")
+    .slice()
+    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || compare(a.college_name, b.college_name));
 }
 
-function firstAssignableSegmentCode(...args) {
-  return BusinessEditorController.firstAssignableSegmentCode(...args);
+function activeMajorOptions(collegeName = "") {
+  const college = activeCollegeOptions().find((row) => row.college_name === collegeName || row.college_code === collegeName) || null;
+  const collegeCode = college?.college_code || collegeName;
+  return (state.data.majors || [])
+    .filter((row) => row.status !== "inactive")
+    .filter((row) => !collegeCode || row.college_code === collegeCode)
+    .slice()
+    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || compare(a.major_name, b.major_name));
 }
 
-function nextBuildingNumber(...args) {
-  return BusinessEditorController.nextBuildingNumber(...args);
+function activeLabTypeOptions() {
+  return (state.data.lab_types || [])
+    .filter((row) => row.status !== "inactive")
+    .slice()
+    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || compare(a.type_name, b.type_name));
 }
 
-function nextGeneratedBuildingDraft(...args) {
-  return BusinessEditorController.nextGeneratedBuildingDraft(...args);
+function doorRangeLabel(space) {
+  const frontDoor = String(space?.front_door || "").trim();
+  const rearDoor = String(space?.rear_door || "").trim();
+  if (frontDoor && rearDoor && frontDoor !== rearDoor) return `${frontDoor}-${rearDoor}`;
+  return frontDoor || rearDoor || "";
 }
 
-function nextSegmentCodeForDraft(...args) {
-  return BusinessEditorController.nextSegmentCodeForDraft(...args);
-}
-
-function nextUnitCode(...args) {
-  return BusinessEditorController.nextUnitCode(...args);
-}
-
-function applySpaceCodeRefresh(...args) {
-  return BusinessEditorController.applySpaceCodeRefresh(...args);
-}
-
-function refreshSpaceCode(...args) {
-  return BusinessEditorController.refreshSpaceCode(...args);
-}
-
-function ensureBusinessSpaceSelection(...args) {
-  return BusinessEditorController.ensureBusinessSpaceSelection(...args);
-}
-
-function businessSpaceCard(...args) {
-  return BusinessEditorController.businessSpaceCard(...args);
-}
-
-function businessLabOptions(...args) {
-  return BusinessEditorController.businessLabOptions(...args);
-}
-
-function assignedLabCodesForOtherSpaces(...args) {
-  return BusinessEditorController.assignedLabCodesForOtherSpaces(...args);
-}
-
-function activeCollegeOptions(...args) {
-  return BusinessEditorController.activeCollegeOptions(...args);
-}
-
-function activeMajorOptions(...args) {
-  return BusinessEditorController.activeMajorOptions(...args);
-}
-
-function activeLabTypeOptions(...args) {
-  return BusinessEditorController.activeLabTypeOptions(...args);
-}
-
-function selectOptionsWithBlank(...args) {
-  return BusinessEditorController.selectOptionsWithBlank(...args);
-}
-
-function majorOptionsForCollege(...args) {
-  return BusinessEditorController.majorOptionsForCollege(...args);
-}
-
-function businessDoorRangeLabel(...args) {
-  return BusinessEditorController.businessDoorRangeLabel(...args);
-}
-
-function renderBusinessLabPreview(...args) {
-  return BusinessEditorController.renderBusinessLabPreview(...args);
-}
-
-function renderBusinessMajorOptions(...args) {
-  return BusinessEditorController.renderBusinessMajorOptions(...args);
-}
-
-function spaceDisplayName(...args) {
-  return BusinessEditorController.spaceDisplayName(...args);
-}
-
-function labNameByCode(...args) {
-  return BusinessEditorController.labNameByCode(...args);
-}
-
-function businessStatusLabel(...args) {
-  return BusinessEditorController.businessStatusLabel(...args);
-}
-
-function labStatusLabel(...args) {
-  return BusinessEditorController.labStatusLabel(...args);
-}
-
-function normalizeBusinessAssignmentStatus(...args) {
-  return BusinessEditorController.normalizeBusinessAssignmentStatus(...args);
-}
-
-function assignedAssignmentForSpace(...args) {
-  return BusinessEditorController.assignedAssignmentForSpace(...args);
-}
-
-function deriveBusinessSpaceStatus(...args) {
-  return BusinessEditorController.deriveBusinessSpaceStatus(...args);
+function spaceDisplayName(space) {
+  const building = buildingByCode(space?.building_code);
+  return `${building?.building_name || space?.building_code || "-"} ${space?.floor_code || "-"}层 ${doorRangeLabel(space) || space?.space_code || "-"}`;
 }
 
 function clearDeletedSpaceRefs(...args) {
-  return BusinessEditorController.clearDeletedSpaceRefs(...args);
-}
-
-function canEditBusinessBaseData(...args) {
-  return BusinessEditorController.canEditBusinessBaseData(...args);
-}
-
-function canDeleteSpaceInActivePlan(...args) {
-  return BusinessEditorController.canDeleteSpaceInActivePlan(...args);
-}
-
-function canDeleteLabInActivePlan(...args) {
-  return BusinessEditorController.canDeleteLabInActivePlan(...args);
-}
-
-function deleteSelectedBusinessLab(...args) {
-  return BusinessEditorController.deleteSelectedBusinessLab(...args);
-}
-
-function markSelectedBusinessSpaceUnavailable(...args) {
-  return BusinessEditorController.markSelectedBusinessSpaceUnavailable(...args);
-}
-
-function applyBusinessAssignmentForm(...args) {
-  return BusinessEditorController.applyBusinessAssignmentForm(...args);
+  return DetailActions.clearDeletedSpaceRefs(...args);
 }
 
 function segmentTypeLabel(type) {
@@ -2783,7 +2653,7 @@ function canEditBusinessBaseData() {
 
 function canDeleteSpaceInActivePlan() {
   const copy = activePlanCopyMeta();
-  return BusinessEdit.canDeleteSpaceForActivePlan({
+  return DetailActions.canDeleteSpaceForActivePlan({
     serverMode: state.serverMode,
     permissions: state.permissions,
     activePlan: planById(state.activePlanId),

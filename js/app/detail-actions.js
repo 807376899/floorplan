@@ -64,6 +64,27 @@
     return (rows || []).findIndex(matchesIdentity);
   }
 
+  function canDeleteSpaceForActivePlan(options) {
+    const { serverMode, permissions = {}, activePlan = null, copy = null, canEditCopy = false } = options || {};
+    if (!serverMode) return Boolean(permissions.canEdit);
+    if (copy) return Boolean(canEditCopy && (!copy.isBaseline || permissions.canAdmin));
+    return Boolean(permissions.canAdmin && activePlan);
+  }
+
+  function clearDeletedSpaceRefs(dataset, space, extraRefs = [], copyId = null) {
+    if (!dataset || !Array.isArray(dataset.deleted_space_ids)) return;
+    const baseRefs = [
+      space?.id,
+      space?.space_code,
+      ...extraRefs,
+    ].filter(Boolean).map((value) => String(value));
+    const refs = new Set(baseRefs);
+    if (copyId) {
+      baseRefs.forEach((value) => refs.add(`copy:${copyId}::${value}`));
+    }
+    dataset.deleted_space_ids = dataset.deleted_space_ids.filter((value) => !refs.has(String(value)));
+  }
+
   function applyDetailLabEdit(dataset, context, rawDraft, deps = {}) {
     const draft = formDataToDraft(rawDraft);
     const labIndex = matchingRowIndex(dataset.labs || [], context.lab, ["id", "lab_code"], deps);
@@ -291,6 +312,8 @@
     monthToEffectiveDate,
     effectiveDateToMonth,
     formDataToDraft,
+    canDeleteSpaceForActivePlan,
+    clearDeletedSpaceRefs,
     applyDetailLabEdit,
     applyDetailRenovation,
     applyDetailSpaceEdit,

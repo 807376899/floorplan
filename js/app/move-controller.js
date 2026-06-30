@@ -226,7 +226,6 @@
       populateFloorOptions();
       els.floorSelect.value = space.floor_code;
       state.selectedSpaceId = space.id;
-      state.businessEditor.selectedSpaceId = space.id;
       state.zoom = 1;
       renderEditor();
       renderApp();
@@ -477,7 +476,6 @@
       state.data.plan_assignments = MoveBasket.applyBasketTargets(state.data.plan_assignments, [targetItem], moveBasketNormalizeAssignment);
       state.data = normalizeDataset(state.data);
       state.selectedSpaceId = space.id;
-      state.businessEditor.selectedSpaceId = space.id;
       state.detailsMode = "view";
       state.inspectorMode = "details";
       renderEditor();
@@ -523,7 +521,6 @@
       };
       if (!state.moveBasket.items.length) state.moveBasket.isOpen = false;
       state.selectedSpaceId = space.id;
-      state.businessEditor.selectedSpaceId = space.id;
       renderEditor();
       renderApp();
       updateStatus(`正在将 ${item.labName} 落位到 ${spaceDisplayName(space)}...`);

@@ -37,11 +37,7 @@
       normalizeAssignment,
       relationMaps,
       isAssignableSegment,
-      renderBusinessAssignmentEditor,
-      canEditActivePlan,
-      canEditBusinessBaseData,
       canEditEditorKey,
-      applyBusinessAssignmentForm,
       buildingByCode,
       planById,
       activePlanCopyMeta,
@@ -65,11 +61,6 @@
 
     function renderEditor() {
       syncEditorActionButtons();
-      els.dataEditor.classList.toggle("is-business-mode", state.editorMode === "business");
-      if (state.editorMode === "business") {
-        renderBusinessAssignmentEditor();
-        return;
-      }
       const definition = DATASETS.find((item) => item.key === state.editorKey);
       const rows = editorRows();
       const highlightRowId = state.editorHighlight?.key === state.editorKey ? state.editorHighlight.rowId : "";
@@ -223,18 +214,6 @@
     }
     
     function syncEditorActionButtons() {
-      if (state.editorMode === "business") {
-        const canEditAssignment = canEditActivePlan();
-        const canEditBase = canEditBusinessBaseData();
-        els.addRowBtn.textContent = "新增空间";
-        els.applyTableBtn.textContent = "保存当前空间";
-        els.addRowBtn.hidden = !state.permissions.canEdit;
-        els.applyTableBtn.hidden = !state.permissions.canEdit;
-        els.addRowBtn.disabled = !canEditBase;
-        els.applyTableBtn.disabled = !(canEditAssignment || canEditBase);
-        els.downloadSheetBtn.hidden = true;
-        return;
-      }
       els.addRowBtn.textContent = "新增行";
       els.applyTableBtn.textContent = "应用修改";
       els.addRowBtn.hidden = !state.permissions.canEdit;
@@ -584,43 +563,6 @@
     }
     
     function addEditorRow() {
-      if (state.editorMode === "business") {
-        if (!canEditBusinessBaseData()) {
-          updateStatus("只有管理员可以新增当前楼层空间。");
-          return;
-        }
-        const now = isoNow();
-        const buildingCode = els.buildingSelect.value || state.data.buildings[0]?.building_code || "B01";
-        const floorCode = els.floorSelect.value || "1";
-        const segmentCode = firstAssignableSegmentCode(buildingCode, floorCode);
-        if (!segmentCode) {
-          updateStatus("当前楼层没有可绑定空间的走廊段，请先新增走廊骨架。");
-          return;
-        }
-        const space = normalizeSpace({
-          ...(typeof copyScopeForActivePlan === "function" ? copyScopeForActivePlan() : {}),
-          space_code: `PENDING-${Date.now()}`,
-          building_code: buildingCode,
-          floor_code: floorCode,
-          segment_code: segmentCode,
-          offset_m: 0,
-          side: "south",
-          front_door: "新空间",
-          rear_door: "",
-          length_m: 8,
-          width_m: 6,
-          network_segment: "",
-          current_status: "active",
-          created_at: now,
-        });
-        state.data.spaces.push(space);
-        state.data = normalizeDataset(state.data);
-        state.businessEditor.selectedSpaceId = space.id;
-        state.businessEditor.newSpaceId = space.id;
-        state.selectedSpaceId = space.id;
-        refreshStateAndRender("已新增当前楼层空间，请完善右侧业务信息后保存。", { stamp: false, forceMoveReset: true });
-        return;
-      }
       if (!canEditEditorKey(state.editorKey)) {
         updateStatus("当前账号没有编辑权限。");
         return;
@@ -672,10 +614,6 @@
     }
     
     async function applyEditorRows() {
-      if (state.editorMode === "business") {
-        await applyBusinessAssignmentForm();
-        return;
-      }
       if (!canEditEditorKey(state.editorKey)) {
         updateStatus("当前账号没有编辑权限。");
         return;
@@ -725,10 +663,6 @@
     }
     
     function downloadEditorData() {
-      if (state.editorMode === "business") {
-        updateStatus("业务编辑不需要导出；请切换到原始表格后导出当前表。");
-        return;
-      }
       ImportExport.downloadCurrentSheet(state, editorRows, updateStatus);
     }
     

@@ -24,17 +24,72 @@
     const labs = Array.isArray(dataOrLabs) ? dataOrLabs : dataOrLabs?.labs || [];
     const colleges = Array.isArray(dataOrLabs) ? maybeColleges : dataOrLabs?.colleges || [];
     const colors = {};
-    colleges.forEach((college) => {
-      const color = normalizeColor(college.color || college.color_hex);
+    const used = new Set();
+    canonicalCollegeColors(colleges).forEach(({ rows, color }) => {
       if (!color) return;
-      if (college.college_name) colors[college.college_name] = color;
-      if (college.college_code) colors[college.college_code] = color;
+      used.add(color);
+      rows.forEach((college) => {
+        if (college.college_name) colors[college.college_name] = color;
+        if (college.college_code) colors[college.college_code] = color;
+      });
     });
-    unique(labs.map((row) => row.college)).forEach((value, index) => {
+    unique(labs.map((row) => row.college)).sort(compare).forEach((value, index) => {
       if (!value || colors[value]) return;
-      colors[value] = COLORS[index % COLORS.length];
+      const color = nextFallbackColor(index, value, used);
+      used.add(color);
+      colors[value] = color;
     });
     return colors;
+  }
+
+  function canonicalCollegeColors(colleges) {
+    const groups = new Map();
+    (colleges || []).forEach((college) => {
+      const key = collegeSemanticKey(college);
+      if (!key) return;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(college);
+    });
+    const used = new Set();
+    return [...groups.keys()].sort(compare).map((key, index) => {
+      const rows = groups.get(key);
+      const preferred = preferredCollegeColor(rows);
+      const color = preferred && !used.has(preferred)
+        ? preferred
+        : nextFallbackColor(index, key, used);
+      used.add(color);
+      return { rows, color };
+    });
+  }
+
+  function collegeSemanticKey(college) {
+    return String(college?.college_code || college?.college_name || college?.id || "").trim();
+  }
+
+  function preferredCollegeColor(rows = []) {
+    return rows
+      .slice()
+      .sort((a, b) => {
+        const aScoped = a.copy_id || a.copyId ? 1 : 0;
+        const bScoped = b.copy_id || b.copyId ? 1 : 0;
+        return aScoped - bScoped ||
+          Number(a.copy_id || a.copyId || 0) - Number(b.copy_id || b.copyId || 0) ||
+          Number(a.sort_order || 0) - Number(b.sort_order || 0) ||
+          compare(a.college_name || a.college_code || "", b.college_name || b.college_code || "") ||
+          compare(a.color || a.color_hex || "", b.color || b.color_hex || "");
+      })
+      .map((row) => normalizeColor(row.color || row.color_hex))
+      .find(Boolean) || "";
+  }
+
+  function nextFallbackColor(index, seed, usedColors) {
+    const used = new Set([...usedColors].map(normalizeColor).filter(Boolean));
+    const start = Math.abs(String(seed || "").split("").reduce((sum, char) => sum + char.charCodeAt(0), index));
+    for (let offset = 0; offset < COLORS.length; offset += 1) {
+      const color = COLORS[(start + offset) % COLORS.length];
+      if (!used.has(color)) return color;
+    }
+    return COLORS[index % COLORS.length];
   }
 
   function renderLegend(legendEl, data, colors, activePlanId, mutedColleges = new Set()) {

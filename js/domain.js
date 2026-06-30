@@ -656,15 +656,46 @@
   }
 
   function assignCollegeColors(colleges) {
+    const groups = new Map();
+    colleges.forEach((college) => {
+      const key = collegeSemanticKey(college);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(college);
+    });
     const used = new Set();
-    return colleges.map((college, index) => {
-      const preferred = normalizeColor(college.color || college.color_hex);
+    const canonical = new Map();
+    [...groups.keys()].sort(compare).forEach((key, index) => {
+      const preferred = preferredCollegeColor(groups.get(key));
       const color = preferred && !used.has(preferred)
         ? preferred
-        : nextCollegeColor(index, college.college_name || college.college_code, used);
+        : nextCollegeColor(index, key, used);
       used.add(color);
-      return { ...college, color };
+      canonical.set(key, color);
     });
+    return colleges.map((college) => ({
+      ...college,
+      color: canonical.get(collegeSemanticKey(college)) || nextCollegeColor(0, college.college_name || college.college_code, used),
+    }));
+  }
+
+  function collegeSemanticKey(college) {
+    return String(college?.college_code || college?.college_name || college?.id || "").trim();
+  }
+
+  function preferredCollegeColor(rows = []) {
+    return rows
+      .slice()
+      .sort((a, b) => {
+        const aScoped = a.copy_id || a.copyId ? 1 : 0;
+        const bScoped = b.copy_id || b.copyId ? 1 : 0;
+        return aScoped - bScoped ||
+          Number(a.copy_id || a.copyId || 0) - Number(b.copy_id || b.copyId || 0) ||
+          Number(a.sort_order || 0) - Number(b.sort_order || 0) ||
+          compare(a.college_name || a.college_code || "", b.college_name || b.college_code || "") ||
+          compare(a.color || a.color_hex || "", b.color || b.color_hex || "");
+      })
+      .map((row) => normalizeColor(row.color || row.color_hex))
+      .find(Boolean) || "";
   }
 
   function normalizeCollege(row) {
