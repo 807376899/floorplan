@@ -491,6 +491,48 @@ async function saveDatasetToServer(changeNote) {
   return true;
 }
 
+function plainObjectFromFormData(formData) {
+  if (!formData || typeof formData.entries !== "function") return { ...(formData || {}) };
+  return Object.fromEntries(formData.entries());
+}
+
+function detailActionName(mode) {
+  if (mode === "editLab") return "editLab";
+  if (mode === "renovateRoom") return "renovateRoom";
+  if (mode === "createSpace") return "createSpace";
+  if (mode === "editSpace") return "editSpace";
+  if (mode === "deleteSpace") return "deleteSpace";
+  return mode;
+}
+
+async function submitDetailActionToServer(mode, formData, selectedSpace, changeNote) {
+  if (!state.serverMode) return null;
+  const activeCopy = activePlanCopyMeta();
+  const endpoint = activeCopy && canEditPlanDataset(activeCopy)
+    ? `/api/plan-copies/${activeCopy.id}/detail-actions`
+    : "/api/dataset/active/detail-actions";
+  const expectedRevision = activeCopy && canEditPlanDataset(activeCopy) ? activeCopy.revision : state.serverRevision;
+  const payload = await fetchJson(endpoint, {
+    method: "POST",
+    body: JSON.stringify({
+      action: detailActionName(mode),
+      expectedRevision,
+      planCode: activePlan()?.plan_code || activePlan()?.id || "",
+      buildingCode: els.buildingSelect?.value || getSelectedContext().building?.building_code || "",
+      floorCode: els.floorSelect?.value || getSelectedContext().floorCode || "",
+      selectedSpace: selectedSpace ? { id: selectedSpace.id, space_code: selectedSpace.space_code } : null,
+      form: plainObjectFromFormData(formData),
+      changeNote,
+    }),
+  });
+  state.serverRevision = payload.revision;
+  state.planCopies = payload.planCopies || [];
+  state.data = normalizeDataset(payload.dataset);
+  if (payload.maintenance) state.maintenance = payload.maintenance;
+  persistDataset();
+  return payload;
+}
+
 async function saveActivePlanCopyToServer() {
   if (!state.serverMode) return true;
   const activePlan = planById(state.activePlanId);
@@ -1851,6 +1893,19 @@ async function deleteDetailSpaceAction() {
   }
   const label = context.space.front_door || context.space.space_code;
   if (!window.confirm(`确认从当前方案删除房间“${label}”？相关落位会标记为失效，实验室资料会保留。`)) return;
+  if (state.serverMode) {
+    try {
+      await submitDetailActionToServer("deleteSpace", {}, context.space, "删除房间");
+    } catch (error) {
+      updateStatus(`删除房间失败：${error.message}`);
+      return;
+    }
+    state.selectedSpaceId = null;
+    resetDetailEditorState();
+    syncSelectedSpace();
+    refreshStateAndRender(`${label} 已从当前方案删除。`, { stamp: false, forceMoveReset: true });
+    return;
+  }
   const previousData = cloneDataset(state.data);
   const previousRevision = state.serverRevision;
   const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
@@ -1893,6 +1948,31 @@ async function submitDetailEditAction(mode, formData) {
   const previousRevision = state.serverRevision;
   const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
   const draft = DetailActions.formDataToDraft(formData);
+  const changeNote = mode === "editLab" ? "编辑实验室详情" : mode === "renovateRoom" ? "改建房间" : mode === "createSpace" ? "新增房间" : "编辑房间详情";
+  if (state.serverMode) {
+    try {
+      await submitDetailActionToServer(mode, formData, context.space, changeNote);
+    } catch (error) {
+      state.detailEditor = { ...state.detailEditor, draft, errors: { form: `${changeNote}失败：${error.message}` } };
+      renderApp();
+      updateStatus(`${changeNote}失败：${error.message}`);
+      return;
+    }
+    if (mode === "createSpace") {
+      const created = spacesForActivePlan().find((space) =>
+        space.front_door === String(draft.frontDoor || "").trim() &&
+        space.segment_code === String(draft.segmentCode || "").trim() &&
+        space.building_code === (getSelectedContext().building?.building_code || space.building_code)
+      );
+      if (created?.id) state.selectedSpaceId = created.id;
+    } else if ((mode === "editSpace" || mode === "createSpace") && context.space?.id) {
+      state.selectedSpaceId = context.space.id;
+    }
+    resetDetailEditorState();
+    syncSelectedSpace();
+    refreshStateAndRender(`${changeNote}已保存。`, { stamp: false, forceMoveReset: true });
+    return;
+  }
   const deps = {
     normalizeLab,
     normalizeSpace,
@@ -1921,13 +2001,12 @@ async function submitDetailEditAction(mode, formData) {
   if ((mode === "editSpace" || mode === "createSpace") && result.space?.id) {
     state.selectedSpaceId = result.space.id;
   }
-  const changeNote = mode === "editLab" ? "编辑实验室详情" : mode === "renovateRoom" ? "改建房间" : mode === "createSpace" ? "新增房间" : "编辑房间详情";
   try {
     await saveDatasetToServer(changeNote);
   } catch (error) {
+    state.planCopies = previousCopies;
     state.data = normalizeDataset(previousData);
     state.serverRevision = previousRevision;
-    state.planCopies = previousCopies;
     state.detailEditor = { ...state.detailEditor, draft, errors: { form: `${changeNote}失败：${error.message}` } };
     renderEditor();
     renderApp();

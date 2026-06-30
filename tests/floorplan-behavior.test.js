@@ -7,6 +7,7 @@ const { DatabaseSync } = require("node:sqlite");
 const { createDatasetService } = require("../server/dataset-service");
 const { compactVisibleDataset, createPlanCopyService } = require("../server/plan-copy-service");
 const DatasetProjection = require("../server/dataset-projection-service");
+const { createDetailActionService } = require("../server/detail-action-service");
 const RelationalStore = require("../server/relational-store");
 const { colorMap: buildLegendColorMap, renderLegend: renderLegendOnly } = require("../js/app/legend-colors");
 const { createRenderThumbList } = require("../js/app/thumbnails");
@@ -1135,6 +1136,248 @@ test("visible dataset read path uses relational projection when legacy json is e
   assert.deepEqual(visible.deleted_space_ids, ["copy:8::00101010101"]);
 });
 
+test("copy detail edit lab writes a plan lab override and returns projected data", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: null,
+    assignments: [],
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const detailService = createDetailActionService(db, datasetService);
+
+  const result = detailService.submitCopyDetailAction(8, {
+    expectedRevision: 1,
+    planCode: "copy-8",
+    action: "editLab",
+    selectedSpace: { space_code: "00101010202" },
+    form: {
+      labName: "关系实验室-副本编辑",
+      college: "关系学院",
+      major: "关系专业",
+      director: "李四",
+      seatCount: "42",
+      computerCount: "21",
+      renovationMonth: "2026-07",
+    },
+  }, { id: 2, username: "editor", role: "editor" });
+
+  const override = db.prepare("SELECT payload_json FROM plan_lab_overrides WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'").get();
+  const payload = JSON.parse(override.payload_json);
+  assert.equal(payload.lab_name, "关系实验室-副本编辑");
+  assert.equal(Number(payload.copy_id), 8);
+  assert.equal(db.prepare("SELECT lab_name FROM labs WHERE lab_code = 'UNIT000001'").get().lab_name, "关系实验室");
+  assert.equal(db.prepare("SELECT effective_from FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'").get().effective_from, "2026-07-01");
+  assert.equal(result.copyRevision, 2);
+  assert.ok(result.dataset.labs.some((row) => Number(row.copy_id) === 8 && row.lab_name === "关系实验室-副本编辑"));
+});
+
+test("copy detail delete writes tombstones and invalidates only the current plan assignment", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: null,
+    assignments: [],
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const detailService = createDetailActionService(db, datasetService);
+
+  const result = detailService.submitCopyDetailAction(8, {
+    expectedRevision: 1,
+    planCode: "copy-8",
+    action: "deleteSpace",
+    selectedSpace: { space_code: "00101010202" },
+    form: {},
+  }, { id: 2, username: "editor", role: "editor" });
+
+  const tombstones = db.prepare("SELECT space_code FROM plan_deleted_spaces WHERE plan_id = 'copy-8' ORDER BY space_code").all().map((row) => row.space_code);
+  assert.ok(tombstones.includes("00101010202"));
+  const assignment = db.prepare("SELECT assignment_status, space_code, previous_space_code FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'").get();
+  assert.equal(assignment.assignment_status, "Invalid");
+  assert.equal(assignment.space_code, "");
+  assert.equal(assignment.previous_space_code, "00101010202");
+  assert.equal(db.prepare("SELECT assignment_status FROM plan_assignments WHERE plan_id = 'copy-1' AND lab_code = 'UNIT000001'").get().assignment_status, "assigned");
+  assert.ok(result.dataset.deleted_space_ids.includes("copy:8::00101010202"));
+});
+
+test("copy detail create room writes only a plan space override", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: null,
+    assignments: [],
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const detailService = createDetailActionService(db, datasetService);
+
+  const result = detailService.submitCopyDetailAction(8, {
+    expectedRevision: 1,
+    planCode: "copy-8",
+    action: "createSpace",
+    buildingCode: "B0101",
+    floorCode: "1",
+    selectedSpace: null,
+    form: {
+      frontDoor: "303",
+      rearDoor: "",
+      segmentCode: "EW01010101",
+      side: "north",
+      offsetM: "12",
+      lengthM: "7",
+      widthM: "5",
+      areaM2: "",
+      networkSegment: "10.8.3.0/24",
+      currentStatus: "active",
+    },
+  }, { id: 2, username: "editor", role: "editor" });
+
+  const override = db.prepare("SELECT payload_json FROM plan_space_overrides WHERE plan_id = 'copy-8' AND space_code = '00101010303'").get();
+  const payload = JSON.parse(override.payload_json);
+  assert.equal(Number(payload.copy_id), 8);
+  assert.equal(payload.area_m2, 35);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spaces WHERE space_code = '00101010303'").get().count, 0);
+  assert.ok(result.dataset.spaces.some((row) => Number(row.copy_id) === 8 && row.space_code === "00101010303"));
+});
+
+test("copy detail renovation invalidates the old assignment and binds a new copy-scoped lab", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: null,
+    assignments: [],
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const detailService = createDetailActionService(db, datasetService);
+
+  detailService.submitCopyDetailAction(8, {
+    expectedRevision: 1,
+    planCode: "copy-8",
+    action: "renovateRoom",
+    selectedSpace: { space_code: "00101010202" },
+    form: {
+      labName: "待改建房间",
+      college: "关系学院",
+      major: "关系专业",
+      director: "王五",
+      seatCount: "12",
+      computerCount: "6",
+      renovationMonth: "2026-08",
+    },
+  }, { id: 2, username: "editor", role: "editor" });
+
+  const assignments = db.prepare("SELECT lab_code, space_code, previous_space_code, assignment_status, effective_from FROM plan_assignments WHERE plan_id = 'copy-8' ORDER BY lab_code").all();
+  assert.deepEqual(assignments.map((row) => row.assignment_status).sort(), ["Invalid", "assigned"]);
+  assert.ok(assignments.some((row) => row.lab_code === "UNIT000001" && row.assignment_status === "Invalid" && row.previous_space_code === "00101010202"));
+  assert.ok(assignments.some((row) => row.lab_code === "UNIT000002" && row.assignment_status === "assigned" && row.space_code === "00101010202" && row.effective_from === "2026-08-01"));
+  const override = JSON.parse(db.prepare("SELECT payload_json FROM plan_lab_overrides WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000002'").get().payload_json);
+  assert.equal(override.lab_name, "待改建房间");
+  assert.equal(Number(override.copy_id), 8);
+});
+
+test("active detail edit space updates global spaces through the active revision path", () => {
+  const initial = createDatasetServiceStubWithNormalizer().getActiveDataset().dataset;
+  const activeDataset = {
+    ...initial,
+    buildings: [{ id: "B0101", building_code: "B0101", building_name: "基线楼", campus_zone: "下沙校区", building_number: 1 }],
+    floor_segments: [{ id: "B0101__1__EW01010101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", element_type: "corridor" }],
+    spaces: [{ id: "SPACE-101", space_code: "00101010101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "101", rear_door: "", length_m: 8, width_m: 6, area_m2: 48, current_status: "active" }],
+    labs: [],
+    plans: [{ id: "PLAN001", plan_code: "PLAN001", plan_name: "基线", plan_type: "baseline" }],
+    plan_assignments: [],
+  };
+  const db = createActiveDatasetTestDb(activeDataset);
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  datasetService.saveActiveDataset(datasetService.normalizeIncomingDataset(activeDataset), "system", { expectedRevision: 1 });
+  const detailService = createDetailActionService(db, datasetService);
+
+  const result = detailService.submitActiveDetailAction({
+    expectedRevision: 2,
+    planCode: "PLAN001",
+    action: "editSpace",
+    selectedSpace: { space_code: "00101010101" },
+    form: {
+      frontDoor: "104",
+      rearDoor: "",
+      segmentCode: "EW01010101",
+      side: "south",
+      offsetM: "2",
+      lengthM: "9",
+      widthM: "5",
+      areaM2: "",
+      networkSegment: "10.1.4.0/24",
+      currentStatus: "active",
+    },
+  }, { id: 1, username: "admin", role: "admin" });
+
+  assert.equal(result.revision, 3);
+  assert.equal(db.prepare("SELECT network_segment FROM spaces WHERE space_code = '00101010404'").get().network_segment, "10.1.4.0/24");
+  assert.ok(result.dataset.spaces.some((row) => row.space_code === "00101010404" && row.area_m2 === 45));
+});
+
+test("copy detail action revision conflicts do not write relation rows or legacy snapshots", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: null,
+    assignments: [],
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const detailService = createDetailActionService(db, datasetService);
+
+  assert.throws(() => detailService.submitCopyDetailAction(8, {
+    expectedRevision: 0,
+    planCode: "copy-8",
+    action: "editSpace",
+    selectedSpace: { space_code: "00101010202" },
+    form: { frontDoor: "203", rearDoor: "", segmentCode: "EW01010101", side: "north", lengthM: "8", widthM: "6" },
+  }, { id: 2, username: "editor", role: "editor" }), /当前方案已被更新/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_space_overrides WHERE plan_id = 'copy-8' AND space_code = '00101020303'").get().count, 0);
+  assert.equal(db.prepare("SELECT dataset_json FROM plan_copies WHERE id = 8").get().dataset_json, null);
+});
+
 test("copy datasets do not reintroduce spaces marked deleted", () => {
   const db = createPlanCopyTestDb();
   const datasetService = createDatasetServiceStub();
@@ -1643,6 +1886,14 @@ test("detail more panel closes from outside click and escape", () => {
   assert.match(appSource, /closest\("\.detail-more-wrap"\)/);
   assert.match(appSource, /state\.detailEditor\.moreOpen = false/);
   assert.match(appSource, /event\.key === "Escape"/);
+});
+
+test("detail actions submit through action endpoints instead of full dataset save", () => {
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+
+  assert.match(appSource, /submitDetailActionToServer/);
+  assert.match(appSource, /\/detail-actions/);
+  assert.doesNotMatch(appSource, /await saveDatasetToServer\(changeNote\);\s*\n\s*}\s*catch \(error\) \{\s*\n\s*state\.data = normalizeDataset\(previousData\);/);
 });
 
 test("admin details render inline edit actions and disabled split merge menu", () => {

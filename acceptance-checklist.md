@@ -154,6 +154,9 @@
 - [ ] `/api/bootstrap`, `/api/dataset/active`, and save responses can return a complete visible dataset from relation-only rows when legacy business JSON is empty.
 - [ ] Relational projection preserves plan visibility rules: visitors see public/baseline plans, editor users also see their own private plans, and admin users see every non-deleted plan.
 - [ ] Legacy JSON is synchronized into relational tables as fallback on read, but relation rows are the returned visible dataset authority after synchronization.
+- [ ] 详情栏编辑实验室、改建房间、新增房间、编辑房间和删除房间通过动作级 API 保存，不从前端回传整包可见 dataset 覆盖保存。
+- [ ] 详情栏 copy 方案写入优先更新 `plan_space_overrides`、`plan_lab_overrides`、`plan_assignments` 和 `plan_deleted_spaces`；新增 copy 房间不写入全局 `spaces` 基准表。
+- [ ] 详情栏保存成功后由关系表投影刷新可见 dataset；保存失败或 revision 冲突时不更新关系表，也不更新 legacy JSON 快照。
 - [ ] Admin viewing multiple plans sees each teaching building only once in the raw teaching-building table, even when several visible plan copies contain that building in legacy JSON payloads.
 - [ ] Saving active raw maintenance data immediately updates relational global reference tables for buildings, floor skeletons, colleges, majors, and use types.
 - [ ] Spaces, use units, assignments, and deleted-space tombstones remain plan-scoped so editing or deleting a room in one non-baseline copy does not affect other plans.
