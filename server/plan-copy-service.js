@@ -1,5 +1,6 @@
 const { httpError, nowIso, toBoolean } = require("./http-utils");
 const RelationalStore = require("./relational-store");
+const DatasetProjection = require("./dataset-projection-service");
 
 function createPlanCopyService(db, datasetService) {
   const COPY_SCOPED_KEYS = ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "file_assets"];
@@ -178,7 +179,7 @@ function createPlanCopyService(db, datasetService) {
     for (const copy of copies.slice().reverse()) mergeCopyDataset(dataset, copy, latestBaselineCode);
     const visibleDataset = compactVisibleDataset(datasetService.normalizeIncomingDataset(dataset));
     RelationalStore.syncFromVisibleDataset(db, visibleDataset, copies);
-    const projectedDataset = RelationalStore.projectGlobalReferenceRows(db, visibleDataset);
+    const projectedDataset = DatasetProjection.projectVisibleDataset(db, user, { fallbackDataset: visibleDataset });
     return {
       dataset: datasetService.normalizeIncomingDataset(projectedDataset),
       copies: copies.map((copy) => stripPayload(copy, user)),

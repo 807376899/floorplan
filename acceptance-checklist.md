@@ -151,6 +151,9 @@
 - [ ] SQLite initialization creates the relational business tables for buildings, floor skeletons, colleges, majors, use types, spaces, use units, plans, plan overrides, assignments, and plan-scoped deleted spaces.
 - [ ] Existing JSON plan-copy data is backfilled or synchronized into relational tables without duplicating the same `building_code` or same floor skeleton semantic key across visible plan copies.
 - [ ] `/api/bootstrap` and `/api/dataset/active` continue returning the existing `dataset` JSON shape while projecting global shared reference rows from relational storage when available.
+- [ ] `/api/bootstrap`, `/api/dataset/active`, and save responses can return a complete visible dataset from relation-only rows when legacy business JSON is empty.
+- [ ] Relational projection preserves plan visibility rules: visitors see public/baseline plans, editor users also see their own private plans, and admin users see every non-deleted plan.
+- [ ] Legacy JSON is synchronized into relational tables as fallback on read, but relation rows are the returned visible dataset authority after synchronization.
 - [ ] Admin viewing multiple plans sees each teaching building only once in the raw teaching-building table, even when several visible plan copies contain that building in legacy JSON payloads.
 - [ ] Saving active raw maintenance data immediately updates relational global reference tables for buildings, floor skeletons, colleges, majors, and use types.
 - [ ] Spaces, use units, assignments, and deleted-space tombstones remain plan-scoped so editing or deleting a room in one non-baseline copy does not affect other plans.

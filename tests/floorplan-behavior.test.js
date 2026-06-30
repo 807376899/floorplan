@@ -6,6 +6,7 @@ const vm = require("node:vm");
 const { DatabaseSync } = require("node:sqlite");
 const { createDatasetService } = require("../server/dataset-service");
 const { compactVisibleDataset, createPlanCopyService } = require("../server/plan-copy-service");
+const DatasetProjection = require("../server/dataset-projection-service");
 const RelationalStore = require("../server/relational-store");
 const { colorMap: buildLegendColorMap, renderLegend: renderLegendOnly } = require("../js/app/legend-colors");
 const { createRenderThumbList } = require("../js/app/thumbnails");
@@ -227,6 +228,99 @@ function copiedReferenceDataset(copyId, overrides = {}) {
     imports: [],
     deleted_space_ids: [],
   };
+}
+
+function seedRelationalProjectionFixture(db) {
+  RelationalStore.ensureRelationalSchema(db);
+  db.prepare(`
+    INSERT INTO buildings (id, building_code, building_name, campus_zone, building_number, sort_order)
+    VALUES ('B0101', 'B0101', '关系楼', '下沙校区', 1, 1)
+  `).run();
+  db.prepare(`
+    INSERT INTO floor_segments (id, building_code, floor_code, segment_code, start_x_m, start_y_m, end_x_m, end_y_m, width_m, element_type)
+    VALUES ('B0101__1__EW01010101', 'B0101', '1', 'EW01010101', 0, 0, 20, 0, 2.4, 'corridor')
+  `).run();
+  db.prepare(`
+    INSERT INTO colleges (id, college_code, college_name, color, status)
+    VALUES ('COL-A', 'COL-A', '关系学院', '#2563EB', 'active')
+  `).run();
+  db.prepare(`
+    INSERT INTO majors (id, major_code, major_name, college_code, status)
+    VALUES ('MAJ-A', 'MAJ-A', '关系专业', 'COL-A', 'active')
+  `).run();
+  db.prepare(`
+    INSERT INTO lab_types (id, type_code, type_name, status)
+    VALUES ('USE0001', 'USE0001', '实验室', 'active')
+  `).run();
+  db.prepare(`
+    INSERT INTO spaces (
+      id, space_code, building_code, floor_code, segment_code, front_door, rear_door,
+      side, offset_m, length_m, width_m, area_m2, network_segment, current_status
+    ) VALUES ('SPACE-101', '00101010101', 'B0101', '1', 'EW01010101', '101', '', 'north', 0, 8, 6, 48, '10.0.0.0/24', 'active')
+  `).run();
+  db.prepare(`
+    INSERT INTO spaces (
+      id, space_code, building_code, floor_code, segment_code, front_door, rear_door,
+      side, offset_m, length_m, width_m, area_m2, network_segment, current_status
+    ) VALUES ('SPACE-102', '00101010202', 'B0101', '1', 'EW01010101', '102', '', 'north', 9, 8, 6, 48, '10.0.1.0/24', 'active')
+  `).run();
+  db.prepare(`
+    INSERT INTO labs (
+      id, lab_code, lab_name, college_code, college, major_code, major, lab_type_code,
+      lab_type, director, seat_count, computer_count, status
+    ) VALUES ('UNIT000001', 'UNIT000001', '关系实验室', 'COL-A', '关系学院', 'MAJ-A', '关系专业', 'USE0001', '实验室', '张三', 30, 20, 'active')
+  `).run();
+  db.prepare(`
+    INSERT INTO plans (
+      id, copy_id, plan_code, plan_name, owner_user_id, visibility, is_baseline,
+      is_locked, revision, plan_type, source_type, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'copy', '2026-06-01T00:00:00Z', ?)
+  `).run("copy-1", 1, "copy-1", "公开基线", 1, "public", 1, 1, "baseline", "2026-06-01T00:00:00Z");
+  db.prepare(`
+    INSERT INTO plans (
+      id, copy_id, plan_code, plan_name, owner_user_id, visibility, is_baseline,
+      is_locked, revision, plan_type, source_type, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 1, 'copy', 'copy', '2026-06-01T00:00:00Z', ?)
+  `).run("copy-2", 2, "copy-2", "公开副本", 3, "public", "2026-06-02T00:00:00Z");
+  db.prepare(`
+    INSERT INTO plans (
+      id, copy_id, plan_code, plan_name, owner_user_id, visibility, is_baseline,
+      is_locked, revision, plan_type, source_type, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 1, 'copy', 'copy', '2026-06-01T00:00:00Z', ?)
+  `).run("copy-8", 8, "copy-8", "编辑私有副本", 2, "private", "2026-06-03T00:00:00Z");
+  db.prepare(`
+    INSERT INTO plans (
+      id, copy_id, plan_code, plan_name, owner_user_id, visibility, is_baseline,
+      is_locked, revision, plan_type, source_type, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 1, 'copy', 'copy', '2026-06-01T00:00:00Z', ?)
+  `).run("copy-9", 9, "copy-9", "他人私有副本", 3, "private", "2026-06-04T00:00:00Z");
+  db.prepare(`
+    INSERT INTO plan_space_overrides (id, plan_id, base_space_id, space_code, operation, payload_json)
+    VALUES (?, ?, ?, ?, 'upsert', ?)
+  `).run("copy-8__00101010202", "copy-8", "SPACE-102", "00101010202", JSON.stringify({
+    id: "copy:8::SPACE-102",
+    copy_id: 8,
+    space_code: "00101010202",
+    building_code: "B0101",
+    floor_code: "1",
+    segment_code: "EW01010101",
+    front_door: "102",
+    rear_door: "",
+    network_segment: "10.8.0.0/24",
+    current_status: "active",
+  }));
+  db.prepare(`
+    INSERT INTO plan_assignments (id, plan_id, plan_code, lab_code, space_code, assignment_status, effective_from)
+    VALUES ('copy-1__UNIT000001', 'copy-1', 'copy-1', 'UNIT000001', '00101010101', 'assigned', '2026-06')
+  `).run();
+  db.prepare(`
+    INSERT INTO plan_assignments (id, plan_id, plan_code, lab_code, space_code, assignment_status)
+    VALUES ('copy-8__UNIT000001', 'copy-8', 'copy-8', 'UNIT000001', '00101010202', 'assigned')
+  `).run();
+  db.prepare(`
+    INSERT INTO plan_deleted_spaces (id, plan_id, base_space_id, space_code, created_at)
+    VALUES ('copy-8__00101010101', 'copy-8', 'SPACE-101', '00101010101', '2026-06-01T00:00:00Z')
+  `).run();
 }
 
 test("building sort uses campus groups then editable sort order", () => {
@@ -989,6 +1083,56 @@ test("saving copy datasets removes stale relational deleted-space tombstones for
   service.saveCopyDataset(1, { expectedRevision: 1, dataset: nextDataset }, { id: 1, username: "admin", role: "admin" });
 
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_deleted_spaces WHERE plan_id = 'copy-1'").get().count, 0);
+});
+
+test("relational projection builds a complete frontend dataset without legacy dataset json", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  const projected = DatasetProjection.projectVisibleDataset(db, { id: 2, username: "editor", role: "editor" });
+
+  assert.deepEqual(projected.buildings.map((row) => row.building_code), ["B0101"]);
+  assert.deepEqual(projected.floor_segments.map((row) => row.segment_code), ["EW01010101"]);
+  assert.deepEqual(projected.colleges.map((row) => row.college_name), ["关系学院"]);
+  assert.deepEqual(projected.majors.map((row) => row.major_name), ["关系专业"]);
+  assert.deepEqual(projected.lab_types.map((row) => row.type_name), ["实验室"]);
+  assert.ok(projected.spaces.some((row) => row.space_code === "00101010101" && !row.copy_id));
+  assert.ok(projected.spaces.some((row) => row.space_code === "00101010202" && Number(row.copy_id) === 8 && row.network_segment === "10.8.0.0/24"));
+  assert.ok(projected.labs.some((row) => row.lab_code === "UNIT000001"));
+  assert.ok(projected.plan_assignments.some((row) => row.plan_id === "copy-8" && row.space_code === "00101010202"));
+  assert.deepEqual(projected.deleted_space_ids, ["copy:8::00101010101"]);
+});
+
+test("relational projection preserves visitor editor and admin plan visibility", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+
+  const visitor = DatasetProjection.projectVisibleDataset(db, null);
+  const editor = DatasetProjection.projectVisibleDataset(db, { id: 2, username: "editor", role: "editor" });
+  const admin = DatasetProjection.projectVisibleDataset(db, { id: 1, username: "admin", role: "admin" });
+
+  assert.deepEqual(visitor.plans.map((row) => row.plan_code).sort(), ["copy-1", "copy-2"]);
+  assert.deepEqual(editor.plans.map((row) => row.plan_code).sort(), ["copy-1", "copy-2", "copy-8"]);
+  assert.deepEqual(admin.plans.map((row) => row.plan_code).sort(), ["copy-1", "copy-2", "copy-8", "copy-9"]);
+  assert.ok(editor.spaces.every((row) => !row.copy_id || [1, 2, 8].includes(Number(row.copy_id))));
+  assert.equal(visitor.spaces.some((row) => Number(row.copy_id) === 8), false);
+});
+
+test("visible dataset read path uses relational projection when legacy json is empty", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  db.prepare("INSERT INTO users (id, username, role) VALUES (2, 'editor', 'editor')").run();
+  seedRelationalProjectionFixture(db);
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const service = createPlanCopyService(db, datasetService);
+
+  const visible = service.buildVisibleDataset({ id: 2, username: "editor", role: "editor" }).dataset;
+
+  assert.deepEqual(visible.plans.map((row) => row.plan_code).sort(), ["copy-1", "copy-2", "copy-8"]);
+  assert.ok(visible.spaces.some((row) => row.space_code === "00101010202" && Number(row.copy_id) === 8));
+  assert.ok(visible.plan_assignments.some((row) => row.plan_id === "copy-8" && row.space_code === "00101010202"));
+  assert.deepEqual(visible.deleted_space_ids, ["copy:8::00101010101"]);
 });
 
 test("copy datasets do not reintroduce spaces marked deleted", () => {
