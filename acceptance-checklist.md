@@ -154,6 +154,7 @@
 - [ ] `/api/bootstrap`, `/api/dataset/active`, and save responses can return a complete visible dataset from relation-only rows when legacy business JSON is empty.
 - [ ] Relational projection preserves plan visibility rules: visitors see public/baseline plans, editor users also see their own private plans, and admin users see every non-deleted plan.
 - [ ] Legacy JSON is synchronized into relational tables as fallback on read, but relation rows are the returned visible dataset authority after synchronization.
+- [ ] Once relational business rows exist, visible-dataset reads do not re-import stale plan-copy legacy JSON in a way that resurrects deleted buildings, floor skeletons, spaces, or use units.
 - [ ] 详情栏编辑实验室、改建房间、新增房间、编辑房间和删除房间通过动作级 API 保存，不从前端回传整包可见 dataset 覆盖保存。
 - [ ] 详情栏 copy 方案写入优先更新 `plan_space_overrides`、`plan_lab_overrides`、`plan_assignments` 和 `plan_deleted_spaces`；新增 copy 房间不写入全局 `spaces` 基准表。
 - [ ] 详情栏保存成功后由关系表投影刷新可见 dataset；保存失败或 revision 冲突时不更新关系表，也不更新 legacy JSON 快照。
@@ -161,6 +162,7 @@
 - [ ] Assignment action 写入 copy 方案时，新建待安置用途单元进入当前方案 `plan_lab_overrides`，不写入全局 `labs`；搬迁、归位和待安置状态只更新当前方案 `plan_assignments`，不影响其他方案。
 - [ ] 高级原始维护表中的教学楼、楼层骨架、学院、专业和用途类型通过动作级 raw-maintenance API 保存，服务端优先写关系表并通过关系表投影刷新前端，不以整包可见 dataset 作为权威保存载荷。
 - [ ] 删除教学楼或楼层骨架会在关系表事务中级联删除相关骨架或空间，并将受影响方案分配标记为 `Invalid`；删除被引用的学院、专业或用途类型会被阻止，失败时不更新关系表或 legacy JSON 快照。
+- [ ] 删除教学楼或楼层骨架同时删除绑定到该楼栋或骨架的 `plan_space_overrides`，并且旧副本 JSON 不会在保存响应、登录或刷新时把已删除空间重新写回关系表。
 - [ ] Admin viewing multiple plans sees each teaching building only once in the raw teaching-building table, even when several visible plan copies contain that building in legacy JSON payloads.
 - [ ] Saving active raw maintenance data immediately updates relational global reference tables for buildings, floor skeletons, colleges, majors, and use types.
 - [ ] Spaces, use units, assignments, and deleted-space tombstones remain plan-scoped so editing or deleting a room in one non-baseline copy does not affect other plans.

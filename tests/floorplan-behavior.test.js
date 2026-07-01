@@ -1032,7 +1032,11 @@ test("saving copy datasets synchronizes relational plan tables immediately", () 
 
   service.saveCopyDataset(1, { expectedRevision: 1, dataset: nextDataset }, { id: 1, username: "admin", role: "admin" });
 
-  assert.equal(db.prepare("SELECT network_segment FROM spaces WHERE space_code = ?").get(nextDataset.spaces[0].space_code).network_segment, "10.0.1.0/24");
+  const savedSpaceOverride = db.prepare("SELECT payload_json FROM plan_space_overrides WHERE plan_id = 'copy-1' AND space_code = ?")
+    .get(nextDataset.spaces[0].space_code);
+  assert.ok(savedSpaceOverride);
+  assert.equal(JSON.parse(savedSpaceOverride.payload_json).network_segment, "10.0.1.0/24");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spaces WHERE space_code = ?").get(nextDataset.spaces[0].space_code).count, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_space_overrides WHERE plan_id = 'copy-1'").get().count, 1);
   assert.equal(db.prepare("SELECT effective_from FROM plan_assignments WHERE plan_id = 'copy-1' AND lab_code = 'UNIT000001'").get().effective_from, "2026-06");
 });
@@ -1575,6 +1579,66 @@ test("raw maintenance delete building cascades structure rows and invalidates as
   assert.ok(statuses.length > 0);
   assert.ok(statuses.every((row) => row.assignment_status === "Invalid" && row.space_code === "" && row.previous_space_code));
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM labs WHERE lab_code = 'UNIT000001'").get().count, 1);
+});
+
+test("raw maintenance floor segment delete is not resurrected by stale visible copy payloads", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  const staleCopyDataset = copiedReferenceDataset(2, { planCode: "copy-2" });
+  staleCopyDataset.spaces = [
+    {
+      id: "copy:2::SPACE-101",
+      copy_id: 2,
+      space_code: "00101010101",
+      building_code: "B0101",
+      floor_code: "1",
+      segment_code: "EW01010101",
+      front_door: "101",
+      rear_door: "",
+      current_status: "active",
+    },
+  ];
+  staleCopyDataset.plan_assignments = [
+    {
+      id: "copy-2__UNIT000001",
+      plan_id: "copy-2",
+      plan_code: "copy-2",
+      lab_code: "UNIT000001",
+      space_code: "00101010101",
+      assignment_status: "assigned",
+    },
+  ];
+  insertPlanCopyRow(db, {
+    id: 2,
+    planCode: "copy-2",
+    planName: "旧 payload 副本",
+    visibility: "public",
+    dataset: staleCopyDataset,
+    assignments: staleCopyDataset.plan_assignments,
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const rawMaintenance = createRawMaintenanceService(db, datasetService);
+  const planCopies = createPlanCopyService(db, datasetService);
+
+  rawMaintenance.submitActiveRawMaintenanceAction("floor_segments", {
+    action: "deleteRow",
+    expectedRevision: 1,
+    row: { building_code: "B0101", floor_code: "1", segment_code: "EW01010101" },
+  }, { id: 1, username: "admin", role: "admin" });
+  const visible = planCopies.buildVisibleDataset({ id: 1, username: "admin", role: "admin" }).dataset;
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM floor_segments WHERE segment_code = 'EW01010101'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spaces WHERE segment_code = 'EW01010101'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_space_overrides WHERE space_code = '00101010101'").get().count, 0);
+  assert.equal(visible.floor_segments.some((segment) => segment.segment_code === "EW01010101"), false);
+  assert.equal(visible.spaces.some((space) => space.space_code === "00101010101"), false);
+  assert.ok(visible.plan_assignments.every((assignment) =>
+    assignment.space_code !== "00101010101" ||
+    assignment.assignment_status === "Invalid"
+  ));
 });
 
 test("raw maintenance floor segment edits migrate bound spaces and reject non-assignable conversions", () => {

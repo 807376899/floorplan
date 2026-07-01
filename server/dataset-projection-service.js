@@ -88,13 +88,16 @@ function projectPlan(row, baselineCode) {
 
 function rowWithPayload(row, forced = {}) {
   const payload = parseJsonObject(row.payload_json);
+  const definedForced = Object.fromEntries(
+    Object.entries(forced).filter(([, value]) => value !== undefined)
+  );
   return stripEmpty({
     ...payload,
     space_code: payload.space_code || row.space_code,
     lab_code: payload.lab_code || row.lab_code,
     created_at: payload.created_at || row.created_at,
     updated_at: payload.updated_at || row.updated_at,
-    ...forced
+    ...definedForced
   });
 }
 

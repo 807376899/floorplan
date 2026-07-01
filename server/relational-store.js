@@ -190,14 +190,20 @@ function syncFromVisibleDataset(db, dataset, copies = []) {
     upsertPlan(db, copy.plan || {}, copy, now);
   }
   for (const row of dataset.spaces || []) {
-    upsertSpace(db, row, now);
     const planCode = planCodeForScopedRow(row, planCodeByCopyId);
-    if (planCode) upsertSpaceOverride(db, planCode, row, now);
+    if (planCode) {
+      upsertSpaceOverride(db, planCode, row, now);
+    } else {
+      upsertSpace(db, row, now);
+    }
   }
   for (const row of dataset.labs || []) {
-    upsertLab(db, row, now);
     const planCode = planCodeForScopedRow(row, planCodeByCopyId);
-    if (planCode) upsertLabOverride(db, planCode, row, now);
+    if (planCode) {
+      upsertLabOverride(db, planCode, row, now);
+    } else {
+      upsertLab(db, row, now);
+    }
   }
   for (const row of dataset.plan_assignments || []) upsertAssignment(db, row, now);
   clearDeletedSpacesForPlans(db, [...planCodeByCopyId.values()]);
@@ -218,6 +224,22 @@ function projectGlobalReferenceRows(db, dataset) {
   if (majors.length) next.majors = majors.map(stripRelationalNulls);
   if (labTypes.length) next.lab_types = labTypes.map(stripRelationalNulls);
   return next;
+}
+
+function hasRelationalBusinessData(db) {
+  ensureRelationalSchema(db);
+  const tables = [
+    "buildings",
+    "floor_segments",
+    "spaces",
+    "labs",
+    "plans",
+    "plan_space_overrides",
+    "plan_lab_overrides",
+    "plan_assignments",
+    "plan_deleted_spaces",
+  ];
+  return tables.some((table) => db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count > 0);
 }
 
 function selectRows(db, table, orderBy) {
@@ -616,4 +638,5 @@ module.exports = {
   ensureRelationalSchema,
   syncFromVisibleDataset,
   projectGlobalReferenceRows,
+  hasRelationalBusinessData,
 };

@@ -155,6 +155,47 @@ function invalidateAssignmentsForSpaceCodes(db, codes) {
   for (const code of uniqueCodes) stmt.run(now, code);
 }
 
+function parsePayload(value) {
+  try {
+    return JSON.parse(value || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function matchingPlanSpaceOverrides(db, predicate) {
+  return db.prepare("SELECT id, space_code, payload_json FROM plan_space_overrides").all()
+    .map((row) => ({ ...row, payload: parsePayload(row.payload_json) }))
+    .filter((row) => predicate(row.payload));
+}
+
+function planSpaceOverridesForBuilding(db, buildingCode) {
+  return matchingPlanSpaceOverrides(db, (payload) => text(payload.building_code) === buildingCode);
+}
+
+function planSpaceOverridesForSegment(db, segment) {
+  const buildingCode = text(segment.building_code);
+  const floorCode = text(segment.floor_code);
+  const segmentCode = text(segment.segment_code);
+  return matchingPlanSpaceOverrides(db, (payload) =>
+    text(payload.building_code) === buildingCode &&
+    text(payload.floor_code) === floorCode &&
+    text(payload.segment_code) === segmentCode
+  );
+}
+
+function deletePlanSpaceOverrides(db, rows) {
+  const stmt = db.prepare("DELETE FROM plan_space_overrides WHERE id = ?");
+  for (const row of rows || []) stmt.run(row.id);
+}
+
+function rewritePlanSpaceOverrides(db, rows, patch, now) {
+  const stmt = db.prepare("UPDATE plan_space_overrides SET payload_json = ?, updated_at = ? WHERE id = ?");
+  for (const row of rows || []) {
+    stmt.run(JSON.stringify({ ...row.payload, ...patch }), now, row.id);
+  }
+}
+
 function applyBuildingReplace(db, rows, now) {
   for (const row of rows || []) {
     const original = text(row.__original?.building_code || row.building_code);
@@ -162,6 +203,7 @@ function applyBuildingReplace(db, rows, now) {
     if (original && next && original !== next) {
       db.prepare("UPDATE floor_segments SET building_code = ?, updated_at = ? WHERE building_code = ?").run(next, now, original);
       db.prepare("UPDATE spaces SET building_code = ?, updated_at = ? WHERE building_code = ?").run(next, now, original);
+      rewritePlanSpaceOverrides(db, planSpaceOverridesForBuilding(db, original), { building_code: next }, now);
     }
     upsertBuilding(db, row, now);
   }
@@ -175,7 +217,9 @@ function deleteBuilding(db, row) {
   const code = text(row.__original?.building_code || row.building_code);
   if (!code) return;
   const spaces = db.prepare("SELECT space_code FROM spaces WHERE building_code = ?").all(code).map((item) => item.space_code);
-  invalidateAssignmentsForSpaceCodes(db, spaces);
+  const overrides = planSpaceOverridesForBuilding(db, code);
+  invalidateAssignmentsForSpaceCodes(db, [...spaces, ...overrides.map((item) => item.space_code)]);
+  deletePlanSpaceOverrides(db, overrides);
   db.prepare("DELETE FROM spaces WHERE building_code = ?").run(code);
   db.prepare("DELETE FROM floor_segments WHERE building_code = ?").run(code);
   db.prepare("DELETE FROM buildings WHERE building_code = ?").run(code);
@@ -194,6 +238,11 @@ function applyFloorSegmentReplace(db, rows, now) {
         SET building_code = ?, floor_code = ?, segment_code = ?, updated_at = ?
         WHERE building_code = ? AND floor_code = ? AND segment_code = ?
       `).run(text(row.building_code), text(row.floor_code), text(row.segment_code), now, text(original.building_code), text(original.floor_code), text(original.segment_code));
+      rewritePlanSpaceOverrides(db, planSpaceOverridesForSegment(db, original), {
+        building_code: text(row.building_code),
+        floor_code: text(row.floor_code),
+        segment_code: text(row.segment_code),
+      }, now);
     }
     upsertFloorSegment(db, row, now);
   }
@@ -204,7 +253,9 @@ function deleteFloorSegment(db, row) {
   const spaces = db.prepare("SELECT space_code FROM spaces WHERE building_code = ? AND floor_code = ? AND segment_code = ?")
     .all(text(original.building_code), text(original.floor_code), text(original.segment_code))
     .map((item) => item.space_code);
-  invalidateAssignmentsForSpaceCodes(db, spaces);
+  const overrides = planSpaceOverridesForSegment(db, original);
+  invalidateAssignmentsForSpaceCodes(db, [...spaces, ...overrides.map((item) => item.space_code)]);
+  deletePlanSpaceOverrides(db, overrides);
   db.prepare("DELETE FROM spaces WHERE building_code = ? AND floor_code = ? AND segment_code = ?")
     .run(text(original.building_code), text(original.floor_code), text(original.segment_code));
   db.prepare("DELETE FROM floor_segments WHERE building_code = ? AND floor_code = ? AND segment_code = ?")

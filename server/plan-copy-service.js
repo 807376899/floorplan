@@ -178,7 +178,9 @@ function createPlanCopyService(db, datasetService) {
     const latestBaselineCode = copies.find((copy) => copy.isBaseline)?.planCode || "";
     for (const copy of copies.slice().reverse()) mergeCopyDataset(dataset, copy, latestBaselineCode);
     const visibleDataset = compactVisibleDataset(datasetService.normalizeIncomingDataset(dataset));
-    RelationalStore.syncFromVisibleDataset(db, visibleDataset, copies);
+    if (!RelationalStore.hasRelationalBusinessData(db)) {
+      RelationalStore.syncFromVisibleDataset(db, visibleDataset, copies);
+    }
     const projectedDataset = DatasetProjection.projectVisibleDataset(db, user, { fallbackDataset: visibleDataset });
     return {
       dataset: datasetService.normalizeIncomingDataset(projectedDataset),
@@ -638,6 +640,7 @@ function createPlanCopyService(db, datasetService) {
       assignments_json: JSON.stringify(assignments),
       dataset_json: JSON.stringify(dataset),
     });
+    RelationalStore.syncFromVisibleDataset(db, datasetService.normalizeIncomingDataset(datasetService.getActiveDataset().dataset), []);
     RelationalStore.syncFromVisibleDataset(db, datasetService.normalizeIncomingDataset(dataset), [copy]);
   }
 
