@@ -173,6 +173,19 @@ function createRouteApi(services) {
       return sendVisibleDataset(res, context, services, 200, { ok: true, copyRevision: result.revision });
     }
 
+    const copyAssignmentActionMatch = pathname.match(/^\/api\/plan-copies\/(\d+)\/assignment-actions$/);
+    if (req.method === "POST" && copyAssignmentActionMatch) {
+      auth.requireRole(context.user, ["editor", "admin"]);
+      const body = await readJsonBody(req);
+      const result = services.assignmentActions.submitCopyAssignmentAction(Number(copyAssignmentActionMatch[1]), body, context.user);
+      audit.writeAudit("plan_copy_assignment_action_saved", context.user.username, context.ip, {
+        copyId: Number(copyAssignmentActionMatch[1]),
+        action: String(body.action || ""),
+        revision: result.copyRevision,
+      });
+      return sendVisibleDataset(res, context, services, 200, { ok: true, copyRevision: result.copyRevision });
+    }
+
     const copyDetailActionMatch = pathname.match(/^\/api\/plan-copies\/(\d+)\/detail-actions$/);
     if (req.method === "POST" && copyDetailActionMatch) {
       auth.requireRole(context.user, ["editor", "admin"]);
@@ -208,6 +221,17 @@ function createRouteApi(services) {
       const body = await readJsonBody(req);
       const result = services.detailActions.submitActiveDetailAction(body, context.user);
       audit.writeAudit("active_detail_action_saved", context.user.username, context.ip, {
+        action: String(body.action || ""),
+        revision: result.revision,
+      });
+      return sendVisibleDataset(res, context, services, 200, { ok: true, revision: result.revision });
+    }
+
+    if (req.method === "POST" && pathname === "/api/dataset/active/assignment-actions") {
+      auth.requireRole(context.user, ["admin"]);
+      const body = await readJsonBody(req);
+      const result = services.assignmentActions.submitActiveAssignmentAction(body, context.user);
+      audit.writeAudit("active_assignment_action_saved", context.user.username, context.ip, {
         action: String(body.action || ""),
         revision: result.revision,
       });

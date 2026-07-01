@@ -154,6 +154,7 @@ const MoveController = MoveControllerModule.createMoveController({
   populateFloorOptions,
   saveActivePlanCopyToServer,
   saveDatasetToServer,
+  saveAssignmentActionToServer: submitAssignmentActionToServer,
 });
 const RawEditorController = RawEditor.createRawEditor({
   state,
@@ -517,7 +518,7 @@ async function submitDetailActionToServer(mode, formData, selectedSpace, changeN
     body: JSON.stringify({
       action: detailActionName(mode),
       expectedRevision,
-      planCode: activePlan()?.plan_code || activePlan()?.id || "",
+      planCode: planById(state.activePlanId)?.plan_code || planById(state.activePlanId)?.id || "",
       buildingCode: els.buildingSelect?.value || getSelectedContext().building?.building_code || "",
       floorCode: els.floorSelect?.value || getSelectedContext().floorCode || "",
       selectedSpace: selectedSpace ? { id: selectedSpace.id, space_code: selectedSpace.space_code } : null,
@@ -531,6 +532,32 @@ async function submitDetailActionToServer(mode, formData, selectedSpace, changeN
   if (payload.maintenance) state.maintenance = payload.maintenance;
   persistDataset();
   return payload;
+}
+
+async function submitAssignmentActionToServer(action, payload = {}) {
+  if (!state.serverMode) return null;
+  const activePlanValue = planById(state.activePlanId);
+  const activeCopy = activePlanCopyMeta();
+  const useCopyEndpoint = activeCopy && canEditPlanDataset(activeCopy);
+  const endpoint = useCopyEndpoint
+    ? `/api/plan-copies/${activeCopy.id}/assignment-actions`
+    : "/api/dataset/active/assignment-actions";
+  const expectedRevision = useCopyEndpoint ? activeCopy.revision : state.serverRevision;
+  const response = await fetchJson(endpoint, {
+    method: "POST",
+    body: JSON.stringify({
+      ...payload,
+      action,
+      expectedRevision,
+      planCode: activePlanValue?.plan_code || activePlanValue?.id || "",
+    }),
+  });
+  state.serverRevision = response.revision;
+  state.planCopies = response.planCopies || [];
+  state.data = normalizeDataset(response.dataset);
+  if (response.maintenance) state.maintenance = response.maintenance;
+  persistDataset();
+  return response;
 }
 
 async function saveActivePlanCopyToServer() {
@@ -2340,11 +2367,29 @@ async function savePlaceholderLabForSpace(space, college, options = {}) {
   }, relation));
   state.data.plan_assignments = assignments;
   state.data = normalizeDataset(state.data);
-  const saveOk = await saveWithRollback(previousData, previousRevision, "规划未规划实验室", "规划保存失败");
-  if (!saveOk) {
+  try {
+    if (state.serverMode) {
+      await submitAssignmentActionToServer("planSpace", {
+        targetSpace: { id: space.id, space_code: space.space_code },
+        invalidAssignment: options.invalidAssignment ? {
+          id: options.invalidAssignment.id,
+          lab_code: options.invalidAssignment.lab_code,
+          lab_id: options.invalidAssignment.lab_id,
+        } : null,
+        form: {
+          labName: lab.lab_name,
+          college,
+        },
+      });
+    } else {
+      const saveOk = await saveWithRollback(previousData, previousRevision, "规划未规划实验室", "规划保存失败");
+      if (!saveOk) throw new Error("规划保存失败");
+    }
+  } catch (error) {
     state.data = normalizeDataset(previousData);
     state.serverRevision = previousRevision;
     state.planCopies = previousCopies;
+    refreshStateAndRender(`规划保存失败：${error.message}`, { stamp: false, forceMoveReset: true });
     return;
   }
   state.selectedSpaceId = space.id;
@@ -2982,9 +3027,25 @@ async function createUnplacedLabAction() {
   state.inspectorMode = "placement";
   renderEditor();
   renderApp();
-  const saveOk = await saveWithRollback(previousData, previousRevision, "新增待安置用途单元", "新增待安置用途单元失败");
-  if (!saveOk) {
+  try {
+    if (state.serverMode) {
+      await submitAssignmentActionToServer("createUnplacedUnit", {
+        form: {
+          labName,
+          college: lab.college,
+          seatCount: lab.seat_count,
+          computerCount: lab.computer_count,
+        },
+      });
+    } else {
+      const saveOk = await saveWithRollback(previousData, previousRevision, "新增待安置用途单元", "新增待安置用途单元失败");
+      if (!saveOk) throw new Error("新增待安置用途单元失败");
+    }
+  } catch (error) {
+    state.data = normalizeDataset(previousData);
+    state.serverRevision = previousRevision;
     state.planCopies = previousCopies;
+    refreshStateAndRender(`新增待安置用途单元失败：${error.message}`, { stamp: false, forceMoveReset: true });
     return;
   }
   syncSavedUnplacedMoveBasketItems();

@@ -179,6 +179,8 @@
 - 详情栏日常编辑必须使用动作级写接口而不是从前端回传整包可见 dataset 覆盖保存。`editLab`、`renovateRoom`、`createSpace`、`editSpace` 和 `deleteSpace` 在服务端优先写关系表，成功后通过关系表投影返回可见 dataset。
 - 详情栏写入 copy 方案时，新建或修改的空间与用途单元必须写入当前方案的 override 表；新建 copy 房间不得写入全局 `spaces` 基准表。删除房间必须写入当前方案 tombstone 并只使当前方案相关分配变为 `Invalid`。
 - 详情栏动作保存成功后可同步 legacy JSON 快照用于兼容、导出或回滚；保存失败或 revision 冲突时不得更新关系表或 legacy JSON 快照。
+- 主图规划未规划空间、加入待安置区、待安置区归位、待安置区落位、同层直接搬迁和新增待安置用途单元必须使用动作级分配写接口。`planSpace`、`moveToBasket`、`returnFromBasket`、`placeBasketItem`、`directMove` 和 `createUnplacedUnit` 在服务端优先写 `plan_assignments` 与当前方案用途单元 override，成功后通过关系表投影刷新前端；不得通过前端回传整包可见 dataset 或批量 assignment 覆盖来作为这些交互的权威保存路径。
+- 分配动作写入 copy 方案时，新建待安置用途单元必须写入当前方案的 `plan_lab_overrides`，不得写入全局 `labs` 基准表；搬迁、归位和待安置状态只影响当前方案的 `plan_assignments`，不得污染其他副本或基线。
 - Teaching buildings, floor skeletons, colleges, majors, and use types are global shared reference data. They must not be duplicated per plan copy in the visible raw editor; admin seeing multiple visible plans must still see one row for the same `building_code` and one row for the same floor skeleton semantic key.
 - Saving the active dataset from raw global maintenance must immediately synchronize `buildings`, `floor_segments`, `colleges`, `majors`, and `lab_types` into relational tables; the system must not wait for a later read path to backfill those rows.
 - Plan copies only express differences for spaces, use units, assignments, and deletion tombstones. Deleting a room in one plan copy must record plan-scoped deletion metadata and must not delete the global physical-space baseline or hide the same room in other plans.

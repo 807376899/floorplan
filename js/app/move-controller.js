@@ -32,8 +32,7 @@
       refreshStateAndRender,
       updateStatus,
       populateFloorOptions,
-      saveActivePlanCopyToServer,
-      saveDatasetToServer,
+      saveAssignmentActionToServer,
     } = deps;
 
     function moveBasketNormalizeAssignment(row) {
@@ -176,7 +175,7 @@
       renderApp();
       updateStatus(`正在将 ${context.lab.lab_name} 加入待安置区...`);
       try {
-        await saveMoveBasketAssignmentsToServer();
+        await saveMoveBasketAssignmentsToServer("moveToBasket", assignmentPayloadFromContext(context));
       } catch (error) {
         state.data = normalizeDataset(previousData);
         state.serverRevision = previousRevision;
@@ -206,13 +205,32 @@
       renderApp();
     }
 
-    async function saveMoveBasketAssignmentsToServer() {
+    function assignmentPayloadFromItem(item, extras = {}) {
+      return {
+        lab: { id: item?.labId || "", lab_code: item?.labCode || "" },
+        sourceSpace: { id: item?.sourceSpaceId || "", space_code: item?.sourceSpaceCode || "" },
+        ...extras,
+      };
+    }
+
+    function assignmentPayloadFromContext(context, extras = {}) {
+      return {
+        lab: { id: context?.lab?.id || context?.assignment?.lab_id || "", lab_code: context?.lab?.lab_code || context?.assignment?.lab_code || "" },
+        sourceSpace: { id: context?.space?.id || context?.assignment?.space_id || "", space_code: context?.space?.space_code || context?.assignment?.space_code || "" },
+        ...extras,
+      };
+    }
+
+    async function saveMoveBasketAssignmentsToServer(action, payload = {}) {
       if (!state.serverMode) return true;
       const activePlan = planById(state.activePlanId);
       const copy = copyMetaForPlan(activePlan);
-      if (canManageCopy(copy)) return saveActivePlanCopyToServer();
-      if (state.permissions.canAdmin && activePlan && (activePlan.is_locked || activePlan.plan_type === "baseline")) {
-        return saveDatasetToServer("保存待安置区安排");
+      if (typeof saveAssignmentActionToServer === "function" && action) {
+        await saveAssignmentActionToServer(action, payload);
+        return true;
+      }
+      if (canManageCopy(copy) || (state.permissions.canAdmin && activePlan && (activePlan.is_locked || activePlan.plan_type === "baseline"))) {
+        throw new Error("缺少分配动作，无法保存待安置区安排");
       }
       throw new Error("只能保存自己创建的方案副本");
     }
@@ -259,7 +277,9 @@
       renderApp();
       updateStatus(`正在将 ${item.labName} 归位...`);
       try {
-        await saveMoveBasketAssignmentsToServer();
+        await saveMoveBasketAssignmentsToServer("returnFromBasket", assignmentPayloadFromItem(item, {
+          targetSpace: { space_code: item.sourceSpaceCode || "" },
+        }));
       } catch (error) {
         state.data = normalizeDataset(previousData);
         state.serverRevision = previousRevision;
@@ -482,7 +502,9 @@
       renderApp();
       updateStatus(`正在将 ${item.labName} 直接落位到 ${spaceDisplayName(space)}...`);
       try {
-        await saveMoveBasketAssignmentsToServer();
+        await saveMoveBasketAssignmentsToServer("directMove", assignmentPayloadFromContext(context, {
+          targetSpace: { id: space.id, space_code: space.space_code },
+        }));
       } catch (error) {
         state.data = normalizeDataset(previousData);
         state.serverRevision = previousRevision;
@@ -525,7 +547,9 @@
       renderApp();
       updateStatus(`正在将 ${item.labName} 落位到 ${spaceDisplayName(space)}...`);
       try {
-        await saveMoveBasketAssignmentsToServer();
+        await saveMoveBasketAssignmentsToServer("placeBasketItem", assignmentPayloadFromItem(item, {
+          targetSpace: { id: space.id, space_code: space.space_code },
+        }));
       } catch (error) {
         state.data = normalizeDataset(previousData);
         state.serverRevision = previousRevision;

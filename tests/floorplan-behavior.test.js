@@ -8,6 +8,7 @@ const { createDatasetService } = require("../server/dataset-service");
 const { compactVisibleDataset, createPlanCopyService } = require("../server/plan-copy-service");
 const DatasetProjection = require("../server/dataset-projection-service");
 const { createDetailActionService } = require("../server/detail-action-service");
+const { createAssignmentActionService } = require("../server/assignment-action-service");
 const RelationalStore = require("../server/relational-store");
 const { colorMap: buildLegendColorMap, renderLegend: renderLegendOnly } = require("../js/app/legend-colors");
 const { createRenderThumbList } = require("../js/app/thumbnails");
@@ -1378,6 +1379,150 @@ test("copy detail action revision conflicts do not write relation rows or legacy
   assert.equal(db.prepare("SELECT dataset_json FROM plan_copies WHERE id = 8").get().dataset_json, null);
 });
 
+test("copy assignment action moves a lab into the basket through relation tables", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: null,
+    assignments: [],
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const assignmentService = createAssignmentActionService(db, datasetService);
+
+  const result = assignmentService.submitCopyAssignmentAction(8, {
+    expectedRevision: 1,
+    planCode: "copy-8",
+    action: "moveToBasket",
+    lab: { lab_code: "UNIT000001" },
+    sourceSpace: { space_code: "00101010202" },
+  }, { id: 2, username: "editor", role: "editor" });
+
+  const assignment = db.prepare("SELECT space_code, previous_space_code, assignment_status FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'").get();
+  assert.equal(assignment.space_code, "");
+  assert.equal(assignment.previous_space_code, "00101010202");
+  assert.equal(assignment.assignment_status, "Invalid");
+  assert.equal(result.copyRevision, 2);
+  assert.ok(result.dataset.plan_assignments.some((row) =>
+    row.plan_id === "copy-8" && row.lab_code === "UNIT000001" && row.assignment_status === "Invalid" && !row.space_code
+  ));
+});
+
+test("copy assignment action directly moves a lab without touching other plans", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  db.prepare(`
+    INSERT INTO spaces (
+      id, space_code, building_code, floor_code, segment_code, front_door, rear_door,
+      side, offset_m, length_m, width_m, area_m2, network_segment, current_status
+    ) VALUES ('SPACE-103', '00101010303', 'B0101', '1', 'EW01010101', '103', '', 'north', 18, 8, 6, 48, '10.0.3.0/24', 'active')
+  `).run();
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: null,
+    assignments: [],
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const assignmentService = createAssignmentActionService(db, datasetService);
+
+  assignmentService.submitCopyAssignmentAction(8, {
+    expectedRevision: 1,
+    planCode: "copy-8",
+    action: "directMove",
+    lab: { lab_code: "UNIT000001" },
+    sourceSpace: { space_code: "00101010202" },
+    targetSpace: { space_code: "00101010303" },
+  }, { id: 2, username: "editor", role: "editor" });
+
+  const moved = db.prepare("SELECT space_code, previous_space_code, assignment_status FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'").get();
+  assert.equal(moved.space_code, "00101010303");
+  assert.equal(moved.previous_space_code, "00101010202");
+  assert.equal(moved.assignment_status, "assigned");
+  assert.equal(db.prepare("SELECT space_code FROM plan_assignments WHERE plan_id = 'copy-1' AND lab_code = 'UNIT000001'").get().space_code, "00101010101");
+});
+
+test("copy assignment action creates an unplaced use unit as a plan lab override", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: null,
+    assignments: [],
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const assignmentService = createAssignmentActionService(db, datasetService);
+
+  assignmentService.submitCopyAssignmentAction(8, {
+    expectedRevision: 1,
+    planCode: "copy-8",
+    action: "createUnplacedUnit",
+    form: {
+      labName: "新增待安置用途单元",
+      college: "关系学院",
+      seatCount: "18",
+      computerCount: "9",
+    },
+  }, { id: 2, username: "editor", role: "editor" });
+
+  const override = JSON.parse(db.prepare("SELECT payload_json FROM plan_lab_overrides WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000002'").get().payload_json);
+  assert.equal(override.lab_name, "新增待安置用途单元");
+  assert.equal(Number(override.copy_id), 8);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM labs WHERE lab_code = 'UNIT000002'").get().count, 0);
+  const assignment = db.prepare("SELECT space_code, assignment_status FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000002'").get();
+  assert.equal(assignment.space_code, "");
+  assert.equal(assignment.assignment_status, "Invalid");
+});
+
+test("copy assignment action revision conflicts do not write relation rows or legacy snapshots", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: null,
+    assignments: [],
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const assignmentService = createAssignmentActionService(db, datasetService);
+
+  assert.throws(() => assignmentService.submitCopyAssignmentAction(8, {
+    expectedRevision: 0,
+    planCode: "copy-8",
+    action: "moveToBasket",
+    lab: { lab_code: "UNIT000001" },
+    sourceSpace: { space_code: "00101010202" },
+  }, { id: 2, username: "editor", role: "editor" }), /当前方案已被更新/);
+  assert.equal(db.prepare("SELECT assignment_status FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'").get().assignment_status, "assigned");
+  assert.equal(db.prepare("SELECT dataset_json FROM plan_copies WHERE id = 8").get().dataset_json, null);
+});
+
 test("copy datasets do not reintroduce spaces marked deleted", () => {
   const db = createPlanCopyTestDb();
   const datasetService = createDatasetServiceStub();
@@ -1894,6 +2039,18 @@ test("detail actions submit through action endpoints instead of full dataset sav
   assert.match(appSource, /submitDetailActionToServer/);
   assert.match(appSource, /\/detail-actions/);
   assert.doesNotMatch(appSource, /await saveDatasetToServer\(changeNote\);\s*\n\s*}\s*catch \(error\) \{\s*\n\s*state\.data = normalizeDataset\(previousData\);/);
+});
+
+test("assignment moves submit through action endpoints instead of assignment batch save", () => {
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const moveSource = fs.readFileSync(path.join(__dirname, "..", "js", "app", "move-controller.js"), "utf8");
+
+  assert.match(appSource, /submitAssignmentActionToServer/);
+  assert.match(appSource, /\/assignment-actions/);
+  assert.match(moveSource, /saveAssignmentActionToServer/);
+  assert.match(moveSource, /moveToBasket/);
+  assert.match(moveSource, /directMove/);
+  assert.doesNotMatch(moveSource, /return saveActivePlanCopyToServer\(\);/);
 });
 
 test("admin details render inline edit actions and disabled split merge menu", () => {
