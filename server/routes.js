@@ -238,6 +238,20 @@ function createRouteApi(services) {
       return sendVisibleDataset(res, context, services, 200, { ok: true, revision: result.revision });
     }
 
+    const rawMaintenanceActionMatch = pathname.match(/^\/api\/dataset\/active\/raw-maintenance\/([^/]+)\/actions$/);
+    if (req.method === "POST" && rawMaintenanceActionMatch) {
+      auth.requireRole(context.user, ["admin"]);
+      const key = decodeURIComponent(rawMaintenanceActionMatch[1]);
+      const body = await readJsonBody(req);
+      const result = services.rawMaintenance.submitActiveRawMaintenanceAction(key, body, context.user);
+      audit.writeAudit("active_raw_maintenance_action_saved", context.user.username, context.ip, {
+        key,
+        action: String(body.action || ""),
+        revision: result.revision,
+      });
+      return sendVisibleDataset(res, context, services, 200, { ok: true, revision: result.revision });
+    }
+
     if (req.method === "POST" && pathname === "/api/dataset/repair-text") {
       auth.requireRole(context.user, ["admin"]);
       return handleRepairDatasetText(res, context, services);

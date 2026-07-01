@@ -9,6 +9,7 @@ const { compactVisibleDataset, createPlanCopyService } = require("../server/plan
 const DatasetProjection = require("../server/dataset-projection-service");
 const { createDetailActionService } = require("../server/detail-action-service");
 const { createAssignmentActionService } = require("../server/assignment-action-service");
+const { createRawMaintenanceService } = require("../server/raw-maintenance-service");
 const RelationalStore = require("../server/relational-store");
 const { colorMap: buildLegendColorMap, renderLegend: renderLegendOnly } = require("../js/app/legend-colors");
 const { createRenderThumbList } = require("../js/app/thumbnails");
@@ -1523,6 +1524,126 @@ test("copy assignment action revision conflicts do not write relation rows or le
   assert.equal(db.prepare("SELECT dataset_json FROM plan_copies WHERE id = 8").get().dataset_json, null);
 });
 
+test("raw maintenance replace buildings writes relation tables and projected dataset", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const service = createRawMaintenanceService(db, datasetService);
+
+  const result = service.submitActiveRawMaintenanceAction("buildings", {
+    action: "replaceRows",
+    expectedRevision: 1,
+    rows: [{
+      building_code: "B0101",
+      building_name: "关系楼-已维护",
+      campus_zone: "下沙校区",
+      building_number: 1,
+      sort_order: 9,
+      notes: "原始表维护",
+    }],
+  }, { id: 1, username: "admin", role: "admin" });
+
+  const row = db.prepare("SELECT building_name, sort_order FROM buildings WHERE building_code = 'B0101'").get();
+  assert.equal(row.building_name, "关系楼-已维护");
+  assert.equal(row.sort_order, 9);
+  assert.equal(result.revision, 2);
+  assert.ok(result.dataset.buildings.some((building) => building.building_name === "关系楼-已维护"));
+});
+
+test("raw maintenance delete building cascades structure rows and invalidates assignments", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const service = createRawMaintenanceService(db, datasetService);
+
+  service.submitActiveRawMaintenanceAction("buildings", {
+    action: "deleteRow",
+    expectedRevision: 1,
+    row: { building_code: "B0101" },
+  }, { id: 1, username: "admin", role: "admin" });
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM buildings WHERE building_code = 'B0101'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM floor_segments WHERE building_code = 'B0101'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spaces WHERE building_code = 'B0101'").get().count, 0);
+  const statuses = db.prepare("SELECT assignment_status, space_code, previous_space_code FROM plan_assignments ORDER BY plan_id").all();
+  assert.ok(statuses.length > 0);
+  assert.ok(statuses.every((row) => row.assignment_status === "Invalid" && row.space_code === "" && row.previous_space_code));
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM labs WHERE lab_code = 'UNIT000001'").get().count, 1);
+});
+
+test("raw maintenance floor segment edits migrate bound spaces and reject non-assignable conversions", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const service = createRawMaintenanceService(db, datasetService);
+
+  service.submitActiveRawMaintenanceAction("floor_segments", {
+    action: "replaceRows",
+    expectedRevision: 1,
+    rows: [{
+      building_code: "B0101",
+      floor_code: "1",
+      segment_code: "EW01010102",
+      start_x_m: 0,
+      start_y_m: 0,
+      end_x_m: 24,
+      end_y_m: 0,
+      width_m: 2.4,
+      element_type: "corridor",
+      __original: { building_code: "B0101", floor_code: "1", segment_code: "EW01010101" },
+    }],
+  }, { id: 1, username: "admin", role: "admin" });
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM floor_segments WHERE segment_code = 'EW01010101'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM floor_segments WHERE segment_code = 'EW01010102'").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spaces WHERE segment_code = 'EW01010102'").get().count, 2);
+
+  assert.throws(() => service.submitActiveRawMaintenanceAction("floor_segments", {
+    action: "replaceRows",
+    expectedRevision: 2,
+    rows: [{
+      building_code: "B0101",
+      floor_code: "1",
+      segment_code: "EW01010102",
+      element_type: "elevator",
+      __original: { building_code: "B0101", floor_code: "1", segment_code: "EW01010102" },
+    }],
+  }, { id: 1, username: "admin", role: "admin" }), /不能改为电梯/);
+});
+
+test("raw maintenance rejects referenced dictionaries and stale revisions without writes", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const service = createRawMaintenanceService(db, datasetService);
+
+  assert.throws(() => service.submitActiveRawMaintenanceAction("colleges", {
+    action: "deleteRow",
+    expectedRevision: 1,
+    row: { college_code: "COL-A", college_name: "关系学院" },
+  }, { id: 1, username: "admin", role: "admin" }), /仍被专业或用途单元引用/);
+  assert.throws(() => service.submitActiveRawMaintenanceAction("buildings", {
+    action: "replaceRows",
+    expectedRevision: 0,
+    rows: [{ building_code: "B0101", building_name: "不应保存" }],
+  }, { id: 1, username: "admin", role: "admin" }), /当前数据已被其他人更新/);
+
+  assert.equal(db.prepare("SELECT building_name FROM buildings WHERE building_code = 'B0101'").get().building_name, "关系楼");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM colleges WHERE college_code = 'COL-A'").get().count, 1);
+});
+
 test("copy datasets do not reintroduce spaces marked deleted", () => {
   const db = createPlanCopyTestDb();
   const datasetService = createDatasetServiceStub();
@@ -2051,6 +2172,22 @@ test("assignment moves submit through action endpoints instead of assignment bat
   assert.match(moveSource, /moveToBasket/);
   assert.match(moveSource, /directMove/);
   assert.doesNotMatch(moveSource, /return saveActivePlanCopyToServer\(\);/);
+});
+
+test("raw maintenance tables submit through action endpoints instead of full dataset save", () => {
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const rawSource = fs.readFileSync(path.join(__dirname, "..", "js", "app", "raw-editor.js"), "utf8");
+
+  assert.match(appSource, /submitRawMaintenanceActionToServer/);
+  assert.match(appSource, /\/raw-maintenance\/\$\{encodeURIComponent\(key\)\}\/actions/);
+  assert.match(rawSource, /saveRawMaintenanceActionToServer/);
+  assert.match(rawSource, /RAW_MAINTENANCE_KEYS/);
+  assert.match(rawSource, /RAW_MAINTENANCE_KEYS\.has\(state\.editorKey\)[\s\S]*await saveRawMaintenanceWithRollback\(previousData, previousRevision, "replaceRows"/);
+  assert.ok(
+    rawSource.indexOf("await saveRawMaintenanceWithRollback(previousData, previousRevision, \"replaceRows\"") <
+      rawSource.indexOf("state.editorKey === \"plan_assignments\" && activePlanCopyMeta()"),
+    "raw maintenance tables should take the action endpoint before legacy save branches"
+  );
 });
 
 test("admin details render inline edit actions and disabled split merge menu", () => {

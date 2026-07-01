@@ -203,6 +203,7 @@ const RawEditorController = RawEditor.createRawEditor({
   segmentTypeLabel,
   saveWithRollback,
   savePlanAssignmentsWithRollback,
+  saveRawMaintenanceActionToServer: submitRawMaintenanceActionToServer,
   cloneDataset,
   refreshStateAndRender,
   updateStatus,
@@ -550,6 +551,24 @@ async function submitAssignmentActionToServer(action, payload = {}) {
       action,
       expectedRevision,
       planCode: activePlanValue?.plan_code || activePlanValue?.id || "",
+    }),
+  });
+  state.serverRevision = response.revision;
+  state.planCopies = response.planCopies || [];
+  state.data = normalizeDataset(response.dataset);
+  if (response.maintenance) state.maintenance = response.maintenance;
+  persistDataset();
+  return response;
+}
+
+async function submitRawMaintenanceActionToServer(key, action, payload = {}) {
+  if (!state.serverMode) return null;
+  const response = await fetchJson(`/api/dataset/active/raw-maintenance/${encodeURIComponent(key)}/actions`, {
+    method: "POST",
+    body: JSON.stringify({
+      ...payload,
+      action,
+      expectedRevision: state.serverRevision,
     }),
   });
   state.serverRevision = response.revision;

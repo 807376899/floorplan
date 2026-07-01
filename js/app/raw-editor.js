@@ -54,10 +54,13 @@
       segmentTypeLabel,
       saveWithRollback,
       savePlanAssignmentsWithRollback,
+      saveRawMaintenanceActionToServer,
       cloneDataset,
       refreshStateAndRender,
       updateStatus,
     } = deps;
+    const RAW_MAINTENANCE_KEYS = (typeof window !== "undefined" && window.FloorplanApp?.RawMaintenanceActions?.RAW_MAINTENANCE_KEYS)
+      || new Set(["buildings", "floor_segments", "colleges", "majors", "lab_types"]);
 
     function renderEditor() {
       syncEditorActionButtons();
@@ -526,7 +529,9 @@
         button.textContent = "删除中";
       }
       state.data = normalizeDataset(state.data);
-      const saveOk = await saveWithRollback(previousData, previousRevision, `删除 ${state.editorKey} 行`, "删除行失败");
+      const saveOk = state.serverMode && RAW_MAINTENANCE_KEYS.has(state.editorKey) && typeof saveRawMaintenanceActionToServer === "function"
+        ? await saveRawMaintenanceWithRollback(previousData, previousRevision, "deleteRow", { row })
+        : await saveWithRollback(previousData, previousRevision, `删除 ${state.editorKey} 行`, "删除行失败");
       if (saveOk) {
         refreshStateAndRender(successMessage, { stamp: false, forceMoveReset: true });
       } else if (button) {
@@ -654,11 +659,26 @@
       if (state.editorKey === "plan_assignments") replaceFilteredAssignments(rows.map((row) => normalizeAssignment(row, relationMaps(state.data))));
     
       state.data = normalizeDataset(state.data);
-      const saveOk = state.editorKey === "plan_assignments" && activePlanCopyMeta()
+      const saveOk = state.serverMode && RAW_MAINTENANCE_KEYS.has(state.editorKey) && typeof saveRawMaintenanceActionToServer === "function"
+        ? await saveRawMaintenanceWithRollback(previousData, previousRevision, "replaceRows", { rows })
+        : state.editorKey === "plan_assignments" && activePlanCopyMeta()
         ? await savePlanAssignmentsWithRollback(previousData, previousRevision)
         : await saveWithRollback(previousData, previousRevision, `编辑 ${state.editorKey}`, "表格保存失败");
       if (saveOk) {
         refreshStateAndRender("已应用表格修改。", { stamp: false, forceMoveReset: true });
+      }
+    }
+
+    async function saveRawMaintenanceWithRollback(previousData, previousRevision, action, payload) {
+      try {
+        await saveRawMaintenanceActionToServer(state.editorKey, action, payload);
+        return true;
+      } catch (error) {
+        state.data = normalizeDataset(previousData);
+        state.serverRevision = previousRevision;
+        setRawEditorNotice(error.message || "基础表保存失败。");
+        refreshStateAndRender(`基础表保存失败：${error.message}`, { stamp: false, forceMoveReset: true });
+        return false;
       }
     }
     

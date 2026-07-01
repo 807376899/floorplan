@@ -10,6 +10,7 @@ const { createImportService } = require("./server/import-service");
 const { createPlanCopyService } = require("./server/plan-copy-service");
 const { createDetailActionService } = require("./server/detail-action-service");
 const { createAssignmentActionService } = require("./server/assignment-action-service");
+const { createRawMaintenanceService } = require("./server/raw-maintenance-service");
 const { createRouteApi } = require("./server/routes");
 const { formatListenError } = require("./server/listen-errors");
 
@@ -22,8 +23,9 @@ const snapshots = createSnapshotService(db, config, audit, dataset);
 const planCopies = createPlanCopyService(db, dataset);
 const detailActions = createDetailActionService(db, dataset);
 const assignmentActions = createAssignmentActionService(db, dataset);
+const rawMaintenance = createRawMaintenanceService(db, dataset);
 const imports = createImportService(db, config, audit, dataset, snapshots, planCopies);
-const services = { audit, auth, dataset, snapshots, imports, planCopies, detailActions, assignmentActions };
+const services = { audit, auth, dataset, snapshots, imports, planCopies, detailActions, assignmentActions, rawMaintenance };
 const routeApi = createRouteApi(services);
 const serveStatic = createStaticHandler(config);
 

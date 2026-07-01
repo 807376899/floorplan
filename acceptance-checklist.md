@@ -159,6 +159,8 @@
 - [ ] 详情栏保存成功后由关系表投影刷新可见 dataset；保存失败或 revision 冲突时不更新关系表，也不更新 legacy JSON 快照。
 - [ ] 主图规划未规划空间、加入待安置区、待安置区归位、待安置区落位、同层直接搬迁和新增待安置用途单元通过动作级 assignment API 保存，不从前端回传整包可见 dataset 或批量 assignment 覆盖作为权威保存路径。
 - [ ] Assignment action 写入 copy 方案时，新建待安置用途单元进入当前方案 `plan_lab_overrides`，不写入全局 `labs`；搬迁、归位和待安置状态只更新当前方案 `plan_assignments`，不影响其他方案。
+- [ ] 高级原始维护表中的教学楼、楼层骨架、学院、专业和用途类型通过动作级 raw-maintenance API 保存，服务端优先写关系表并通过关系表投影刷新前端，不以整包可见 dataset 作为权威保存载荷。
+- [ ] 删除教学楼或楼层骨架会在关系表事务中级联删除相关骨架或空间，并将受影响方案分配标记为 `Invalid`；删除被引用的学院、专业或用途类型会被阻止，失败时不更新关系表或 legacy JSON 快照。
 - [ ] Admin viewing multiple plans sees each teaching building only once in the raw teaching-building table, even when several visible plan copies contain that building in legacy JSON payloads.
 - [ ] Saving active raw maintenance data immediately updates relational global reference tables for buildings, floor skeletons, colleges, majors, and use types.
 - [ ] Spaces, use units, assignments, and deleted-space tombstones remain plan-scoped so editing or deleting a room in one non-baseline copy does not affect other plans.
