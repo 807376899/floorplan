@@ -108,6 +108,16 @@ function createPlanCopyService(db, datasetService) {
     return db.prepare("SELECT * FROM plan_copies ORDER BY id ASC").all();
   }
 
+  function getCopyRow(copyId) {
+    return db.prepare("SELECT * FROM plan_copies WHERE id = ?").get(copyId);
+  }
+
+  function syncCopyLifecycleToRelations(copyId) {
+    const row = getCopyRow(copyId);
+    if (!row) return;
+    RelationalStore.syncPlanLifecycle(db, publicCopy(row));
+  }
+
   function copyPayloadIndex() {
     const rows = db.prepare("SELECT * FROM plan_copies WHERE deleted_at IS NULL").all();
     const index = {
@@ -339,58 +349,65 @@ function createPlanCopyService(db, datasetService) {
     const name = String(body.planName || `${source.plan.plan_name || source.plan.plan_code} 副本`).trim();
     if (!name) throw httpError(400, "invalid_plan_name", "请输入方案名称");
 
-    const result = db.prepare(`
-      INSERT INTO plan_copies (
-        owner_user_id, plan_code, plan_name, description, visibility, revision,
-        plan_json, assignments_json, source_plan_code, source_copy_id, created_at, updated_at, source_type
-      ) VALUES (?, ?, ?, ?, 'private', 1, ?, ?, ?, ?, ?, ?, 'copy')
-    `).run(
-      user.id,
-      `pending-${Date.now()}`,
-      name,
-      String(body.description || "").trim(),
-      "{}",
-      "[]",
-      source.plan.plan_code || "",
-      source.copyId || null,
-      now,
-      now
-    );
+    db.exec("BEGIN");
+    try {
+      const result = db.prepare(`
+        INSERT INTO plan_copies (
+          owner_user_id, plan_code, plan_name, description, visibility, revision,
+          plan_json, assignments_json, source_plan_code, source_copy_id, created_at, updated_at, source_type
+        ) VALUES (?, ?, ?, ?, 'private', 1, ?, ?, ?, ?, ?, ?, 'copy')
+      `).run(
+        user.id,
+        `pending-${Date.now()}`,
+        name,
+        String(body.description || "").trim(),
+        "{}",
+        "[]",
+        source.plan.plan_code || "",
+        source.copyId || null,
+        now,
+        now
+      );
 
-    const copyId = Number(result.lastInsertRowid);
-    const planCode = `copy-${copyId}`;
-    const plan = {
-      ...source.plan,
-      id: planCode,
-      plan_code: planCode,
-      plan_name: name,
-      plan_type: "copy",
-      source_plan_code: source.plan.plan_code || "",
-      description: String(body.description || source.plan.description || "").trim(),
-      is_locked: false,
-      is_default_compare_before: false,
-      is_default_compare_after: false,
-      created_at: now,
-      updated_at: now,
-    };
-    const assignments = source.assignments.map((row) => ({
-      ...row,
-      id: `${planCode}__${row.lab_code}`,
-      plan_code: planCode,
-      plan_id: planCode,
-      created_at: now,
-      updated_at: now,
-    }));
+      const copyId = Number(result.lastInsertRowid);
+      const planCode = `copy-${copyId}`;
+      const plan = {
+        ...source.plan,
+        id: planCode,
+        plan_code: planCode,
+        plan_name: name,
+        plan_type: "copy",
+        source_plan_code: source.plan.plan_code || "",
+        description: String(body.description || source.plan.description || "").trim(),
+        is_locked: false,
+        is_default_compare_before: false,
+        is_default_compare_after: false,
+        created_at: now,
+        updated_at: now,
+      };
+      const assignments = source.assignments.map((row) => ({
+        ...row,
+        id: `${planCode}__${row.lab_code}`,
+        plan_code: planCode,
+        plan_id: planCode,
+        created_at: now,
+        updated_at: now,
+      }));
 
-    const copyDataset = datasetService.normalizeIncomingDataset({
-      ...clone(source.dataset),
-      plans: [plan],
-      plan_assignments: assignments,
-    });
-    db.prepare("UPDATE plan_copies SET plan_code = ?, plan_json = ?, assignments_json = ?, dataset_json = ? WHERE id = ?")
-      .run(planCode, JSON.stringify(plan), JSON.stringify(assignments), JSON.stringify(copyDataset), copyId);
-
-    return { copyId };
+      const copyDataset = datasetService.normalizeIncomingDataset({
+        ...clone(source.dataset),
+        plans: [plan],
+        plan_assignments: assignments,
+      });
+      db.prepare("UPDATE plan_copies SET plan_code = ?, plan_json = ?, assignments_json = ?, dataset_json = ? WHERE id = ?")
+        .run(planCode, JSON.stringify(plan), JSON.stringify(assignments), JSON.stringify(copyDataset), copyId);
+      syncCopyLifecycleToRelations(copyId);
+      db.exec("COMMIT");
+      return { copyId };
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   function createImportedPlans(draftId, fileName, dataset, user) {
@@ -409,58 +426,66 @@ function createPlanCopyService(db, datasetService) {
 
   function createDatasetBackedCopy(options, user) {
     const now = nowIso();
-    const result = db.prepare(`
-      INSERT INTO plan_copies (
-        owner_user_id, plan_code, plan_name, description, visibility, revision,
-        plan_json, assignments_json, source_plan_code, source_copy_id, created_at, updated_at,
-        source_type, dataset_json, import_draft_id, is_baseline
-      ) VALUES (?, ?, ?, ?, 'private', 1, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 0)
-    `).run(
-      user.id,
-      `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      String(options.planName || "").trim(),
-      String(options.description || "").trim(),
-      "{}",
-      "[]",
-      options.sourcePlan.plan_code || "",
-      now,
-      now,
-      options.sourceType || "copy",
-      null,
-      options.importDraftId || null
-    );
-    const copyId = Number(result.lastInsertRowid);
-    const planCode = `copy-${copyId}`;
-    const plan = {
-      ...options.sourcePlan,
-      id: planCode,
-      plan_code: planCode,
-      plan_name: String(options.planName || options.sourcePlan.plan_name || planCode).trim(),
-      plan_type: "copy",
-      source_plan_code: options.sourcePlan.plan_code || "",
-      description: String(options.description || options.sourcePlan.description || "").trim(),
-      is_locked: false,
-      is_default_compare_before: false,
-      is_default_compare_after: false,
-      created_at: now,
-      updated_at: now,
-    };
-    const assignments = options.sourceAssignments.map((row) => ({
-      ...row,
-      id: `${planCode}__${row.lab_code}`,
-      plan_code: planCode,
-      plan_id: planCode,
-      created_at: now,
-      updated_at: now,
-    }));
-    const copyDataset = datasetService.normalizeIncomingDataset({
-      ...clone(options.sourceDataset),
-      plans: [plan],
-      plan_assignments: assignments,
-    });
-    db.prepare("UPDATE plan_copies SET plan_code = ?, plan_json = ?, assignments_json = ?, dataset_json = ? WHERE id = ?")
-      .run(planCode, JSON.stringify(plan), JSON.stringify(assignments), JSON.stringify(copyDataset), copyId);
-    return { copyId, planCode };
+    db.exec("BEGIN");
+    try {
+      const result = db.prepare(`
+        INSERT INTO plan_copies (
+          owner_user_id, plan_code, plan_name, description, visibility, revision,
+          plan_json, assignments_json, source_plan_code, source_copy_id, created_at, updated_at,
+          source_type, dataset_json, import_draft_id, is_baseline
+        ) VALUES (?, ?, ?, ?, 'private', 1, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 0)
+      `).run(
+        user.id,
+        `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        String(options.planName || "").trim(),
+        String(options.description || "").trim(),
+        "{}",
+        "[]",
+        options.sourcePlan.plan_code || "",
+        now,
+        now,
+        options.sourceType || "copy",
+        null,
+        options.importDraftId || null
+      );
+      const copyId = Number(result.lastInsertRowid);
+      const planCode = `copy-${copyId}`;
+      const plan = {
+        ...options.sourcePlan,
+        id: planCode,
+        plan_code: planCode,
+        plan_name: String(options.planName || options.sourcePlan.plan_name || planCode).trim(),
+        plan_type: "copy",
+        source_plan_code: options.sourcePlan.plan_code || "",
+        description: String(options.description || options.sourcePlan.description || "").trim(),
+        is_locked: false,
+        is_default_compare_before: false,
+        is_default_compare_after: false,
+        created_at: now,
+        updated_at: now,
+      };
+      const assignments = options.sourceAssignments.map((row) => ({
+        ...row,
+        id: `${planCode}__${row.lab_code}`,
+        plan_code: planCode,
+        plan_id: planCode,
+        created_at: now,
+        updated_at: now,
+      }));
+      const copyDataset = datasetService.normalizeIncomingDataset({
+        ...clone(options.sourceDataset),
+        plans: [plan],
+        plan_assignments: assignments,
+      });
+      db.prepare("UPDATE plan_copies SET plan_code = ?, plan_json = ?, assignments_json = ?, dataset_json = ? WHERE id = ?")
+        .run(planCode, JSON.stringify(plan), JSON.stringify(assignments), JSON.stringify(copyDataset), copyId);
+      syncCopyLifecycleToRelations(copyId);
+      db.exec("COMMIT");
+      return { copyId, planCode };
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   function updateCopy(copyId, body, user) {
@@ -479,11 +504,19 @@ function createPlanCopyService(db, datasetService) {
       updated_at: now,
     };
     const nextDatasetJson = updateDatasetPlanName(row.dataset_json, row.plan_code, nextName, description, nextPlan);
-    db.prepare(`
-      UPDATE plan_copies
-      SET plan_name = ?, description = ?, visibility = ?, plan_json = ?, dataset_json = ?, updated_at = ?
-      WHERE id = ?
-    `).run(nextName, description, nextVisibility, JSON.stringify(nextPlan), nextDatasetJson, now, copyId);
+    db.exec("BEGIN");
+    try {
+      db.prepare(`
+        UPDATE plan_copies
+        SET plan_name = ?, description = ?, visibility = ?, plan_json = ?, dataset_json = ?, updated_at = ?
+        WHERE id = ?
+      `).run(nextName, description, nextVisibility, JSON.stringify(nextPlan), nextDatasetJson, now, copyId);
+      syncCopyLifecycleToRelations(copyId);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   function updateManagedPlan(copyId, body, user) {
@@ -527,11 +560,19 @@ function createPlanCopyService(db, datasetService) {
       updated_at: now,
     };
     const nextDatasetJson = updateDatasetPlanName(row.dataset_json, row.plan_code, row.plan_name, row.description, nextPlan);
-    db.prepare(`
-      UPDATE plan_copies
-      SET is_baseline = ?, baselined_at = ?, baselined_by = ?, plan_json = ?, dataset_json = ?, updated_at = ?
-      WHERE id = ?
-    `).run(baseline ? 1 : 0, baseline ? now : null, baseline ? user.username : null, JSON.stringify(nextPlan), nextDatasetJson, now, copyId);
+    db.exec("BEGIN");
+    try {
+      db.prepare(`
+        UPDATE plan_copies
+        SET is_baseline = ?, baselined_at = ?, baselined_by = ?, plan_json = ?, dataset_json = ?, updated_at = ?
+        WHERE id = ?
+      `).run(baseline ? 1 : 0, baseline ? now : null, baseline ? user.username : null, JSON.stringify(nextPlan), nextDatasetJson, now, copyId);
+      syncCopyLifecycleToRelations(copyId);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   function setActiveManagedPlanBaseline(planCode, user, isBaseline = true) {
@@ -717,7 +758,16 @@ function createPlanCopyService(db, datasetService) {
 
   function deleteCopy(copyId, user) {
     getOwnedCopy(copyId, user);
-    db.prepare("UPDATE plan_copies SET deleted_at = ?, updated_at = ? WHERE id = ?").run(nowIso(), nowIso(), copyId);
+    const now = nowIso();
+    db.exec("BEGIN");
+    try {
+      db.prepare("UPDATE plan_copies SET deleted_at = ?, updated_at = ? WHERE id = ?").run(now, now, copyId);
+      syncCopyLifecycleToRelations(copyId);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   function deleteManagedPlan(copyId, user) {
@@ -857,6 +907,7 @@ function createPlanCopyService(db, datasetService) {
       importDraftId: row.import_draft_id || null,
       baselinedAt: row.baselined_at || "",
       baselinedBy: row.baselined_by || "",
+      deletedAt: row.deleted_at || null,
       hasDataset: Boolean(dataset),
       revision: row.revision,
       sourcePlanCode: row.source_plan_code,

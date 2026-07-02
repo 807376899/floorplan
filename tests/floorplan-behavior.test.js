@@ -2361,6 +2361,81 @@ test("managed plan baseline service persists cancellation", () => {
   assert.equal(dataset.plans[0].is_locked, false);
 });
 
+test("plan copy creation writes lifecycle rows to relational plans", () => {
+  const db = createActiveDatasetTestDb(activeApplyDataset());
+  const datasetService = createRelationalActiveDatasetService(db, activeApplyDataset());
+  RelationalStore.syncFromVisibleDataset(db, datasetService.getActiveDataset().dataset, []);
+  const service = createPlanCopyService(db, datasetService);
+
+  const result = service.createCopy({ sourcePlanCode: "PLAN-A", planName: "新建副本" }, { id: 1, username: "admin", role: "admin" });
+  const row = db.prepare("SELECT copy_id, plan_code, plan_name, owner_user_id, visibility, is_baseline, deleted_at FROM plans WHERE copy_id = ?").get(result.copyId);
+  const assignment = db.prepare("SELECT plan_id, lab_code, space_code FROM plan_assignments WHERE plan_id = ?").get(`copy-${result.copyId}`);
+
+  assert.equal(row.plan_code, `copy-${result.copyId}`);
+  assert.equal(row.plan_name, "新建副本");
+  assert.equal(row.owner_user_id, 1);
+  assert.equal(row.visibility, "private");
+  assert.equal(row.is_baseline, 0);
+  assert.equal(row.deleted_at, null);
+  assert.equal(assignment.lab_code, "UNIT000001");
+  assert.equal(assignment.space_code, "S101");
+});
+
+test("plan copy management updates relational lifecycle state", () => {
+  const db = createActiveDatasetTestDb(activeApplyDataset());
+  const datasetService = createRelationalActiveDatasetService(db, activeApplyDataset());
+  RelationalStore.syncFromVisibleDataset(db, datasetService.getActiveDataset().dataset, []);
+  insertPlanCopyRow(db, {
+    id: 1,
+    ownerUserId: 1,
+    planCode: "copy-1",
+    planName: "旧名称",
+    visibility: "private",
+    assignments: [{ id: "copy-1__UNIT000001", plan_code: "copy-1", lab_code: "UNIT000001", space_code: "S101", assignment_status: "assigned" }],
+    dataset: activeApplyDataset({
+      plans: [{ id: "copy-1", plan_code: "copy-1", plan_name: "旧名称", plan_type: "copy", copy_id: 1 }],
+      plan_assignments: [{ id: "copy-1__UNIT000001", plan_code: "copy-1", lab_code: "UNIT000001", space_code: "S101", assignment_status: "assigned" }],
+    }),
+  });
+  const service = createPlanCopyService(db, datasetService);
+  RelationalStore.syncFromVisibleDataset(db, datasetService.getActiveDataset().dataset, [{
+    id: 1,
+    planCode: "copy-1",
+    planName: "旧名称",
+    ownerUserId: 1,
+    visibility: "private",
+    revision: 1,
+    isBaseline: false,
+    plan: { id: "copy-1", plan_code: "copy-1", plan_name: "旧名称", plan_type: "copy" },
+    sourceType: "copy",
+    createdAt: "2026-06-01T00:00:00Z",
+    updatedAt: "2026-06-01T00:00:00Z",
+  }]);
+
+  service.updateManagedPlan(1, { planName: "新名称", visibility: "public" }, { id: 1, username: "admin", role: "admin" });
+  let row = db.prepare("SELECT plan_name, visibility, is_baseline, is_locked, deleted_at FROM plans WHERE copy_id = 1").get();
+  assert.equal(row.plan_name, "新名称");
+  assert.equal(row.visibility, "public");
+  assert.equal(row.is_baseline, 0);
+  assert.equal(row.deleted_at, null);
+
+  service.setManagedPlanBaseline(1, { id: 1, username: "admin", role: "admin" }, true);
+  row = db.prepare("SELECT plan_name, visibility, is_baseline, is_locked, deleted_at FROM plans WHERE copy_id = 1").get();
+  assert.equal(row.plan_name, "新名称");
+  assert.equal(row.visibility, "public");
+  assert.equal(row.is_baseline, 1);
+  assert.equal(row.is_locked, 1);
+
+  service.setManagedPlanBaseline(1, { id: 1, username: "admin", role: "admin" }, false);
+  row = db.prepare("SELECT is_baseline, is_locked FROM plans WHERE copy_id = 1").get();
+  assert.equal(row.is_baseline, 0);
+  assert.equal(row.is_locked, 0);
+
+  service.deleteManagedPlan(1, { id: 1, username: "admin", role: "admin" });
+  row = db.prepare("SELECT deleted_at FROM plans WHERE copy_id = 1").get();
+  assert.ok(row.deleted_at);
+});
+
 test("active managed plan baseline service persists cancellation", () => {
   const db = createPlanCopyTestDb();
   const datasetService = createDatasetServiceStub();

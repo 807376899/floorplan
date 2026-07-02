@@ -236,6 +236,19 @@ function replaceActiveDataset(db, dataset) {
   syncFromVisibleDataset(db, dataset, []);
 }
 
+function syncPlanLifecycle(db, copy) {
+  ensureRelationalSchema(db);
+  const now = new Date().toISOString();
+  upsertPlan(db, copy?.plan || {}, copy, now);
+  for (const assignment of copy?.assignments || []) {
+    upsertAssignment(db, {
+      ...assignment,
+      plan_code: copy.planCode,
+      plan_id: copy.planCode,
+    }, now);
+  }
+}
+
 function projectGlobalReferenceRows(db, dataset) {
   ensureRelationalSchema(db);
   const next = { ...(dataset || {}) };
@@ -778,6 +791,7 @@ module.exports = {
   ensureRelationalSchema,
   syncFromVisibleDataset,
   replaceActiveDataset,
+  syncPlanLifecycle,
   projectGlobalReferenceRows,
   hasRelationalBusinessData,
   pruneRedundantPlanOverrides,
