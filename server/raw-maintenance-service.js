@@ -180,7 +180,7 @@ function planSpaceOverridesForSegment(db, segment) {
   return matchingPlanSpaceOverrides(db, (payload) =>
     text(payload.building_code) === buildingCode &&
     text(payload.floor_code) === floorCode &&
-    text(payload.segment_code) === segmentCode
+    (text(payload.segment_code) === segmentCode || text(payload.skeleton_code) === segmentCode)
   );
 }
 

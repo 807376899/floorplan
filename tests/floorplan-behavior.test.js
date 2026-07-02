@@ -1041,6 +1041,106 @@ test("saving copy datasets synchronizes relational plan tables immediately", () 
   assert.equal(db.prepare("SELECT effective_from FROM plan_assignments WHERE plan_id = 'copy-1' AND lab_code = 'UNIT000001'").get().effective_from, "2026-06");
 });
 
+test("redundant plan overrides are pruned while real copy differences remain", () => {
+  const db = createPlanCopyTestDb();
+  RelationalStore.ensureRelationalSchema(db);
+  const now = "2026-07-02T00:00:00Z";
+  const baseDataset = {
+    buildings: [{ building_code: "B0101", building_name: "基础楼" }],
+    floor_segments: [{ building_code: "B0101", floor_code: "1", segment_code: "EW01010101", element_type: "corridor" }],
+    spaces: [
+      { id: "space-101", space_code: "S101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "101", rear_door: "", side: "north", offset_m: 0, length_m: 8, width_m: 6, area_m2: 48, network_segment: "10.0.0.0/24", current_status: "active" },
+      { id: "space-102", space_code: "S102", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "102", rear_door: "", side: "north", offset_m: 9, length_m: 8, width_m: 6, area_m2: 48, network_segment: "10.0.1.0/24", current_status: "active" },
+    ],
+    labs: [
+      { id: "lab-1", lab_code: "UNIT000001", lab_name: "基础用途1", college_code: "COL-A", college: "学院A", major_code: "MAJ-A", major: "专业A", lab_type_code: "USE0001", lab_type: "实验室", director: "张三", seat_count: 30, computer_count: 20, status: "active" },
+      { id: "lab-2", lab_code: "UNIT000002", lab_name: "基础用途2", college_code: "COL-A", college: "学院A", major_code: "MAJ-A", major: "专业A", lab_type_code: "USE0001", lab_type: "实验室", director: "李四", seat_count: 20, computer_count: 10, status: "active" },
+    ],
+    colleges: [],
+    majors: [],
+    lab_types: [],
+    plans: [],
+    plan_assignments: [],
+    file_assets: [],
+    imports: [],
+    deleted_space_ids: [],
+  };
+  RelationalStore.syncFromVisibleDataset(db, baseDataset, []);
+  db.prepare(`
+    INSERT INTO plans (id, copy_id, plan_code, plan_name, owner_user_id, visibility, is_baseline, is_locked, revision, created_at, updated_at)
+    VALUES ('copy-1', 1, 'copy-1', '副本', 1, 'public', 0, 0, 1, ?, ?)
+  `).run(now, now);
+  for (const row of [
+    { ...baseDataset.spaces[0], copy_id: 1 },
+    { ...baseDataset.spaces[1], copy_id: 1, network_segment: "10.9.9.0/24" },
+  ]) {
+    db.prepare(`
+      INSERT INTO plan_space_overrides (id, plan_id, base_space_id, space_code, operation, payload_json, created_at, updated_at)
+      VALUES (?, 'copy-1', ?, ?, 'upsert', ?, ?, ?)
+    `).run(`copy-1__${row.space_code}`, row.id, row.space_code, JSON.stringify(row), now, now);
+  }
+  for (const row of [
+    { ...baseDataset.labs[0], copy_id: 1 },
+    { ...baseDataset.labs[1], copy_id: 1, director: "王五" },
+  ]) {
+    db.prepare(`
+      INSERT INTO plan_lab_overrides (id, plan_id, base_lab_id, lab_code, operation, payload_json, created_at, updated_at)
+      VALUES (?, 'copy-1', ?, ?, 'upsert', ?, ?, ?)
+    `).run(`copy-1__${row.lab_code}`, row.id, row.lab_code, JSON.stringify(row), now, now);
+  }
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_space_overrides WHERE plan_id = 'copy-1'").get().count, 2);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_lab_overrides WHERE plan_id = 'copy-1'").get().count, 2);
+
+  const result = RelationalStore.pruneRedundantPlanOverrides(db);
+
+  assert.equal(result.removedSpaces, 1);
+  assert.equal(result.removedLabs, 1);
+  assert.deepEqual(db.prepare("SELECT space_code FROM plan_space_overrides WHERE plan_id = 'copy-1' ORDER BY space_code").all().map((row) => row.space_code), ["S102"]);
+  assert.deepEqual(db.prepare("SELECT lab_code FROM plan_lab_overrides WHERE plan_id = 'copy-1' ORDER BY lab_code").all().map((row) => row.lab_code), ["UNIT000002"]);
+});
+
+test("copy dataset sync skips redundant overrides and clears stale redundant rows", () => {
+  const db = createPlanCopyTestDb();
+  RelationalStore.ensureRelationalSchema(db);
+  const baseDataset = {
+    buildings: [{ building_code: "B0101", building_name: "基础楼" }],
+    floor_segments: [{ building_code: "B0101", floor_code: "1", segment_code: "EW01010101", element_type: "corridor" }],
+    spaces: [{ id: "space-101", space_code: "S101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "101", rear_door: "", side: "north", offset_m: 0, length_m: 8, width_m: 6, area_m2: 48, network_segment: "10.0.0.0/24", current_status: "active" }],
+    labs: [{ id: "lab-1", lab_code: "UNIT000001", lab_name: "基础用途1", college_code: "COL-A", college: "学院A", major_code: "MAJ-A", major: "专业A", lab_type_code: "USE0001", lab_type: "实验室", director: "张三", seat_count: 30, computer_count: 20, status: "active" }],
+    colleges: [],
+    majors: [],
+    lab_types: [],
+    plans: [],
+    plan_assignments: [],
+    file_assets: [],
+    imports: [],
+    deleted_space_ids: [],
+  };
+  RelationalStore.syncFromVisibleDataset(db, baseDataset, []);
+  db.prepare(`
+    INSERT INTO plans (id, copy_id, plan_code, plan_name, owner_user_id, visibility, is_baseline, is_locked, revision, created_at, updated_at)
+    VALUES ('copy-1', 1, 'copy-1', '副本', 1, 'public', 0, 0, 1, '2026-07-02T00:00:00Z', '2026-07-02T00:00:00Z')
+  `).run();
+  db.prepare(`
+    INSERT INTO plan_space_overrides (id, plan_id, base_space_id, space_code, operation, payload_json, created_at, updated_at)
+    VALUES ('copy-1__S101', 'copy-1', 'space-101', 'S101', 'upsert', ?, '2026-07-02T00:00:00Z', '2026-07-02T00:00:00Z')
+  `).run(JSON.stringify({ ...baseDataset.spaces[0], copy_id: 1 }));
+  db.prepare(`
+    INSERT INTO plan_lab_overrides (id, plan_id, base_lab_id, lab_code, operation, payload_json, created_at, updated_at)
+    VALUES ('copy-1__UNIT000001', 'copy-1', 'lab-1', 'UNIT000001', 'upsert', ?, '2026-07-02T00:00:00Z', '2026-07-02T00:00:00Z')
+  `).run(JSON.stringify({ ...baseDataset.labs[0], copy_id: 1 }));
+
+  RelationalStore.syncFromVisibleDataset(db, {
+    ...baseDataset,
+    spaces: [{ ...baseDataset.spaces[0], copy_id: 1 }],
+    labs: [{ ...baseDataset.labs[0], copy_id: 1 }],
+  }, [{ id: 1, planCode: "copy-1", planName: "副本", ownerUserId: 1, visibility: "public", revision: 1 }]);
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_space_overrides WHERE plan_id = 'copy-1'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_lab_overrides WHERE plan_id = 'copy-1'").get().count, 0);
+});
+
 test("saving active datasets synchronizes global relational reference tables immediately", () => {
   const initial = createDatasetServiceStubWithNormalizer().getActiveDataset().dataset;
   const db = createActiveDatasetTestDb(initial);
@@ -2206,6 +2306,16 @@ test("data editor no longer exposes the business edit tab or script", () => {
   assert.match(rawEditorSource, /els\.addRowBtn\.textContent = "新增行"/);
   assert.match(rawEditorSource, /els\.applyTableBtn\.textContent = "应用修改"/);
   assert.match(rawEditorSource, /els\.downloadSheetBtn\.hidden = false/);
+});
+
+test("startup does not block on the SheetJS CDN and Excel loading is on demand", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  const importExportSource = fs.readFileSync(path.join(__dirname, "..", "js", "app", "import-export.js"), "utf8");
+
+  assert.doesNotMatch(html, /cdn\.sheetjs\.com/);
+  assert.match(importExportSource, /ensureWorkbookAvailable/);
+  assert.match(importExportSource, /cdn\.sheetjs\.com/);
+  assert.match(importExportSource, /setTimeout/);
 });
 
 test("detail more panel closes from outside click and escape", () => {

@@ -155,6 +155,8 @@
 - [ ] Relational projection preserves plan visibility rules: visitors see public/baseline plans, editor users also see their own private plans, and admin users see every non-deleted plan.
 - [ ] Legacy JSON is synchronized into relational tables as fallback on read, but relation rows are the returned visible dataset authority after synchronization.
 - [ ] Once relational business rows exist, visible-dataset reads do not re-import stale plan-copy legacy JSON in a way that resurrects deleted buildings, floor skeletons, spaces, or use units.
+- [ ] `plan_space_overrides` and `plan_lab_overrides` store only real plan differences; redundant overrides identical to global baseline rows are pruned before they can bloat `/api/bootstrap`, `/api/dataset/active`, login, refresh, or save responses.
+- [ ] Startup relational compaction creates a SQLite backup under `data/backups` before deleting redundant overrides, and preserves real copy differences, tombstones, assignments, and legacy JSON compatibility data.
 - [ ] 详情栏编辑实验室、改建房间、新增房间、编辑房间和删除房间通过动作级 API 保存，不从前端回传整包可见 dataset 覆盖保存。
 - [ ] 详情栏 copy 方案写入优先更新 `plan_space_overrides`、`plan_lab_overrides`、`plan_assignments` 和 `plan_deleted_spaces`；新增 copy 房间不写入全局 `spaces` 基准表。
 - [ ] 详情栏保存成功后由关系表投影刷新可见 dataset；保存失败或 revision 冲突时不更新关系表，也不更新 legacy JSON 快照。
@@ -167,6 +169,11 @@
 - [ ] Saving active raw maintenance data immediately updates relational global reference tables for buildings, floor skeletons, colleges, majors, and use types.
 - [ ] Spaces, use units, assignments, and deleted-space tombstones remain plan-scoped so editing or deleting a room in one non-baseline copy does not affect other plans.
 - [ ] When a copy save clears a deleted-space tombstone, `plan_deleted_spaces` removes the stale tombstone for that copy.
+
+## Startup and External Asset Acceptance
+
+- [ ] First paint, login, `/api/bootstrap`, and ordinary refresh do not wait for external SheetJS/CDN scripts.
+- [ ] SheetJS loads on demand only for `.xlsx` import/export; if it cannot load, the floorplan remains usable and the UI gives JSON import/export fallback guidance.
 
 ## Admin Correction Acceptance
 

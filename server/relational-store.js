@@ -177,6 +177,8 @@ function syncFromVisibleDataset(db, dataset, copies = []) {
   const now = new Date().toISOString();
   const copyByPlanCode = new Map((copies || []).map((copy) => [text(copy.planCode), copy]));
   const planCodeByCopyId = new Map((copies || []).map((copy) => [String(copy.id), text(copy.planCode)]));
+  const syncedSpaceOverrides = new Map();
+  const syncedLabOverrides = new Map();
 
   for (const row of dataset.buildings || []) upsertBuilding(db, row, now);
   for (const row of dataset.floor_segments || []) upsertFloorSegment(db, row, now);
@@ -192,6 +194,7 @@ function syncFromVisibleDataset(db, dataset, copies = []) {
   for (const row of dataset.spaces || []) {
     const planCode = planCodeForScopedRow(row, planCodeByCopyId);
     if (planCode) {
+      rememberSyncedOverride(syncedSpaceOverrides, planCode, text(row.space_code) || text(row.id));
       upsertSpaceOverride(db, planCode, row, now);
     } else {
       upsertSpace(db, row, now);
@@ -200,14 +203,17 @@ function syncFromVisibleDataset(db, dataset, copies = []) {
   for (const row of dataset.labs || []) {
     const planCode = planCodeForScopedRow(row, planCodeByCopyId);
     if (planCode) {
+      rememberSyncedOverride(syncedLabOverrides, planCode, text(row.lab_code) || text(row.id));
       upsertLabOverride(db, planCode, row, now);
     } else {
       upsertLab(db, row, now);
     }
   }
+  pruneStaleOverridesForSyncedPlans(db, [...planCodeByCopyId.values()], syncedSpaceOverrides, syncedLabOverrides);
   for (const row of dataset.plan_assignments || []) upsertAssignment(db, row, now);
   clearDeletedSpacesForPlans(db, [...planCodeByCopyId.values()]);
   for (const ref of dataset.deleted_space_ids || []) upsertDeletedSpace(db, ref, planCodeByCopyId, now);
+  pruneRedundantPlanOverrides(db);
 }
 
 function projectGlobalReferenceRows(db, dataset) {
@@ -240,6 +246,28 @@ function hasRelationalBusinessData(db) {
     "plan_deleted_spaces",
   ];
   return tables.some((table) => db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count > 0);
+}
+
+function rememberSyncedOverride(map, planCode, code) {
+  if (!planCode || !code) return;
+  if (!map.has(planCode)) map.set(planCode, new Set());
+  map.get(planCode).add(code);
+}
+
+function pruneStaleOverridesForSyncedPlans(db, planCodes, syncedSpaceOverrides, syncedLabOverrides) {
+  const uniquePlanCodes = [...new Set((planCodes || []).filter(Boolean))];
+  for (const planCode of uniquePlanCodes) {
+    deleteOverridesNotInSet(db, "plan_space_overrides", "space_code", planCode, syncedSpaceOverrides.get(planCode) || new Set());
+    deleteOverridesNotInSet(db, "plan_lab_overrides", "lab_code", planCode, syncedLabOverrides.get(planCode) || new Set());
+  }
+}
+
+function deleteOverridesNotInSet(db, table, codeColumn, planCode, retainedCodes) {
+  const rows = db.prepare(`SELECT ${codeColumn} AS code FROM ${table} WHERE plan_id = ?`).all(planCode);
+  const stmt = db.prepare(`DELETE FROM ${table} WHERE plan_id = ? AND ${codeColumn} = ?`);
+  for (const row of rows) {
+    if (!retainedCodes.has(text(row.code))) stmt.run(planCode, row.code);
+  }
 }
 
 function selectRows(db, table, orderBy) {
@@ -516,6 +544,10 @@ function upsertPlan(db, row, copy, now) {
 function upsertSpaceOverride(db, planCode, row, now) {
   const spaceCode = text(row.space_code) || text(row.id);
   if (!spaceCode) return;
+  if (spaceMatchesBase(db, spaceCode, row)) {
+    db.prepare("DELETE FROM plan_space_overrides WHERE plan_id = ? AND space_code = ?").run(planCode, spaceCode);
+    return;
+  }
   db.prepare(`
     INSERT INTO plan_space_overrides (id, plan_id, base_space_id, space_code, operation, payload_json, created_at, updated_at)
     VALUES (?, ?, ?, ?, 'upsert', ?, ?, ?)
@@ -529,6 +561,10 @@ function upsertSpaceOverride(db, planCode, row, now) {
 function upsertLabOverride(db, planCode, row, now) {
   const labCode = text(row.lab_code) || text(row.id);
   if (!labCode) return;
+  if (labMatchesBase(db, labCode, row)) {
+    db.prepare("DELETE FROM plan_lab_overrides WHERE plan_id = ? AND lab_code = ?").run(planCode, labCode);
+    return;
+  }
   db.prepare(`
     INSERT INTO plan_lab_overrides (id, plan_id, base_lab_id, lab_code, operation, payload_json, created_at, updated_at)
     VALUES (?, ?, ?, ?, 'upsert', ?, ?, ?)
@@ -537,6 +573,90 @@ function upsertLabOverride(db, planCode, row, now) {
       payload_json = excluded.payload_json,
       updated_at = excluded.updated_at
   `).run(`${planCode}__${labCode}`, planCode, text(row.id), labCode, JSON.stringify(row), now, now);
+}
+
+function parseJsonObject(value) {
+  if (!value || typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function comparableNumber(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Number(parsed.toFixed(6)) : "";
+}
+
+function comparableInteger(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.trunc(parsed) : "";
+}
+
+function rowText(row, ...keys) {
+  for (const key of keys) {
+    const value = text(row && row[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function spaceMatchesBase(db, spaceCode, row) {
+  const base = db.prepare("SELECT * FROM spaces WHERE space_code = ?").get(spaceCode);
+  if (!base) return false;
+  return rowText(row, "building_code") === text(base.building_code) &&
+    rowText(row, "floor_code") === text(base.floor_code) &&
+    rowText(row, "segment_code", "skeleton_code") === text(base.segment_code) &&
+    rowText(row, "front_door", "door_number") === text(base.front_door) &&
+    rowText(row, "rear_door") === text(base.rear_door) &&
+    rowText(row, "side") === text(base.side) &&
+    comparableNumber(row.offset_m) === comparableNumber(base.offset_m) &&
+    comparableNumber(row.length_m) === comparableNumber(base.length_m) &&
+    comparableNumber(row.width_m) === comparableNumber(base.width_m) &&
+    comparableNumber(row.area_m2 ?? row.area_sqm) === comparableNumber(base.area_m2) &&
+    rowText(row, "network_segment") === text(base.network_segment) &&
+    (rowText(row, "current_status", "physical_status") || "active") === (text(base.current_status) || "active") &&
+    rowText(row, "notes") === text(base.notes);
+}
+
+function labMatchesBase(db, labCode, row) {
+  const base = db.prepare("SELECT * FROM labs WHERE lab_code = ?").get(labCode);
+  if (!base) return false;
+  return (rowText(row, "lab_name") || labCode) === (text(base.lab_name) || labCode) &&
+    rowText(row, "college_code") === text(base.college_code) &&
+    rowText(row, "college", "college_name") === text(base.college) &&
+    rowText(row, "major_code") === text(base.major_code) &&
+    rowText(row, "major", "major_name") === text(base.major) &&
+    rowText(row, "lab_type_code") === text(base.lab_type_code) &&
+    rowText(row, "lab_type", "lab_type_name") === text(base.lab_type) &&
+    rowText(row, "director") === text(base.director) &&
+    comparableInteger(row.seat_count ?? row.seats) === comparableInteger(base.seat_count) &&
+    comparableInteger(row.computer_count ?? row.computers) === comparableInteger(base.computer_count) &&
+    (rowText(row, "status") || "active") === (text(base.status) || "active") &&
+    rowText(row, "notes") === text(base.notes);
+}
+
+function pruneRedundantPlanOverrides(db, options = {}) {
+  ensureRelationalSchema(db);
+  let removedSpaces = 0;
+  let removedLabs = 0;
+  const deleteSpace = db.prepare("DELETE FROM plan_space_overrides WHERE id = ?");
+  const deleteLab = db.prepare("DELETE FROM plan_lab_overrides WHERE id = ?");
+  for (const row of db.prepare("SELECT id, space_code, payload_json FROM plan_space_overrides WHERE COALESCE(operation, 'upsert') <> 'deleted'").all()) {
+    if (!spaceMatchesBase(db, row.space_code, parseJsonObject(row.payload_json))) continue;
+    if (!options.dryRun) deleteSpace.run(row.id);
+    removedSpaces += 1;
+  }
+  for (const row of db.prepare("SELECT id, lab_code, payload_json FROM plan_lab_overrides WHERE COALESCE(operation, 'upsert') <> 'deleted'").all()) {
+    if (!labMatchesBase(db, row.lab_code, parseJsonObject(row.payload_json))) continue;
+    if (!options.dryRun) deleteLab.run(row.id);
+    removedLabs += 1;
+  }
+  return { removedSpaces, removedLabs };
 }
 
 function upsertAssignment(db, row, now) {
@@ -639,4 +759,5 @@ module.exports = {
   syncFromVisibleDataset,
   projectGlobalReferenceRows,
   hasRelationalBusinessData,
+  pruneRedundantPlanOverrides,
 };

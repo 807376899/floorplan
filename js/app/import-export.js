@@ -8,9 +8,40 @@
     templateInstructions,
     templateRows,
   } = global.FloorplanDomain;
+  const SHEETJS_CDN_URL = "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js";
+  const SHEETJS_LOAD_TIMEOUT_MS = 6000;
+  let workbookLoadPromise = null;
 
   function workbookAvailable() {
     return Boolean(global.XLSX?.utils?.book_new);
+  }
+
+  function ensureWorkbookAvailable(updateStatus) {
+    if (workbookAvailable()) return Promise.resolve(true);
+    if (workbookLoadPromise) return workbookLoadPromise;
+    updateStatus?.("正在加载 Excel 组件...");
+    workbookLoadPromise = new Promise((resolve) => {
+      const script = document.createElement("script");
+      const timeout = setTimeout(() => {
+        script.remove();
+        workbookLoadPromise = null;
+        resolve(false);
+      }, SHEETJS_LOAD_TIMEOUT_MS);
+      script.src = SHEETJS_CDN_URL;
+      script.async = true;
+      script.onload = () => {
+        clearTimeout(timeout);
+        resolve(workbookAvailable());
+      };
+      script.onerror = () => {
+        clearTimeout(timeout);
+        script.remove();
+        workbookLoadPromise = null;
+        resolve(false);
+      };
+      document.head.appendChild(script);
+    });
+    return workbookLoadPromise;
   }
 
   function readWorkbookDataset(arrayBuffer) {
@@ -32,9 +63,9 @@
     updateStatus("当前表已开始下载。");
   }
 
-  function downloadTemplateWorkbook(updateStatus) {
+  async function downloadTemplateWorkbook(updateStatus) {
     try {
-      if (!workbookAvailable()) {
+      if (!(await ensureWorkbookAvailable(updateStatus))) {
         downloadJson("实验室布局维护模板.json", buildTemplatePackage());
         updateStatus("当前环境未加载 Excel 组件，已降级下载 JSON 模板。");
         return;
@@ -50,10 +81,9 @@
     }
   }
 
-  function exportWorkbook(state, updateStatus) {
+  async function exportWorkbook(state, updateStatus) {
     try {
-      // SheetJS CDN 不可用时，保留 JSON 数据包能力，保证离线环境也能导入导出。
-      if (!workbookAvailable()) {
+      if (!(await ensureWorkbookAvailable(updateStatus))) {
         downloadJson("实验室布局维护数据包.json", state.data);
         updateStatus("当前环境未加载 Excel 组件，已降级下载 JSON 数据包。");
         return;
@@ -104,6 +134,7 @@
   global.FloorplanApp = global.FloorplanApp || {};
   global.FloorplanApp.ImportExport = {
     workbookAvailable,
+    ensureWorkbookAvailable,
     readWorkbookDataset,
     downloadCurrentSheet,
     downloadTemplateWorkbook,

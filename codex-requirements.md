@@ -175,6 +175,8 @@
 - The frontend API may continue returning the existing `dataset` JSON shape, but service code must project that shape from relational/global data where available instead of treating every plan-copy JSON payload as a separate authoritative copy of all reference rows.
 - `/api/bootstrap`, `/api/dataset/active`, and save responses that send a visible dataset must read through the relational projection path once relational rows are available. Legacy `active_dataset.dataset_json` and `plan_copies.dataset_json` may be synchronized into relational tables as fallback for old deployments, but must not remain the read-interface authority after synchronization.
 - Once relational business rows exist, visible-dataset reads must not resynchronize stale plan-copy legacy JSON payloads into relational tables. Old copy JSON may be used only for first-time fallback backfill; otherwise stale copy `buildings`, `floor_segments`, `spaces`, or `labs` must not resurrect rows deleted or changed through relation-first services.
+- Plan override tables must store real plan differences only. `plan_space_overrides` and `plan_lab_overrides` rows whose payload is identical to the global `spaces` or `labs` baseline must be pruned, and copy saves must skip or remove those redundant overrides so `/api/bootstrap`, `/api/dataset/active`, login, refresh, and save responses do not return full duplicate plan payloads.
+- Startup may run an idempotent relational override compaction when redundant overrides are detected, but it must create a SQLite backup in `data/backups` before deleting redundant rows. The compaction must keep real copy differences, tombstones, assignments, and legacy JSON backup/export data intact.
 - Relational projection must enforce the same plan visibility rules as the old visible dataset builder: visitors see public and baseline plans, editor users also see their own private non-deleted plans, and admin users see all non-deleted plans.
 - Relation-only data must be sufficient to render the existing frontend dataset shape, including buildings, floor skeletons, spaces, use units, dictionaries, plans, assignments, and plan-scoped deleted-space tombstones, even when legacy business JSON is empty.
 - 详情栏日常编辑必须使用动作级写接口而不是从前端回传整包可见 dataset 覆盖保存。`editLab`、`renovateRoom`、`createSpace`、`editSpace` 和 `deleteSpace` 在服务端优先写关系表，成功后通过关系表投影返回可见 dataset。
@@ -190,6 +192,11 @@
 - Plan copies only express differences for spaces, use units, assignments, and deletion tombstones. Deleting a room in one plan copy must record plan-scoped deletion metadata and must not delete the global physical-space baseline or hide the same room in other plans.
 - Plan-scoped deleted-space rows must mirror the current saved copy payload. When a detail action or create-room flow clears a copy tombstone, `plan_deleted_spaces` for that plan must remove the stale tombstone instead of preserving an old hide rule.
 - Relational schema and service logic must remain SQLite-compatible for current local deployment while avoiding SQLite-only JSON-query business logic so the schema can later move to PostgreSQL.
+
+## Startup and External Assets
+
+- First paint, login, `/api/bootstrap`, and ordinary refresh must not depend on external CDN availability. Large optional browser libraries such as SheetJS must be loaded on demand only when the user imports or exports `.xlsx` files.
+- If the Excel component cannot be loaded, the app must keep the main floorplan usable and fall back to JSON import/export guidance instead of blocking startup or leaving the page on "正在加载服务器数据...".
 
 ## Admin Correction Usability
 

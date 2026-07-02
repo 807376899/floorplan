@@ -1,6 +1,7 @@
 const fs = require("fs");
+const path = require("path");
 const { DatabaseSync } = require("node:sqlite");
-const { ensureRelationalSchema } = require("./relational-store");
+const { ensureRelationalSchema, pruneRedundantPlanOverrides } = require("./relational-store");
 
 function openDatabase(config) {
   fs.mkdirSync(config.dataDir, { recursive: true });
@@ -85,7 +86,19 @@ function openDatabase(config) {
   `);
   migratePlanCopies(db);
   ensureRelationalSchema(db);
+  compactRelationalOverrides(db, config);
   return db;
+}
+
+function compactRelationalOverrides(db, config) {
+  const pending = pruneRedundantPlanOverrides(db, { dryRun: true });
+  if (!pending.removedSpaces && !pending.removedLabs) return;
+  fs.mkdirSync(config.backupsDir, { recursive: true });
+  const backupPath = path.join(config.backupsDir, `pre-override-prune-${Date.now()}.sqlite`);
+  const safeTarget = backupPath.replace(/'/g, "''");
+  db.exec(`VACUUM INTO '${safeTarget}'`);
+  const result = pruneRedundantPlanOverrides(db);
+  console.log(`pruned redundant plan overrides: spaces=${result.removedSpaces}, labs=${result.removedLabs}, backup=${backupPath}`);
 }
 
 function migratePlanCopies(db) {

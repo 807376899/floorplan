@@ -703,8 +703,10 @@ async function importPackageFile(file) {
     let raw;
     const name = file.name.toLowerCase();
     if (name.endsWith(".json")) raw = JSON.parse(await file.text());
-    else if ((name.endsWith(".xlsx") || name.endsWith(".xls")) && ImportExport.workbookAvailable()) raw = ImportExport.readWorkbookDataset(await file.arrayBuffer());
-    else throw new Error("请导入单个 Excel 数据包，或在无法读取 Excel 时导入 JSON 数据包。");
+    else if (name.endsWith(".xlsx") || name.endsWith(".xls")) {
+      if (!(await ImportExport.ensureWorkbookAvailable(updateStatus))) throw new Error("Excel 组件加载失败，请改为导入 JSON 数据包。");
+      raw = ImportExport.readWorkbookDataset(await file.arrayBuffer());
+    } else throw new Error("请导入单个 Excel 数据包，或在无法读取 Excel 时导入 JSON 数据包。");
     const normalized = normalizeDataset(raw);
     const payload = await fetchJson("/api/imports", {
       method: "POST",
@@ -3088,6 +3090,6 @@ function updateStatus(text) {
   state.statusMessage = text;
   const workbookHint = ImportExport.workbookAvailable()
     ? ""
-    : " 当前未加载 Excel 组件，可正常浏览和导入导出 JSON；如需导入 .xlsx 或导出 Excel，请在可访问 SheetJS CDN 的环境中打开。";
+    : " Excel 组件会在导入或导出 .xlsx 时按需加载；加载失败时会自动降级到 JSON。";
   els.statusText.textContent = `${text}${workbookHint}`;
 }
