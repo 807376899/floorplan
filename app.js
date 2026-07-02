@@ -152,7 +152,6 @@ const MoveController = MoveControllerModule.createMoveController({
   refreshStateAndRender,
   updateStatus,
   populateFloorOptions,
-  saveActivePlanCopyToServer,
   saveDatasetToServer,
   saveAssignmentActionToServer: submitAssignmentActionToServer,
 });
@@ -461,20 +460,7 @@ async function saveDatasetToServer(changeNote) {
   if (!state.serverMode) return true;
   const activeCopy = activePlanCopyMeta();
   if (activeCopy && canEditPlanDataset(activeCopy)) {
-    const payload = await fetchJson(`/api/plan-copies/${activeCopy.id}/dataset`, {
-      method: "PUT",
-      body: JSON.stringify({
-        dataset: state.data,
-        expectedRevision: activeCopy.revision,
-        changeNote,
-      }),
-    });
-    state.serverRevision = payload.revision;
-    state.planCopies = payload.planCopies || [];
-    state.data = normalizeDataset(payload.dataset);
-    if (payload.maintenance) state.maintenance = payload.maintenance;
-    persistDataset();
-    return true;
+    throw new Error("方案副本不能使用整包保存，请通过详情栏、主图或待安置区保存修改。");
   }
   if (!state.permissions.canAdmin) throw new Error("只有管理员可以修改共享基线数据");
   const payload = await fetchJson("/api/dataset/active", {
@@ -579,38 +565,11 @@ async function submitRawMaintenanceActionToServer(key, action, payload = {}) {
   return response;
 }
 
-async function saveActivePlanCopyToServer() {
-  if (!state.serverMode) return true;
-  const activePlan = planById(state.activePlanId);
-  const copy = copyMetaForPlan(activePlan);
-  if (!canManageCopy(copy)) throw new Error("只能保存自己创建的方案副本");
-  const payload = await fetchJson(`/api/plan-copies/${copy.id}/assignments`, {
-    method: "PUT",
-    body: JSON.stringify({
-      assignments: assignmentRowsForPlan(activePlan.id),
-      expectedRevision: copy.revision,
-    }),
-  });
-  state.serverRevision = payload.revision;
-  state.planCopies = payload.planCopies || [];
-  state.data = normalizeDataset(payload.dataset);
-  if (payload.maintenance) state.maintenance = payload.maintenance;
-  persistDataset();
-  return true;
-}
-
 async function savePlanAssignmentsWithRollback(previousData, previousRevision) {
-  const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
-  try {
-    await saveActivePlanCopyToServer();
-    return true;
-  } catch (error) {
-    state.data = normalizeDataset(previousData);
-    state.serverRevision = previousRevision;
-    state.planCopies = previousCopies;
-    refreshStateAndRender(`方案副本保存失败：${error.message}`, { stamp: false, forceMoveReset: true });
-    return false;
-  }
+  state.data = normalizeDataset(previousData);
+  state.serverRevision = previousRevision;
+  refreshStateAndRender("方案分配原始表为只读，请通过主图或待安置区维护分配。", { stamp: false, forceMoveReset: true });
+  return false;
 }
 
 async function repairCorruptedText() {
@@ -2272,7 +2231,11 @@ async function confirmMoveAssignmentAction() {
   const ok = confirmMoveAssignment();
   if (!ok) return false;
   try {
-    await saveActivePlanCopyToServer();
+    await submitAssignmentActionToServer("directMove", {
+      lab: { id: context.lab.id, lab_code: context.lab.lab_code },
+      sourceSpace: { id: context.space.id, space_code: context.space.space_code },
+      targetSpace: { id: targetSpace.id, space_code: targetSpace.space_code },
+    });
   } catch (error) {
     state.data = normalizeDataset(previousData);
     state.serverRevision = previousRevision;

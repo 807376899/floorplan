@@ -623,6 +623,12 @@
         updateStatus("当前账号没有编辑权限。");
         return;
       }
+      if (state.serverMode && state.editorKey === "plan_assignments") {
+        const message = "方案分配原始表为只读，请通过主图或待安置区维护分配。";
+        setRawEditorNotice(message);
+        updateStatus(message);
+        return;
+      }
       const previousData = cloneDataset(state.data);
       const previousRevision = state.serverRevision;
       const rows = collectEditorInputRows();

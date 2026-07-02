@@ -2575,6 +2575,8 @@ test("assignment moves submit through action endpoints instead of assignment bat
   assert.match(moveSource, /moveToBasket/);
   assert.match(moveSource, /directMove/);
   assert.doesNotMatch(moveSource, /return saveActivePlanCopyToServer\(\);/);
+  assert.doesNotMatch(appSource, /\/api\/plan-copies\/\$\{copy\.id\}\/assignments/);
+  assert.doesNotMatch(appSource, /function saveActivePlanCopyToServer/);
 });
 
 test("raw maintenance tables submit through action endpoints instead of full dataset save", () => {
@@ -2583,14 +2585,24 @@ test("raw maintenance tables submit through action endpoints instead of full dat
 
   assert.match(appSource, /submitRawMaintenanceActionToServer/);
   assert.match(appSource, /\/raw-maintenance\/\$\{encodeURIComponent\(key\)\}\/actions/);
+  assert.doesNotMatch(appSource, /\/api\/plan-copies\/\$\{activeCopy\.id\}\/dataset/);
   assert.match(rawSource, /saveRawMaintenanceActionToServer/);
   assert.match(rawSource, /RAW_MAINTENANCE_KEYS/);
+  assert.match(rawSource, /plan_assignments[\s\S]*?只读/);
   assert.match(rawSource, /RAW_MAINTENANCE_KEYS\.has\(state\.editorKey\)[\s\S]*await saveRawMaintenanceWithRollback\(previousData, previousRevision, "replaceRows"/);
   assert.ok(
     rawSource.indexOf("await saveRawMaintenanceWithRollback(previousData, previousRevision, \"replaceRows\"") <
       rawSource.indexOf("state.editorKey === \"plan_assignments\" && activePlanCopyMeta()"),
     "raw maintenance tables should take the action endpoint before legacy save branches"
   );
+});
+
+test("legacy copy write endpoints are disabled at the route layer", () => {
+  const routeSource = fs.readFileSync(path.join(__dirname, "..", "server", "routes.js"), "utf8");
+
+  assert.match(routeSource, /legacy_write_disabled/);
+  assert.doesNotMatch(routeSource, /planCopies\.saveAssignments/);
+  assert.doesNotMatch(routeSource, /planCopies\.saveCopyDataset/);
 });
 
 test("admin details render inline edit actions and disabled split merge menu", () => {

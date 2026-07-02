@@ -164,13 +164,10 @@ function createRouteApi(services) {
     const assignmentMatch = pathname.match(/^\/api\/plan-copies\/(\d+)\/assignments$/);
     if (req.method === "PUT" && assignmentMatch) {
       auth.requireRole(context.user, ["editor", "admin"]);
-      const body = await readJsonBody(req);
-      const result = planCopies.saveAssignments(Number(assignmentMatch[1]), body, context.user);
-      audit.writeAudit("plan_copy_assignments_saved", context.user.username, context.ip, {
-        copyId: Number(assignmentMatch[1]),
-        revision: result.revision,
+      return sendJson(res, 410, {
+        error: "legacy_write_disabled",
+        message: "方案分配批量保存入口已停用，请通过主图或待安置区保存分配变更。",
       });
-      return sendVisibleDataset(res, context, services, 200, { ok: true, copyRevision: result.revision });
     }
 
     const copyAssignmentActionMatch = pathname.match(/^\/api\/plan-copies\/(\d+)\/assignment-actions$/);
@@ -202,13 +199,10 @@ function createRouteApi(services) {
     const copyDatasetMatch = pathname.match(/^\/api\/plan-copies\/(\d+)\/dataset$/);
     if (req.method === "PUT" && copyDatasetMatch) {
       auth.requireRole(context.user, ["editor", "admin"]);
-      const body = await readJsonBody(req);
-      const result = planCopies.saveCopyDataset(Number(copyDatasetMatch[1]), body, context.user);
-      audit.writeAudit("plan_copy_dataset_saved", context.user.username, context.ip, {
-        copyId: Number(copyDatasetMatch[1]),
-        revision: result.revision,
+      return sendJson(res, 410, {
+        error: "legacy_write_disabled",
+        message: "方案副本整包保存入口已停用，请通过详情栏、主图或待安置区保存变更。",
       });
-      return sendVisibleDataset(res, context, services, 200, { ok: true, copyRevision: result.revision });
     }
 
     if (req.method === "PUT" && pathname === "/api/dataset/active") {
