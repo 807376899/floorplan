@@ -456,8 +456,11 @@ async function logoutFlow() {
   }
 }
 
-async function saveDatasetToServer(changeNote) {
+async function saveDatasetToServer(changeNote, options = {}) {
   if (!state.serverMode) return true;
+  if (!options.allowCompatibilityActiveSave) {
+    throw new Error("普通界面保存不能使用整包兼容写入，请通过详情栏、主图、待安置区或基础表动作保存。");
+  }
   const activeCopy = activePlanCopyMeta();
   if (activeCopy && canEditPlanDataset(activeCopy)) {
     throw new Error("方案副本不能使用整包保存，请通过详情栏、主图或待安置区保存修改。");
@@ -469,6 +472,7 @@ async function saveDatasetToServer(changeNote) {
       dataset: datasetForActiveSave(state.data),
       expectedRevision: state.serverRevision,
       changeNote,
+      compatibilityWrite: true,
     }),
   });
   state.serverRevision = payload.revision;
@@ -1286,7 +1290,7 @@ function canEditActivePlan() {
 
 function canEditEditorKey(key) {
   if (!state.serverMode) return state.permissions.canEdit;
-  if (key === "plan_assignments") return canEditActivePlan();
+  if (key === "plan_assignments" || key === "plans") return false;
   return state.permissions.canAdmin;
 }
 

@@ -169,6 +169,8 @@
 - [ ] Assignment action 写入 copy 方案时，新建待安置用途单元进入当前方案 `plan_lab_overrides`，不写入全局 `labs`；搬迁、归位和待安置状态只更新当前方案 `plan_assignments`，不影响其他方案。
 - [ ] 普通 UI 不调用 copy 方案遗留整包写接口；`PUT /api/plan-copies/:id/dataset` 和 `PUT /api/plan-copies/:id/assignments` 返回 `legacy_write_disabled` 且不更新任何业务数据。
 - [ ] server mode 下 `plan_assignments` 原始表为只读诊断视图，批量保存被阻止并提示通过主图、详情栏或待安置区维护分配。
+- [ ] server mode 下普通业务 UI 不把 `/api/dataset/active` 作为日常保存兜底；该整包入口仅 admin 可调用，并记录为兼容覆盖写审计。
+- [ ] server mode 下 `plans` 原始表为只读诊断视图，方案创建、公开/私有、删除、重命名和设为/取消基线通过方案生命周期 API 或管理方案入口完成。
 - [ ] 高级原始维护表中的教学楼、楼层骨架、学院、专业和用途类型通过动作级 raw-maintenance API 保存，服务端优先写关系表并通过关系表投影刷新前端，不以整包可见 dataset 作为权威保存载荷。
 - [ ] 删除教学楼或楼层骨架会在关系表事务中级联删除相关骨架或空间，并将受影响方案分配标记为 `Invalid`；删除被引用的学院、专业或用途类型会被阻止，失败时不更新关系表或 legacy JSON 快照。
 - [ ] 删除教学楼或楼层骨架同时删除绑定到该楼栋或骨架的 `plan_space_overrides`，并且旧副本 JSON 不会在保存响应、登录或刷新时把已删除空间重新写回关系表。

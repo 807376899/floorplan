@@ -61,6 +61,7 @@
     } = deps;
     const RAW_MAINTENANCE_KEYS = (typeof window !== "undefined" && window.FloorplanApp?.RawMaintenanceActions?.RAW_MAINTENANCE_KEYS)
       || new Set(["buildings", "floor_segments", "colleges", "majors", "lab_types"]);
+    const SERVER_READONLY_KEYS = new Set(["plan_assignments", "plans"]);
 
     function renderEditor() {
       syncEditorActionButtons();
@@ -69,8 +70,10 @@
       const highlightRowId = state.editorHighlight?.key === state.editorKey ? state.editorHighlight.rowId : "";
     
       if (!rows.length) {
-        const emptyText = state.editorKey === "plan_assignments"
-          ? "当前方案下暂无分配记录，可点击“新增行”开始录入。"
+        const emptyText = state.serverMode && SERVER_READONLY_KEYS.has(state.editorKey)
+          ? serverReadonlyMessage(state.editorKey)
+          : state.editorKey === "plan_assignments"
+            ? "当前方案下暂无分配记录，可点击“新增行”开始录入。"
           : "当前筛选下暂无数据，可点击“新增行”开始录入。";
         els.dataEditor.innerHTML = `${numberingToolbarHtml()}${rawEditorHelperHtml()}${rawEditorNoticeHtml()}<div class="empty">${emptyText}</div>`;
         bindRawEditorTools();
@@ -141,6 +144,11 @@
       notice.hidden = !message;
       notice.classList.toggle("is-error", type === "error");
       notice.classList.toggle("is-info", type !== "error");
+    }
+
+    function serverReadonlyMessage(key) {
+      if (key === "plans") return "方案原始表在服务器模式下只读，请通过新增方案、公开/私有、删除方案或管理方案入口维护。";
+      return "方案分配原始表为只读，请通过主图或待安置区维护分配。";
     }
     
     function regenerateEditorCodes() {
@@ -569,7 +577,7 @@
     
     function addEditorRow() {
       if (!canEditEditorKey(state.editorKey)) {
-        updateStatus("当前账号没有编辑权限。");
+        updateStatus(state.serverMode && SERVER_READONLY_KEYS.has(state.editorKey) ? serverReadonlyMessage(state.editorKey) : "当前账号没有编辑权限。");
         return;
       }
       const now = isoNow();
@@ -623,8 +631,8 @@
         updateStatus("当前账号没有编辑权限。");
         return;
       }
-      if (state.serverMode && state.editorKey === "plan_assignments") {
-        const message = "方案分配原始表为只读，请通过主图或待安置区维护分配。";
+      if (state.serverMode && SERVER_READONLY_KEYS.has(state.editorKey)) {
+        const message = serverReadonlyMessage(state.editorKey);
         setRawEditorNotice(message);
         updateStatus(message);
         return;
@@ -667,8 +675,6 @@
       state.data = normalizeDataset(state.data);
       const saveOk = state.serverMode && RAW_MAINTENANCE_KEYS.has(state.editorKey) && typeof saveRawMaintenanceActionToServer === "function"
         ? await saveRawMaintenanceWithRollback(previousData, previousRevision, "replaceRows", { rows })
-        : state.editorKey === "plan_assignments" && activePlanCopyMeta()
-        ? await savePlanAssignmentsWithRollback(previousData, previousRevision)
         : await saveWithRollback(previousData, previousRevision, `编辑 ${state.editorKey}`, "表格保存失败");
       if (saveOk) {
         refreshStateAndRender("已应用表格修改。", { stamp: false, forceMoveReset: true });

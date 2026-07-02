@@ -2590,11 +2590,7 @@ test("raw maintenance tables submit through action endpoints instead of full dat
   assert.match(rawSource, /RAW_MAINTENANCE_KEYS/);
   assert.match(rawSource, /plan_assignments[\s\S]*?只读/);
   assert.match(rawSource, /RAW_MAINTENANCE_KEYS\.has\(state\.editorKey\)[\s\S]*await saveRawMaintenanceWithRollback\(previousData, previousRevision, "replaceRows"/);
-  assert.ok(
-    rawSource.indexOf("await saveRawMaintenanceWithRollback(previousData, previousRevision, \"replaceRows\"") <
-      rawSource.indexOf("state.editorKey === \"plan_assignments\" && activePlanCopyMeta()"),
-    "raw maintenance tables should take the action endpoint before legacy save branches"
-  );
+  assert.doesNotMatch(rawSource, /state\.editorKey === "plan_assignments" && activePlanCopyMeta\(\)/);
 });
 
 test("legacy copy write endpoints are disabled at the route layer", () => {
@@ -2603,6 +2599,28 @@ test("legacy copy write endpoints are disabled at the route layer", () => {
   assert.match(routeSource, /legacy_write_disabled/);
   assert.doesNotMatch(routeSource, /planCopies\.saveAssignments/);
   assert.doesNotMatch(routeSource, /planCopies\.saveCopyDataset/);
+});
+
+test("ordinary server UI saves cannot fall back to active dataset compatibility writes", () => {
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const rawSource = fs.readFileSync(path.join(__dirname, "..", "js", "app", "raw-editor.js"), "utf8");
+
+  assert.match(appSource, /function saveDatasetToServer\(changeNote, options = \{\}\)/);
+  assert.match(appSource, /allowCompatibilityActiveSave/);
+  assert.match(appSource, /普通界面保存不能使用整包兼容写入/);
+  assert.match(rawSource, /SERVER_READONLY_KEYS/);
+  assert.match(rawSource, /plans[\s\S]*?只读/);
+  assert.doesNotMatch(rawSource, /state\.editorKey === "plan_assignments" && activePlanCopyMeta\(\)\s*\?\s*await savePlanAssignmentsWithRollback/);
+});
+
+test("active dataset compatibility write endpoint is admin only", () => {
+  const routeSource = fs.readFileSync(path.join(__dirname, "..", "server", "routes.js"), "utf8");
+
+  assert.match(
+    routeSource,
+    /pathname === "\/api\/dataset\/active"[\s\S]*?auth\.requireRole\(context\.user, \["admin"\]\)/
+  );
+  assert.match(routeSource, /active_dataset_compatibility_saved/);
 });
 
 test("admin details render inline edit actions and disabled split merge menu", () => {

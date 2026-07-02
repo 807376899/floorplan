@@ -191,6 +191,8 @@
 - 分配动作写入 copy 方案时，新建待安置用途单元必须写入当前方案的 `plan_lab_overrides`，不得写入全局 `labs` 基准表；搬迁、归位和待安置状态只影响当前方案的 `plan_assignments`，不得污染其他副本或基线。
 - 普通 UI 不得调用 copy 方案遗留整包写接口。`PUT /api/plan-copies/:id/dataset` 和 `PUT /api/plan-copies/:id/assignments` 必须返回 `legacy_write_disabled`，不得更新 `plan_copies`、关系表 `plans`、`plan_assignments`、override 或 legacy JSON。
 - server mode 下 `plan_assignments` 原始表只能作为只读诊断视图；分配维护必须通过主图、详情栏或待安置区动作接口完成。
+- server mode 下普通业务 UI 不得把 `/api/dataset/active` 作为日常保存兜底；该整包入口仅保留为 admin 兼容覆盖写，必须记录为兼容写审计，并继续以关系表为业务写入权威。
+- server mode 下 `plans` 原始表只能作为只读诊断视图；方案创建、公开/私有、删除、重命名和设为/取消基线必须通过方案生命周期 API 或管理方案入口完成。
 - 高级原始维护表中的 `buildings`、`floor_segments`、`colleges`、`majors` 和 `lab_types` 必须通过动作级 raw-maintenance API 保存。服务端应先写关系表并通过关系表投影返回可见 dataset；前端不得把整包可见 dataset 当作这些全局基础表的权威保存载荷。
 - 高级原始维护表删除教学楼或楼层骨架时，服务端必须在关系表事务中级联删除相关骨架或空间，并将受影响方案分配标记为 `Invalid`；删除学院、专业或用途类型时，若仍被实验室、专业或用途单元引用，必须阻止保存且不得更新 legacy JSON 快照。
 - 高级原始维护表删除教学楼或楼层骨架时，除全局基准 `spaces` 外，还必须删除绑定到该楼栋或骨架的当前方案 `plan_space_overrides`，并将相关 `plan_assignments` 标记为 `Invalid`；旧副本 JSON 中的同骨架空间不得在下一次读取时重新出现。

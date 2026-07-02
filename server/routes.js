@@ -206,7 +206,7 @@ function createRouteApi(services) {
     }
 
     if (req.method === "PUT" && pathname === "/api/dataset/active") {
-      auth.requireRole(context.user, ["editor", "admin"]);
+      auth.requireRole(context.user, ["admin"]);
       return handleSaveDataset(req, res, context, services);
     }
 
@@ -366,9 +366,10 @@ async function handleSaveDataset(req, res, context, services) {
 
   try {
     const result = services.dataset.saveActiveDataset(normalized, context.user.username, { expectedRevision: body.expectedRevision });
-    services.audit.writeAudit("dataset_saved", context.user.username, context.ip, {
+    services.audit.writeAudit("active_dataset_compatibility_saved", context.user.username, context.ip, {
       revision: result.revision,
       changeNote: String(body.changeNote || "").trim(),
+      compatibilityWrite: Boolean(body.compatibilityWrite),
       summary: services.dataset.summarizeDataset(normalized),
     });
     return sendVisibleDataset(res, context, services, 200, { ok: true, revision: result.revision });
