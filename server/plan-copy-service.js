@@ -55,7 +55,7 @@ function createPlanCopyService(db, datasetService) {
 
   function listActiveManagedPlans(user) {
     const active = datasetService.getActiveDataset();
-    const dataset = datasetService.normalizeIncomingDataset(active.dataset);
+    const dataset = activeRelationDataset(active.dataset);
     return (dataset.plans || []).map((plan) => stripActivePlanPayload(publicActivePlan(plan, active), user));
   }
 
@@ -98,7 +98,7 @@ function createPlanCopyService(db, datasetService) {
   }
 
   function manageablePlanCount() {
-    const active = datasetService.normalizeIncomingDataset(datasetService.getActiveDataset().dataset);
+    const active = activeRelationDataset(datasetService.getActiveDataset().dataset);
     const activeCount = (active.plans || []).length;
     const copyCount = db.prepare("SELECT COUNT(*) AS count FROM plan_copies WHERE deleted_at IS NULL").get().count;
     return activeCount + copyCount;
@@ -116,6 +116,33 @@ function createPlanCopyService(db, datasetService) {
     const row = getCopyRow(copyId);
     if (!row) return;
     RelationalStore.syncPlanLifecycle(db, publicCopy(row));
+  }
+
+  function activeRelationDataset(fallbackDataset = null) {
+    return datasetService.normalizeIncomingDataset(DatasetProjection.projectVisibleDataset(db, { role: "admin" }, {
+      activeOnly: true,
+      fallbackDataset,
+    }));
+  }
+
+  function copyRelationDataset(copyId, fallbackDataset = null) {
+    return datasetService.normalizeIncomingDataset(DatasetProjection.projectVisibleDataset(db, { role: "admin" }, {
+      copyIds: [copyId],
+      fallbackDataset,
+    }));
+  }
+
+  function hasProjectedPlan(dataset) {
+    return Array.isArray(dataset?.plans) && dataset.plans.length > 0;
+  }
+
+  function parseJsonOrNull(value) {
+    if (!value) return null;
+    try {
+      return JSON.parse(value);
+    } catch (_) {
+      return null;
+    }
   }
 
   function copyPayloadIndex() {
@@ -207,9 +234,10 @@ function createPlanCopyService(db, datasetService) {
     db.exec("BEGIN");
     try {
       const active = datasetService.getActiveDataset();
-      const nextActive = datasetService.normalizeNumberingDataset(active.dataset);
+      const activeSource = activeRelationDataset(active.dataset);
+      const nextActive = datasetService.normalizeNumberingDataset(activeSource);
       const activePlanAlias = new Map();
-      (active.dataset.plans || []).forEach((plan, index) => {
+      (activeSource.plans || []).forEach((plan, index) => {
         const nextPlan = (nextActive.plans || []).find((item) =>
           String(item.plan_name || "").trim() === String(plan.plan_name || "").trim() &&
           String(item.source_plan_code || "").trim() === String(plan.source_plan_code || "").trim()
@@ -227,13 +255,14 @@ function createPlanCopyService(db, datasetService) {
 
       const rows = db.prepare("SELECT * FROM plan_copies WHERE deleted_at IS NULL ORDER BY id ASC").all();
       for (const row of rows) {
-        const sourceDataset = row.dataset_json ? JSON.parse(row.dataset_json) : {
+        const projectedCopyDataset = copyRelationDataset(row.id);
+        const sourceDataset = hasProjectedPlan(projectedCopyDataset) ? projectedCopyDataset : (parseJsonOrNull(row.dataset_json) || {
           ...nextActive,
-          plans: [JSON.parse(row.plan_json)],
-          plan_assignments: JSON.parse(row.assignments_json || "[]"),
-        };
+          plans: [parseJsonOrNull(row.plan_json) || {}],
+          plan_assignments: parseJsonOrNull(row.assignments_json) || [],
+        });
         const nextDataset = datasetService.normalizeNumberingDataset(sourceDataset);
-        const preferredPlan = nextDataset.plans.find((plan) => plan.id === row.plan_code || plan.plan_code === row.plan_code) || nextDataset.plans[0] || JSON.parse(row.plan_json);
+        const preferredPlan = nextDataset.plans.find((plan) => plan.id === row.plan_code || plan.plan_code === row.plan_code) || nextDataset.plans[0] || parseJsonOrNull(row.plan_json) || {};
         const preferredPlanCode = preferredPlan.plan_code;
         let nextPlanCode = preferredPlan.plan_code;
         if (!nextPlanCode || usedPlanCodes.has(nextPlanCode)) {
@@ -394,14 +423,23 @@ function createPlanCopyService(db, datasetService) {
         updated_at: now,
       }));
 
+      const sourceDataset = source.copyId ? retargetCopyScopedDataset(source.dataset, source.copyId, copyId) : clone(source.dataset);
       const copyDataset = datasetService.normalizeIncomingDataset({
-        ...clone(source.dataset),
+        ...sourceDataset,
         plans: [plan],
         plan_assignments: assignments,
       });
       db.prepare("UPDATE plan_copies SET plan_code = ?, plan_json = ?, assignments_json = ?, dataset_json = ? WHERE id = ?")
         .run(planCode, JSON.stringify(plan), JSON.stringify(assignments), JSON.stringify(copyDataset), copyId);
-      syncCopyLifecycleToRelations(copyId);
+      syncCreatedCopyDataset(copyId, plan, assignments, copyDataset, {
+        ownerUserId: user.id,
+        visibility: "private",
+        sourcePlanCode: source.plan.plan_code || "",
+        sourceCopyId: source.copyId || null,
+        sourceType: "copy",
+        createdAt: now,
+        updatedAt: now,
+      });
       db.exec("COMMIT");
       return { copyId };
     } catch (error) {
@@ -479,7 +517,16 @@ function createPlanCopyService(db, datasetService) {
       });
       db.prepare("UPDATE plan_copies SET plan_code = ?, plan_json = ?, assignments_json = ?, dataset_json = ? WHERE id = ?")
         .run(planCode, JSON.stringify(plan), JSON.stringify(assignments), JSON.stringify(copyDataset), copyId);
-      syncCopyLifecycleToRelations(copyId);
+      syncCreatedCopyDataset(copyId, plan, assignments, copyDataset, {
+        ownerUserId: user.id,
+        visibility: "private",
+        sourcePlanCode: options.sourcePlan.plan_code || "",
+        sourceCopyId: null,
+        sourceType: options.sourceType || "copy",
+        createdAt: now,
+        updatedAt: now,
+        importDraftId: options.importDraftId || null,
+      });
       db.exec("COMMIT");
       return { copyId, planCode };
     } catch (error) {
@@ -527,7 +574,7 @@ function createPlanCopyService(db, datasetService) {
   function updateActiveManagedPlan(planCode, body, user) {
     requireAdmin(user);
     const active = datasetService.getActiveDataset();
-    const dataset = datasetService.normalizeIncomingDataset(active.dataset);
+    const dataset = activeRelationDataset(active.dataset);
     const code = String(planCode || "").trim();
     const plan = (dataset.plans || []).find((item) => item.plan_code === code || item.id === code);
     if (!plan) throw httpError(404, "plan_not_found", "未找到方案");
@@ -578,7 +625,7 @@ function createPlanCopyService(db, datasetService) {
   function setActiveManagedPlanBaseline(planCode, user, isBaseline = true) {
     requireAdmin(user);
     const active = datasetService.getActiveDataset();
-    const dataset = datasetService.normalizeIncomingDataset(active.dataset);
+    const dataset = activeRelationDataset(active.dataset);
     const code = String(planCode || "").trim();
     let found = false;
     const now = nowIso();
@@ -696,12 +743,32 @@ function createPlanCopyService(db, datasetService) {
       assignments_json: JSON.stringify(assignments),
       dataset_json: JSON.stringify(dataset),
     });
-    RelationalStore.syncFromVisibleDataset(db, datasetService.normalizeIncomingDataset(datasetService.getActiveDataset().dataset), []);
+    RelationalStore.syncFromVisibleDataset(db, activeRelationDataset(datasetService.getActiveDataset().dataset), []);
     RelationalStore.syncFromVisibleDataset(db, datasetService.normalizeIncomingDataset(dataset), [copy]);
   }
 
+  function syncCreatedCopyDataset(copyId, plan, assignments, dataset, metadata) {
+    RelationalStore.syncFromVisibleDataset(db, datasetService.normalizeIncomingDataset(dataset), [{
+      id: copyId,
+      planCode: plan.plan_code,
+      planName: plan.plan_name,
+      ownerUserId: metadata.ownerUserId,
+      visibility: metadata.visibility,
+      revision: 1,
+      isBaseline: false,
+      plan,
+      assignments,
+      sourcePlanCode: metadata.sourcePlanCode,
+      sourceCopyId: metadata.sourceCopyId || null,
+      sourceType: metadata.sourceType || "copy",
+      importDraftId: metadata.importDraftId || null,
+      createdAt: metadata.createdAt,
+      updatedAt: metadata.updatedAt,
+    }]);
+  }
+
   function copyScopedDataset(normalized, copyId) {
-    const active = datasetService.normalizeIncomingDataset(datasetService.getActiveDataset().dataset);
+    const active = activeRelationDataset(datasetService.getActiveDataset().dataset);
     const next = {};
     for (const key of COPY_SCOPED_KEYS) {
       next[key] = copyScopedRows(key, normalized[key] || [], active[key] || [], copyId);
@@ -756,6 +823,39 @@ function createPlanCopyService(db, datasetService) {
     return current === copyId ? row : { ...row, copy_id: copyId };
   }
 
+  function retargetCopyScopedDataset(dataset, fromCopyId, toCopyId) {
+    const next = clone(dataset);
+    for (const key of COPY_SCOPED_KEYS) {
+      next[key] = (next[key] || []).map((row) => retargetCopyScopedRow(row, fromCopyId, toCopyId));
+    }
+    next.deleted_space_ids = retargetDeletedSpaceRefs(next.deleted_space_ids || [], fromCopyId, toCopyId);
+    return next;
+  }
+
+  function retargetCopyScopedRow(row, fromCopyId, toCopyId) {
+    const scopedId = parseDeletedSpaceRef(row?.id);
+    const current = Number(row?.copy_id || row?.copyId || scopedId.copyId || 0);
+    if (current && current !== Number(fromCopyId)) return row;
+    if (!current) return row;
+    const next = { ...row, copy_id: toCopyId };
+    const prefix = `copy:${fromCopyId}::`;
+    if (typeof next.id === "string" && next.id.startsWith(prefix)) {
+      next.id = `copy:${toCopyId}::${next.id.slice(prefix.length)}`;
+    }
+    return next;
+  }
+
+  function retargetDeletedSpaceRefs(refs, fromCopyId, toCopyId) {
+    const values = new Set();
+    for (const value of refs || []) {
+      const parsed = parseDeletedSpaceRef(value);
+      if (!parsed.ref) continue;
+      if (parsed.copyId && parsed.copyId !== Number(fromCopyId)) continue;
+      values.add(`copy:${Number(toCopyId)}::${parsed.ref}`);
+    }
+    return [...values];
+  }
+
   function deleteCopy(copyId, user) {
     getOwnedCopy(copyId, user);
     const now = nowIso();
@@ -804,8 +904,10 @@ function createPlanCopyService(db, datasetService) {
   function findSourcePlan(sourcePlanCode, user) {
     const code = String(sourcePlanCode || "").trim();
     const active = datasetService.getActiveDataset();
-    const base = datasetService.normalizeIncomingDataset(active.dataset);
-    const basePlan = base.plans.find((plan) => plan.plan_code === code || plan.id === code) || base.plans[0];
+    const base = activeRelationDataset(active.dataset);
+    const basePlan = code
+      ? base.plans.find((plan) => plan.plan_code === code || plan.id === code)
+      : base.plans[0];
     if (basePlan) {
       return {
         plan: basePlan,
@@ -820,11 +922,15 @@ function createPlanCopyService(db, datasetService) {
       const row = getVisibleCopy(copyId, user);
       if (row) {
         const copy = publicCopy(row);
+        const relationDataset = copyRelationDataset(copyId, copy.dataset);
+        const relationPlan = relationDataset.plans.find((plan) => plan.plan_code === copy.planCode || plan.id === copy.planCode);
         return {
-          plan: copy.plan,
-          assignments: copy.assignments,
+          plan: relationPlan || copy.plan,
+          assignments: hasProjectedPlan(relationDataset)
+            ? relationDataset.plan_assignments.filter((assignment) => assignment.plan_code === copy.planCode || assignment.plan_id === copy.planCode)
+            : copy.assignments,
           copyId,
-          dataset: buildSingleCopyDataset(copy),
+          dataset: hasProjectedPlan(relationDataset) ? relationDataset : buildSingleCopyDataset(copy),
         };
       }
     }
@@ -850,7 +956,7 @@ function createPlanCopyService(db, datasetService) {
   function getActiveManagedPlan(planCode, user) {
     requireAdmin(user);
     const active = datasetService.getActiveDataset();
-    const dataset = datasetService.normalizeIncomingDataset(active.dataset);
+    const dataset = activeRelationDataset(active.dataset);
     const code = String(planCode || "").trim();
     const plan = (dataset.plans || []).find((item) => item.plan_code === code || item.id === code);
     if (!plan) throw httpError(404, "plan_not_found", "未找到方案");
@@ -861,6 +967,8 @@ function createPlanCopyService(db, datasetService) {
   }
 
   function buildSingleCopyDataset(copy) {
+    const projected = copyRelationDataset(copy.id, copy.dataset);
+    if (hasProjectedPlan(projected)) return projected;
     const base = baseDatasetForCopy(copy);
     return datasetService.normalizeIncomingDataset({
       ...base,
@@ -870,6 +978,8 @@ function createPlanCopyService(db, datasetService) {
   }
 
   function baseDatasetForCopy(copy, seen = new Set()) {
+    const projected = copyRelationDataset(copy.id, copy.dataset);
+    if (hasProjectedPlan(projected)) return projected;
     if (copy.dataset) return clone(copy.dataset);
     if (copy.sourceCopyId && !seen.has(copy.sourceCopyId)) {
       seen.add(copy.sourceCopyId);
@@ -884,7 +994,7 @@ function createPlanCopyService(db, datasetService) {
         return baseDatasetForCopy(source, seen);
       }
     }
-    return clone(datasetService.getActiveDataset().dataset);
+    return clone(activeRelationDataset(datasetService.getActiveDataset().dataset));
   }
 
   function publicCopy(row) {

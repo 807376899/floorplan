@@ -155,6 +155,9 @@
 - [ ] Relational projection preserves plan visibility rules: visitors see public/baseline plans, editor users also see their own private plans, and admin users see every non-deleted plan.
 - [ ] Legacy JSON is synchronized into relational tables as fallback on read, but relation rows are the returned visible dataset authority after synchronization.
 - [ ] Once relational business rows exist, visible-dataset reads do not re-import stale plan-copy legacy JSON in a way that resurrects deleted buildings, floor skeletons, spaces, or use units.
+- [ ] Once relational business rows exist, stale active/copy legacy JSON does not filter, hide, or replace relation-table `spaces` and `labs` in bootstrap, active dataset reads, active detail actions, managed-plan previews, explicit numbering normalization, or copy-from-copy creation.
+- [ ] Explicit numbering normalization uses relation-table active/copy projections as its source, migrates copy plan identity without `plans.copy_id` conflicts, and does not resurrect stale `dataset_json`, `plan_json`, or `assignments_json` plan codes, spaces, labs, or assignments.
+- [ ] Creating a new copy from an existing copy copies relation-table overrides, assignments, and scoped deleted-space tombstones into the new copy scope instead of using stale source copy legacy payload rows.
 - [ ] `plan_space_overrides` and `plan_lab_overrides` store only real plan differences; redundant overrides identical to global baseline rows are pruned before they can bloat `/api/bootstrap`, `/api/dataset/active`, login, refresh, or save responses.
 - [ ] Startup relational compaction creates a SQLite backup under `data/backups` before deleting redundant overrides, and preserves real copy differences, tombstones, assignments, and legacy JSON compatibility data.
 - [ ] 导入发布、快照恢复、中文修复、编号规范化和旧 `/api/dataset/active` 兼容保存以关系表为业务写入权威，覆盖写入会删除新 active dataset 中不存在的旧全局楼栋、骨架、空间、用途单元、active 方案和 active 分配。

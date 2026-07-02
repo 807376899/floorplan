@@ -330,7 +330,7 @@ function createDetailActionService(db, datasetService) {
         payload: { revision: active.revision, dataset: active.dataset },
       });
     }
-    const dataset = datasetService.normalizeIncomingDataset(active.dataset);
+    const dataset = datasetService.normalizeIncomingDataset(DatasetProjection.projectVisibleDataset(db, user, { activeOnly: true, fallbackDataset: active.dataset }));
     const context = buildContext(dataset, body, 0);
     const actionResult = applyAction(dataset, context, body, 0);
     if (!actionResult.ok) throw httpError(400, "invalid_detail_action", actionResult.message || "详情保存失败");

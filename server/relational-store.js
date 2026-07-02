@@ -534,6 +534,7 @@ function upsertLab(db, row, now) {
 function upsertPlan(db, row, copy, now) {
   const planCode = text(copy?.planCode) || text(row.plan_code) || text(row.id);
   if (!planCode) return;
+  if (copy?.id) migrateCopyPlanIdentity(db, copy.id, planCode);
   const isBaseline = copy ? Boolean(copy.isBaseline) : text(row.plan_type) === "baseline" || Boolean(row.is_locked);
   db.prepare(`
     INSERT INTO plans (
@@ -572,6 +573,18 @@ function upsertPlan(db, row, copy, now) {
     text(copy?.updatedAt) || text(row.updated_at) || now,
     copy?.deletedAt || null
   );
+}
+
+function migrateCopyPlanIdentity(db, copyId, nextPlanCode) {
+  const current = db.prepare("SELECT plan_code FROM plans WHERE copy_id = ? AND plan_code <> ?").get(copyId, nextPlanCode);
+  if (!current) return;
+  const previousPlanCode = text(current.plan_code);
+  if (!previousPlanCode || previousPlanCode === nextPlanCode) return;
+  db.prepare("DELETE FROM plan_assignments WHERE plan_id = ?").run(previousPlanCode);
+  db.prepare("DELETE FROM plan_space_overrides WHERE plan_id = ?").run(previousPlanCode);
+  db.prepare("DELETE FROM plan_lab_overrides WHERE plan_id = ?").run(previousPlanCode);
+  db.prepare("DELETE FROM plan_deleted_spaces WHERE plan_id = ?").run(previousPlanCode);
+  db.prepare("UPDATE plans SET id = ?, plan_code = ? WHERE copy_id = ?").run(nextPlanCode, nextPlanCode, copyId);
 }
 
 function upsertSpaceOverride(db, planCode, row, now) {

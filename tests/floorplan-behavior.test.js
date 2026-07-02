@@ -1321,6 +1321,69 @@ test("numbering normalization updates relational active and copy rows", () => {
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_assignments WHERE plan_id = (SELECT plan_code FROM plan_copies WHERE id = 1)").get().count, 1);
 });
 
+test("numbering normalization ignores stale active and copy legacy json after relational backfill", () => {
+  const staleDataset = activeApplyDataset({
+    buildings: [{ id: "stale-building", building_code: "旧JSON楼", building_name: "旧JSON楼", campus_zone: "下沙校区", building_number: 9, sort_order: 1 }],
+    floor_segments: [{ id: "stale-seg", building_code: "旧JSON楼", floor_code: "9", segment_code: "EWSTALE", element_type: "corridor" }],
+    spaces: [{ id: "stale-space", space_code: "STALE-SPACE", building_code: "旧JSON楼", floor_code: "9", segment_code: "EWSTALE", front_door: "901", rear_door: "", current_status: "active" }],
+    labs: [{ id: "stale-lab", lab_code: "STALE-LAB", lab_name: "旧JSON用途", college_code: "COL-A", college: "学院A", lab_type_code: "USE0001", lab_type: "实验室" }],
+    plans: [{ id: "旧JSON方案", plan_code: "旧JSON方案", plan_name: "旧JSON方案", plan_type: "baseline", is_locked: true }],
+    plan_assignments: [{ id: "旧JSON方案__STALE-LAB", plan_id: "旧JSON方案", plan_code: "旧JSON方案", lab_code: "STALE-LAB", space_code: "STALE-SPACE", assignment_status: "assigned" }],
+  });
+  const db = createActiveDatasetTestDb(staleDataset);
+  const datasetService = createRelationalActiveDatasetService(db, staleDataset);
+  const relationalDataset = activeApplyDataset({
+    buildings: [{ id: "rel-building", building_code: "关系旧楼", building_name: "关系楼", campus_zone: "下沙校区", building_number: 5, sort_order: 1 }],
+    floor_segments: [{ id: "rel-seg", building_code: "关系旧楼", floor_code: "1", segment_code: "EWREL", element_type: "corridor" }],
+    spaces: [{ id: "rel-space", space_code: "REL-SPACE", building_code: "关系旧楼", floor_code: "1", segment_code: "EWREL", front_door: "501", rear_door: "", length_m: 8, width_m: 6, area_m2: 48, current_status: "active" }],
+    plans: [{ id: "关系中文方案", plan_code: "关系中文方案", plan_name: "关系方案", plan_type: "baseline", is_locked: true }],
+    plan_assignments: [{ id: "关系中文方案__UNIT000001", plan_id: "关系中文方案", plan_code: "关系中文方案", lab_code: "UNIT000001", space_code: "REL-SPACE", assignment_status: "assigned" }],
+  });
+  RelationalStore.replaceActiveDataset(db, datasetService.normalizeIncomingDataset(relationalDataset));
+  const staleCopyDataset = datasetService.normalizeIncomingDataset({
+    ...staleDataset,
+    plans: [{ id: "copy-8", copy_id: 8, plan_code: "copy-8", plan_name: "旧JSON副本" }],
+    plan_assignments: [{ id: "copy-8__STALE-LAB", plan_id: "copy-8", plan_code: "copy-8", lab_code: "STALE-LAB", space_code: "STALE-SPACE", assignment_status: "assigned" }],
+  });
+  insertPlanCopyRow(db, {
+    id: 8,
+    planCode: "copy-8",
+    planName: "关系副本",
+    visibility: "public",
+    dataset: staleCopyDataset,
+    assignments: staleCopyDataset.plan_assignments,
+  });
+  db.prepare(`
+    INSERT INTO plans (
+      id, copy_id, plan_code, plan_name, owner_user_id, visibility, is_baseline,
+      is_locked, revision, plan_type, source_type, created_at, updated_at
+    ) VALUES ('copy-8', 8, 'copy-8', '关系副本', 1, 'public', 0, 0, 1, 'copy', 'copy', '2026-06-01T00:00:00Z', '2026-06-01T00:00:00Z')
+    ON CONFLICT(plan_code) DO UPDATE SET copy_id = excluded.copy_id, plan_name = excluded.plan_name
+  `).run();
+  db.prepare(`
+    INSERT INTO plan_space_overrides (id, plan_id, base_space_id, space_code, operation, payload_json)
+    VALUES ('copy-8__REL-SPACE', 'copy-8', 'rel-space', 'REL-SPACE', 'upsert', ?)
+  `).run(JSON.stringify({ id: "copy:8::rel-space", copy_id: 8, space_code: "REL-SPACE", building_code: "关系旧楼", floor_code: "1", segment_code: "EWREL", front_door: "501", rear_door: "", current_status: "active" }));
+  db.prepare(`
+    INSERT INTO plan_assignments (id, plan_id, plan_code, lab_code, space_code, assignment_status)
+    VALUES ('copy-8__UNIT000001', 'copy-8', 'copy-8', 'UNIT000001', 'REL-SPACE', 'assigned')
+  `).run();
+  const service = createPlanCopyService(db, datasetService);
+
+  service.normalizeAllNumbering({ id: 1, username: "admin", role: "admin" });
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM buildings WHERE building_name = '旧JSON楼'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spaces WHERE space_code = 'STALE-SPACE'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM labs WHERE lab_name = '旧JSON用途'").get().count, 0);
+  assert.equal(db.prepare("SELECT building_name FROM buildings WHERE building_code = 'B0105'").get().building_name, "关系楼");
+  assert.equal(db.prepare("SELECT building_code FROM spaces WHERE space_code = 'REL-SPACE'").get().building_code, "B0105");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plans WHERE plan_code = '旧JSON方案'").get().count, 0);
+  const copyCode = db.prepare("SELECT plan_code FROM plan_copies WHERE id = 8").get().plan_code;
+  assert.match(copyCode, /^PLAN\d{6}$/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_assignments WHERE plan_id = ? AND lab_code = 'STALE-LAB'").get(copyCode).count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_assignments WHERE plan_id = ? AND lab_code = 'UNIT000001'").get(copyCode).count, 1);
+});
+
 test("saving copy datasets removes stale relational deleted-space tombstones for the copy", () => {
   const db = createPlanCopyTestDb();
   RelationalStore.ensureRelationalSchema(db);
@@ -1363,6 +1426,35 @@ test("relational projection builds a complete frontend dataset without legacy da
   assert.deepEqual(projected.deleted_space_ids, ["copy:8::00101010101"]);
 });
 
+test("relational projection ignores stale legacy fallback business rows once relation rows exist", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  const staleFallback = {
+    buildings: [{ building_code: "STALE-B", building_name: "旧楼" }],
+    floor_segments: [],
+    spaces: [{ id: "stale-space", space_code: "STALE-SPACE", building_code: "STALE-B", floor_code: "9" }],
+    labs: [{ id: "stale-lab", lab_code: "STALE-LAB", lab_name: "旧用途" }],
+    colleges: [],
+    majors: [],
+    lab_types: [],
+    plans: [{ id: "STALE-PLAN", plan_code: "STALE-PLAN", plan_name: "旧方案" }],
+    plan_assignments: [],
+    file_assets: [{ id: "asset-legacy" }],
+    imports: [{ id: "import-legacy" }],
+    deleted_space_ids: [],
+  };
+
+  const projected = DatasetProjection.projectVisibleDataset(db, { id: 2, username: "editor", role: "editor" }, { fallbackDataset: staleFallback });
+
+  assert.ok(projected.spaces.some((row) => row.space_code === "00101010101"));
+  assert.ok(projected.spaces.some((row) => row.space_code === "00101010202" && Number(row.copy_id) === 8));
+  assert.ok(projected.labs.some((row) => row.lab_code === "UNIT000001"));
+  assert.equal(projected.spaces.some((row) => row.space_code === "STALE-SPACE"), false);
+  assert.equal(projected.labs.some((row) => row.lab_code === "STALE-LAB"), false);
+  assert.deepEqual(projected.file_assets, [{ id: "asset-legacy" }]);
+  assert.deepEqual(projected.imports, [{ id: "import-legacy" }]);
+});
+
 test("relational projection preserves visitor editor and admin plan visibility", () => {
   const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
   seedRelationalProjectionFixture(db);
@@ -1394,6 +1486,47 @@ test("visible dataset read path uses relational projection when legacy json is e
   assert.ok(visible.spaces.some((row) => row.space_code === "00101010202" && Number(row.copy_id) === 8));
   assert.ok(visible.plan_assignments.some((row) => row.plan_id === "copy-8" && row.space_code === "00101010202"));
   assert.deepEqual(visible.deleted_space_ids, ["copy:8::00101010101"]);
+});
+
+test("visible dataset read path ignores polluted active and copy legacy json after relational backfill", () => {
+  const db = createActiveDatasetTestDb(activeApplyDataset({
+    buildings: [{ id: "STALE-B", building_code: "STALE-B", building_name: "旧楼" }],
+    spaces: [{ id: "stale-space", space_code: "STALE-SPACE", building_code: "STALE-B", floor_code: "9" }],
+    labs: [{ id: "stale-lab", lab_code: "STALE-LAB", lab_name: "旧用途" }],
+    plans: [{ id: "STALE-PLAN", plan_code: "STALE-PLAN", plan_name: "旧方案" }],
+    plan_assignments: [],
+  }));
+  db.prepare("INSERT INTO users (id, username, role) VALUES (2, 'editor', 'editor')").run();
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "污染副本",
+    visibility: "private",
+    dataset: activeApplyDataset({
+      buildings: [{ id: "COPY-STALE-B", building_code: "COPY-STALE-B", building_name: "副本旧楼" }],
+      spaces: [{ id: "copy-stale-space", copy_id: 8, space_code: "COPY-STALE-SPACE", building_code: "COPY-STALE-B", floor_code: "8" }],
+      labs: [{ id: "copy-stale-lab", copy_id: 8, lab_code: "COPY-STALE-LAB", lab_name: "副本旧用途" }],
+      plans: [{ id: "copy-8", copy_id: 8, plan_code: "copy-8", plan_name: "污染副本" }],
+      plan_assignments: [],
+    }),
+    assignments: [],
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const service = createPlanCopyService(db, datasetService);
+
+  const visible = service.buildVisibleDataset({ id: 2, username: "editor", role: "editor" }).dataset;
+
+  assert.ok(visible.spaces.some((row) => row.space_code === "00101010101"));
+  assert.ok(visible.spaces.some((row) => row.space_code === "00101010202" && Number(row.copy_id) === 8));
+  assert.ok(visible.labs.some((row) => row.lab_code === "UNIT000001"));
+  assert.equal(visible.spaces.some((row) => row.space_code === "STALE-SPACE" || row.space_code === "COPY-STALE-SPACE"), false);
+  assert.equal(visible.labs.some((row) => row.lab_code === "STALE-LAB" || row.lab_code === "COPY-STALE-LAB"), false);
+  assert.deepEqual(visible.plans.map((row) => row.plan_code).sort(), ["copy-1", "copy-2", "copy-8"]);
 });
 
 test("copy detail edit lab writes a plan lab override and returns projected data", () => {
@@ -1607,6 +1740,47 @@ test("active detail edit space updates global spaces through the active revision
   assert.equal(result.revision, 3);
   assert.equal(db.prepare("SELECT network_segment FROM spaces WHERE space_code = '00101010404'").get().network_segment, "10.1.4.0/24");
   assert.ok(result.dataset.spaces.some((row) => row.space_code === "00101010404" && row.area_m2 === 45));
+});
+
+test("active detail actions use relational active rows instead of stale legacy active json", () => {
+  const staleDataset = activeApplyDataset({
+    spaces: [{ id: "stale-space", space_code: "STALE-SPACE", building_code: "STALE-B", floor_code: "9" }],
+    labs: [],
+    plans: [{ id: "STALE-PLAN", plan_code: "STALE-PLAN", plan_name: "旧方案" }],
+    plan_assignments: [],
+  });
+  const db = createActiveDatasetTestDb(staleDataset);
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const relationalDataset = datasetService.normalizeIncomingDataset(activeApplyDataset());
+  RelationalStore.replaceActiveDataset(db, relationalDataset);
+  const detailService = createDetailActionService(db, datasetService);
+
+  const result = detailService.submitActiveDetailAction({
+    expectedRevision: 1,
+    planCode: "PLAN-A",
+    action: "editSpace",
+    selectedSpace: { space_code: "S101" },
+    form: {
+      frontDoor: "102",
+      rearDoor: "",
+      segmentCode: "EW01010101",
+      side: "south",
+      offsetM: "4",
+      lengthM: "10",
+      widthM: "5",
+      areaM2: "",
+      networkSegment: "10.10.2.0/24",
+      currentStatus: "active",
+    },
+  }, { id: 1, username: "admin", role: "admin" });
+
+  assert.equal(result.revision, 2);
+  assert.equal(db.prepare("SELECT network_segment FROM spaces WHERE space_code = '00101010202'").get().network_segment, "10.10.2.0/24");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spaces WHERE space_code = 'STALE-SPACE'").get().count, 0);
+  assert.ok(result.dataset.spaces.some((row) => row.space_code === "00101010202"));
 });
 
 test("copy detail action revision conflicts do not write relation rows or legacy snapshots", () => {
@@ -2379,6 +2553,40 @@ test("plan copy creation writes lifecycle rows to relational plans", () => {
   assert.equal(row.deleted_at, null);
   assert.equal(assignment.lab_code, "UNIT000001");
   assert.equal(assignment.space_code, "S101");
+});
+
+test("plan copy creation from a copy uses relational source data instead of stale legacy payloads", () => {
+  const db = createActiveDatasetTestDb(activeApplyDataset());
+  seedRelationalProjectionFixture(db);
+  db.prepare("INSERT INTO users (id, username, role) VALUES (2, 'editor', 'editor')").run();
+  const datasetService = createRelationalActiveDatasetService(db, activeApplyDataset());
+  const staleCopyDataset = datasetService.normalizeIncomingDataset(activeApplyDataset({
+    spaces: [{ id: "stale-space", copy_id: 8, space_code: "STALE-SPACE", building_code: "STALE-B", floor_code: "9" }],
+    labs: [{ id: "stale-lab", copy_id: 8, lab_code: "STALE-LAB", lab_name: "旧副本用途" }],
+    plans: [{ id: "copy-8", copy_id: 8, plan_code: "copy-8", plan_name: "旧副本" }],
+    plan_assignments: [{ id: "copy-8__STALE-LAB", plan_id: "copy-8", plan_code: "copy-8", lab_code: "STALE-LAB", space_code: "STALE-SPACE", assignment_status: "assigned" }],
+  }));
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: staleCopyDataset,
+    assignments: staleCopyDataset.plan_assignments,
+  });
+  const service = createPlanCopyService(db, datasetService);
+
+  const result = service.createCopy({ sourcePlanCode: "copy-8", planName: "从关系副本复制" }, { id: 2, username: "editor", role: "editor" });
+  const nextPlanCode = `copy-${result.copyId}`;
+  const override = db.prepare("SELECT payload_json FROM plan_space_overrides WHERE plan_id = ? AND space_code = '00101010202'").get(nextPlanCode);
+  const assignment = db.prepare("SELECT lab_code, space_code FROM plan_assignments WHERE plan_id = ?").get(nextPlanCode);
+
+  assert.ok(override);
+  assert.equal(JSON.parse(override.payload_json).network_segment, "10.8.0.0/24");
+  assert.equal(assignment.lab_code, "UNIT000001");
+  assert.equal(assignment.space_code, "00101010202");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_space_overrides WHERE plan_id = ? AND space_code = 'STALE-SPACE'").get(nextPlanCode).count, 0);
 });
 
 test("plan copy management updates relational lifecycle state", () => {

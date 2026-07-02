@@ -29,7 +29,31 @@ function booleanFlag(value) {
   return value === true || value === 1 || value === "1";
 }
 
-function visiblePlanSql(user) {
+function visiblePlanSql(user, options = {}) {
+  const planCodes = Array.isArray(options.planCodes)
+    ? options.planCodes.map((code) => String(code || "").trim()).filter(Boolean)
+    : [];
+  if (planCodes.length) {
+    return {
+      sql: `SELECT * FROM plans WHERE deleted_at IS NULL AND plan_code IN (${planCodes.map(() => "?").join(", ")}) ORDER BY is_baseline DESC, updated_at DESC, id DESC`,
+      params: planCodes
+    };
+  }
+  const copyIds = Array.isArray(options.copyIds)
+    ? options.copyIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+    : [];
+  if (copyIds.length) {
+    return {
+      sql: `SELECT * FROM plans WHERE deleted_at IS NULL AND copy_id IN (${copyIds.map(() => "?").join(", ")}) ORDER BY is_baseline DESC, updated_at DESC, id DESC`,
+      params: copyIds
+    };
+  }
+  if (options.activeOnly) {
+    return {
+      sql: "SELECT * FROM plans WHERE deleted_at IS NULL AND copy_id IS NULL ORDER BY is_baseline DESC, updated_at DESC, id DESC",
+      params: []
+    };
+  }
   if (user && user.role === "admin") {
     return {
       sql: "SELECT * FROM plans WHERE deleted_at IS NULL ORDER BY is_baseline DESC, updated_at DESC, id DESC",
@@ -60,8 +84,8 @@ function visiblePlanSql(user) {
   };
 }
 
-function loadVisiblePlans(db, user) {
-  const query = visiblePlanSql(user);
+function loadVisiblePlans(db, user, options = {}) {
+  const query = visiblePlanSql(user, options);
   return db.prepare(query.sql).all(...query.params);
 }
 
@@ -147,20 +171,7 @@ function loadGlobalRows(db) {
   };
 }
 
-function fallbackBaseCodes(fallbackDataset, key) {
-  const rows = Array.isArray(fallbackDataset && fallbackDataset[key]) ? fallbackDataset[key] : [];
-  if (!rows.length) {
-    return null;
-  }
-  const codeKey = key === "labs" ? "lab_code" : "space_code";
-  return new Set(rows
-    .filter((row) => !row.copy_id && !row.copyId)
-    .map((row) => row[codeKey] || row.id)
-    .filter(Boolean));
-}
-
-function loadSpaces(db, plans, fallbackDataset) {
-  const allowedBaseCodes = fallbackBaseCodes(fallbackDataset, "spaces");
+function loadSpaces(db, plans) {
   const baseRows = db.prepare(`
     SELECT
       space_code, building_code, floor_code, segment_code, front_door, rear_door, side,
@@ -168,7 +179,7 @@ function loadSpaces(db, plans, fallbackDataset) {
       notes, created_at, updated_at
     FROM spaces
     ORDER BY building_code ASC, floor_code ASC, space_code ASC
-  `).all().filter((row) => !allowedBaseCodes || allowedBaseCodes.has(row.space_code)).map((row) => stripEmpty({
+  `).all().map((row) => stripEmpty({
     ...row,
     door_number: row.front_door,
     skeleton_code: row.segment_code,
@@ -197,15 +208,14 @@ function loadSpaces(db, plans, fallbackDataset) {
   return [...baseRows, ...overrideRows];
 }
 
-function loadLabs(db, plans, fallbackDataset) {
-  const allowedBaseCodes = fallbackBaseCodes(fallbackDataset, "labs");
+function loadLabs(db, plans) {
   const baseRows = db.prepare(`
     SELECT
       lab_code, lab_name, college_code, college, major_code, major, lab_type_code,
       lab_type, director, seat_count, computer_count, status, notes, created_at, updated_at
     FROM labs
     ORDER BY lab_code ASC
-  `).all().filter((row) => !allowedBaseCodes || allowedBaseCodes.has(row.lab_code)).map((row) => stripEmpty({
+  `).all().map((row) => stripEmpty({
     ...row,
     college_name: row.college,
     major_name: row.major,
@@ -284,7 +294,7 @@ function loadDeletedSpaceIds(db, plans) {
 
 function projectVisibleDataset(db, user, options = {}) {
   RelationalStore.ensureRelationalSchema(db);
-  const plans = loadVisiblePlans(db, user);
+  const plans = loadVisiblePlans(db, user, options);
   if (!plans.length && options.fallbackDataset) {
     return RelationalStore.projectGlobalReferenceRows(db, options.fallbackDataset);
   }
@@ -293,8 +303,8 @@ function projectVisibleDataset(db, user, options = {}) {
   return {
     buildings: globals.buildings,
     floor_segments: globals.floor_segments,
-    spaces: loadSpaces(db, plans, options.fallbackDataset),
-    labs: loadLabs(db, plans, options.fallbackDataset),
+    spaces: loadSpaces(db, plans),
+    labs: loadLabs(db, plans),
     colleges: globals.colleges,
     majors: globals.majors,
     lab_types: globals.lab_types,

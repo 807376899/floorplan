@@ -387,7 +387,7 @@ function createAssignmentActionService(db, datasetService) {
         payload: { revision: active.revision, dataset: active.dataset },
       });
     }
-    const dataset = datasetService.normalizeIncomingDataset(active.dataset);
+    const dataset = datasetService.normalizeIncomingDataset(DatasetProjection.projectVisibleDataset(db, user, { activeOnly: true, fallbackDataset: active.dataset }));
     const plan = activePlanFrom(dataset, body.planCode);
     applyAssignmentAction(dataset, plan, body, 0);
     const normalized = datasetService.normalizeIncomingDataset(dataset);
