@@ -1,4 +1,5 @@
 const path = require("path");
+const { DEFAULT_PORT } = require("./ports");
 
 const root = path.resolve(__dirname, "..");
 const dataDir = path.join(root, "data");
@@ -7,7 +8,7 @@ const backupsDir = path.join(dataDir, "backups");
 
 module.exports = {
   root,
-  port: Number(process.env.PORT || 3000),
+  port: Number(process.env.PORT || DEFAULT_PORT),
   dataDir,
   uploadsDir,
   backupsDir,
