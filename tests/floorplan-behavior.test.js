@@ -5,6 +5,8 @@ const test = require("node:test");
 const vm = require("node:vm");
 const { DatabaseSync } = require("node:sqlite");
 const { createDatasetService } = require("../server/dataset-service");
+const { createImportService } = require("../server/import-service");
+const { createSnapshotService } = require("../server/snapshot-service");
 const { compactVisibleDataset, createPlanCopyService } = require("../server/plan-copy-service");
 const DatasetProjection = require("../server/dataset-projection-service");
 const { createDetailActionService } = require("../server/detail-action-service");
@@ -163,6 +165,36 @@ function createDatasetServiceStubWithNormalizer() {
     ...stub,
     normalizeIncomingDataset: normalizer.normalizeIncomingDataset,
   };
+}
+
+function activeApplyDataset(overrides = {}) {
+  return {
+    buildings: [{ id: "B0101", building_code: "B0101", building_name: "一号楼", campus_zone: "下沙校区", building_number: 1, sort_order: 1 }],
+    floor_segments: [{ id: "B0101__1__EW01010101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", element_type: "corridor" }],
+    spaces: [{ id: "space-101", space_code: "S101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "101", rear_door: "", side: "north", offset_m: 0, length_m: 8, width_m: 6, area_m2: 48, network_segment: "10.0.0.0/24", current_status: "active" }],
+    labs: [{ id: "lab-1", lab_code: "UNIT000001", lab_name: "一号用途", college_code: "COL-A", college: "学院A", major_code: "MAJ-A", major: "专业A", lab_type_code: "USE0001", lab_type: "实验室", director: "张三", seat_count: 30, computer_count: 20, status: "active" }],
+    colleges: [{ id: "COL-A", college_code: "COL-A", college_name: "学院A", color: "#2563eb", status: "active" }],
+    majors: [{ id: "MAJ-A", major_code: "MAJ-A", major_name: "专业A", college_code: "COL-A", status: "active" }],
+    lab_types: [{ id: "USE0001", type_code: "USE0001", type_name: "实验室", status: "active" }],
+    plans: [{ id: "PLAN-A", plan_code: "PLAN-A", plan_name: "一号方案", plan_type: "baseline", is_locked: true }],
+    plan_assignments: [{ id: "PLAN-A__UNIT000001", plan_id: "PLAN-A", plan_code: "PLAN-A", lab_id: "lab-1", lab_code: "UNIT000001", space_id: "space-101", space_code: "S101", assignment_status: "assigned" }],
+    file_assets: [],
+    imports: [],
+    deleted_space_ids: [],
+    ...overrides,
+  };
+}
+
+function createRelationalActiveDatasetService(db, initialDataset = activeApplyDataset()) {
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    dataDir: __dirname,
+    uploadsDir: __dirname,
+    backupsDir: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  db.prepare("UPDATE active_dataset SET dataset_json = ? WHERE id = 1").run(JSON.stringify(datasetService.normalizeIncomingDataset(initialDataset)));
+  return datasetService;
 }
 
 function insertPlanCopyRow(db, options) {
@@ -1165,6 +1197,128 @@ test("saving active datasets synchronizes global relational reference tables imm
   assert.equal(db.prepare("SELECT college_name FROM colleges WHERE college_code = 'COL-R'").get().college_name, "关系学院");
   assert.equal(db.prepare("SELECT major_name FROM majors WHERE major_code = 'MAJ-R'").get().major_name, "关系专业");
   assert.equal(db.prepare("SELECT type_name FROM lab_types WHERE type_code = 'USE-R'").get().type_name, "关系用途");
+});
+
+test("saving active datasets replaces stale global relational rows", () => {
+  const db = createActiveDatasetTestDb(activeApplyDataset());
+  const datasetService = createRelationalActiveDatasetService(db, activeApplyDataset());
+  RelationalStore.syncFromVisibleDataset(db, datasetService.getActiveDataset().dataset, []);
+  const nextDataset = datasetService.normalizeIncomingDataset(activeApplyDataset({
+    buildings: [{ id: "B0201", building_code: "B0201", building_name: "二号楼", campus_zone: "绍兴校区", building_number: 1, sort_order: 1 }],
+    floor_segments: [{ id: "B0201__2__EW02010201", building_code: "B0201", floor_code: "2", segment_code: "EW02010201", element_type: "corridor" }],
+    spaces: [{ id: "space-201", space_code: "S201", building_code: "B0201", floor_code: "2", segment_code: "EW02010201", front_door: "201", rear_door: "", side: "south", length_m: 9, width_m: 6, area_m2: 54, current_status: "active" }],
+    labs: [{ id: "lab-2", lab_code: "UNIT000002", lab_name: "二号用途", college_code: "COL-B", college: "学院B", major_code: "MAJ-B", major: "专业B", lab_type_code: "USE0001", lab_type: "实验室", seat_count: 20, computer_count: 10, status: "active" }],
+    colleges: [{ id: "COL-B", college_code: "COL-B", college_name: "学院B", color: "#dc2626", status: "active" }],
+    majors: [{ id: "MAJ-B", major_code: "MAJ-B", major_name: "专业B", college_code: "COL-B", status: "active" }],
+    plans: [{ id: "PLAN-B", plan_code: "PLAN-B", plan_name: "二号方案", plan_type: "baseline", is_locked: true }],
+    plan_assignments: [{ id: "PLAN-B__UNIT000002", plan_id: "PLAN-B", plan_code: "PLAN-B", lab_id: "lab-2", lab_code: "UNIT000002", space_id: "space-201", space_code: "S201", assignment_status: "assigned" }],
+  }));
+
+  datasetService.saveActiveDataset(nextDataset, "admin", { expectedRevision: 1 });
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM buildings WHERE building_code = 'B0101'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM floor_segments WHERE building_code = 'B0101'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spaces WHERE space_code = 'S101'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM labs WHERE lab_code = 'UNIT000001'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plans WHERE plan_code = 'PLAN-A'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_assignments WHERE plan_id = 'PLAN-A'").get().count, 0);
+  assert.equal(db.prepare("SELECT building_name FROM buildings WHERE building_code = 'B0201'").get().building_name, "二号楼");
+  assert.equal(db.prepare("SELECT space_code FROM plan_assignments WHERE plan_id = 'PLAN-B' AND lab_code = 'UNIT000002'").get().space_code, "S201");
+});
+
+test("publishing an import draft applies the dataset relation first", () => {
+  const db = createActiveDatasetTestDb(activeApplyDataset());
+  db.exec(`
+    CREATE TABLE snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, label TEXT, dataset_json TEXT, source_revision INTEGER, created_by TEXT, created_at TEXT, is_protected INTEGER);
+    CREATE TABLE import_drafts (id INTEGER PRIMARY KEY AUTOINCREMENT, file_name TEXT, source_type TEXT, uploaded_by TEXT, uploaded_at TEXT, dataset_json TEXT, summary_json TEXT, status TEXT, published_at TEXT, discarded_at TEXT);
+    CREATE TABLE audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT, actor TEXT, ip TEXT, details_json TEXT, created_at TEXT);
+  `);
+  const datasetService = createRelationalActiveDatasetService(db, activeApplyDataset());
+  RelationalStore.syncFromVisibleDataset(db, datasetService.getActiveDataset().dataset, []);
+  const snapshotService = createSnapshotService(db, { backupsDir: __dirname }, { writeAudit() {} }, datasetService);
+  const importService = createImportService(db, { uploadsDir: __dirname }, { writeAudit() {} }, datasetService, snapshotService, null);
+  const importedDataset = datasetService.normalizeIncomingDataset(activeApplyDataset({
+    buildings: [{ id: "B0301", building_code: "B0301", building_name: "导入楼", campus_zone: "下沙校区", building_number: 3, sort_order: 1 }],
+    floor_segments: [{ id: "B0301__3__EW03010301", building_code: "B0301", floor_code: "3", segment_code: "EW03010301", element_type: "corridor" }],
+    spaces: [{ id: "space-301", space_code: "S301", building_code: "B0301", floor_code: "3", segment_code: "EW03010301", front_door: "301", rear_door: "", length_m: 8, width_m: 7, area_m2: 56, current_status: "active" }],
+    plans: [{ id: "PLAN-I", plan_code: "PLAN-I", plan_name: "导入方案", plan_type: "baseline", is_locked: true }],
+    plan_assignments: [{ id: "PLAN-I__UNIT000001", plan_id: "PLAN-I", plan_code: "PLAN-I", lab_id: "lab-1", lab_code: "UNIT000001", space_id: "space-301", space_code: "S301", assignment_status: "assigned" }],
+  }));
+  db.prepare(`
+    INSERT INTO import_drafts (file_name, source_type, uploaded_by, uploaded_at, dataset_json, summary_json, status)
+    VALUES ('导入.json', 'json', 'admin', '2026-07-02T00:00:00Z', ?, '{}', 'draft')
+  `).run(JSON.stringify(importedDataset));
+
+  importService.publishImportDraft(1, "admin", "127.0.0.1");
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM buildings WHERE building_code = 'B0101'").get().count, 0);
+  assert.equal(db.prepare("SELECT building_name FROM buildings WHERE building_code = 'B0301'").get().building_name, "导入楼");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spaces WHERE space_code = 'S101'").get().count, 0);
+  assert.equal(db.prepare("SELECT space_code FROM plan_assignments WHERE plan_id = 'PLAN-I' AND lab_code = 'UNIT000001'").get().space_code, "S301");
+  assert.equal(db.prepare("SELECT status FROM import_drafts WHERE id = 1").get().status, "published");
+});
+
+test("restoring a snapshot applies the dataset relation first", () => {
+  const db = createActiveDatasetTestDb(activeApplyDataset());
+  db.exec("CREATE TABLE snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, label TEXT, dataset_json TEXT, source_revision INTEGER, created_by TEXT, created_at TEXT, is_protected INTEGER);");
+  const datasetService = createRelationalActiveDatasetService(db, activeApplyDataset());
+  RelationalStore.syncFromVisibleDataset(db, datasetService.getActiveDataset().dataset, []);
+  const snapshotService = createSnapshotService(db, { backupsDir: __dirname }, { writeAudit() {} }, datasetService);
+  const restoredDataset = datasetService.normalizeIncomingDataset(activeApplyDataset({
+    buildings: [{ id: "B0401", building_code: "B0401", building_name: "快照楼", campus_zone: "绍兴校区", building_number: 4, sort_order: 1 }],
+    floor_segments: [{ id: "B0401__4__EW04010401", building_code: "B0401", floor_code: "4", segment_code: "EW04010401", element_type: "corridor" }],
+    spaces: [{ id: "space-401", space_code: "S401", building_code: "B0401", floor_code: "4", segment_code: "EW04010401", front_door: "401", rear_door: "", length_m: 8, width_m: 8, area_m2: 64, current_status: "active" }],
+    plans: [{ id: "PLAN-S", plan_code: "PLAN-S", plan_name: "快照方案", plan_type: "baseline", is_locked: true }],
+    plan_assignments: [{ id: "PLAN-S__UNIT000001", plan_id: "PLAN-S", plan_code: "PLAN-S", lab_id: "lab-1", lab_code: "UNIT000001", space_id: "space-401", space_code: "S401", assignment_status: "assigned" }],
+  }));
+  snapshotService.createSnapshot("manual", "待恢复快照", restoredDataset, 1, "admin", 0);
+
+  snapshotService.restoreSnapshot(1, "admin", "127.0.0.1");
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM buildings WHERE building_code = 'B0101'").get().count, 0);
+  assert.equal(db.prepare("SELECT building_name FROM buildings WHERE building_code = 'B0401'").get().building_name, "快照楼");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spaces WHERE space_code = 'S101'").get().count, 0);
+  assert.equal(db.prepare("SELECT space_code FROM plan_assignments WHERE plan_id = 'PLAN-S' AND lab_code = 'UNIT000001'").get().space_code, "S401");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM snapshots WHERE kind = 'pre_restore'").get().count, 1);
+});
+
+test("numbering normalization updates relational active and copy rows", () => {
+  const initial = activeApplyDataset({
+    buildings: [{ id: "building-old", building_code: "旧楼", building_name: "旧编号楼", campus_zone: "下沙校区", building_number: 5, sort_order: 1 }],
+    floor_segments: [{ id: "seg-old", building_code: "旧楼", floor_code: "1", segment_code: "EWOLD", element_type: "corridor" }],
+    spaces: [{ id: "space-old", space_code: "S501", building_code: "旧楼", floor_code: "1", segment_code: "EWOLD", front_door: "501", rear_door: "", length_m: 8, width_m: 6, area_m2: 48, current_status: "active" }],
+    plans: [{ id: "中文方案", plan_code: "中文方案", plan_name: "中文方案", plan_type: "baseline", is_locked: true }],
+    plan_assignments: [{ id: "中文方案__UNIT000001", plan_id: "中文方案", plan_code: "中文方案", lab_id: "lab-1", lab_code: "UNIT000001", space_id: "space-old", space_code: "S501", assignment_status: "assigned" }],
+  });
+  const db = createActiveDatasetTestDb(initial);
+  const datasetService = createRelationalActiveDatasetService(db, initial);
+  RelationalStore.syncFromVisibleDataset(db, datasetService.getActiveDataset().dataset, []);
+  const copyDataset = datasetService.normalizeIncomingDataset({
+    ...initial,
+    plans: [{ id: "copy-1", copy_id: 1, plan_code: "copy-1", plan_name: "副本" }],
+    plan_assignments: [{ id: "copy-1__UNIT000001", plan_id: "copy-1", plan_code: "copy-1", lab_id: "lab-1", lab_code: "UNIT000001", space_id: "space-old", space_code: "S501", assignment_status: "assigned" }],
+  });
+  insertPlanCopyRow(db, {
+    id: 1,
+    planCode: "copy-1",
+    planName: "副本",
+    visibility: "public",
+    dataset: copyDataset,
+    assignments: copyDataset.plan_assignments,
+  });
+  const service = createPlanCopyService(db, datasetService);
+
+  service.normalizeAllNumbering({ id: 1, username: "admin", role: "admin" });
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM buildings WHERE building_code = '旧楼'").get().count, 0);
+  assert.equal(db.prepare("SELECT building_name FROM buildings WHERE building_code = 'B0105'").get().building_name, "旧编号楼");
+  assert.equal(db.prepare("SELECT building_code FROM floor_segments WHERE segment_code = 'EWOLD'").get().building_code, "B0105");
+  assert.equal(db.prepare("SELECT building_code FROM spaces WHERE space_code = 'S501'").get().building_code, "B0105");
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plans WHERE plan_code = '中文方案'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plans WHERE plan_code LIKE 'PLAN%' AND copy_id IS NULL").get().count, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_assignments WHERE plan_id = '中文方案'").get().count, 0);
+  assert.ok(db.prepare("SELECT plan_id FROM plan_assignments WHERE lab_code = 'UNIT000001' AND plan_id LIKE 'PLAN%'").get());
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_assignments WHERE plan_id = (SELECT plan_code FROM plan_copies WHERE id = 1)").get().count, 1);
 });
 
 test("saving copy datasets removes stale relational deleted-space tombstones for the copy", () => {

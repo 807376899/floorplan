@@ -211,6 +211,7 @@ function createPlanCopyService(db, datasetService) {
       });
       const usedPlanCodes = new Set((nextActive.plans || []).map((plan) => plan.plan_code).filter(Boolean));
       const nextRevision = active.revision + 1;
+      RelationalStore.replaceActiveDataset(db, nextActive);
       db.prepare("UPDATE active_dataset SET revision = ?, dataset_json = ?, updated_by = ?, updated_at = ? WHERE id = 1")
         .run(nextRevision, JSON.stringify(nextActive), user.username, now);
 
@@ -261,6 +262,20 @@ function createPlanCopyService(db, datasetService) {
           SET plan_code = ?, plan_json = ?, assignments_json = ?, dataset_json = ?, source_plan_code = ?, revision = revision + 1, updated_at = ?
           WHERE id = ?
         `).run(nextPlanCode, JSON.stringify(nextPlan), JSON.stringify(nextAssignments), JSON.stringify(storedDataset), nextSourcePlanCode, now, row.id);
+        RelationalStore.syncFromVisibleDataset(db, storedDataset, [{
+          id: row.id,
+          planCode: nextPlanCode,
+          planName: nextPlan.plan_name,
+          ownerUserId: row.owner_user_id,
+          visibility: row.visibility,
+          revision: Number(row.revision || 1) + 1,
+          isBaseline: Boolean(row.is_baseline),
+          plan: nextPlan,
+          sourcePlanCode: nextSourcePlanCode,
+          sourceType: row.source_type,
+          createdAt: row.created_at,
+          updatedAt: now,
+        }]);
       }
       db.exec("COMMIT");
       return { revision: nextRevision, updatedAt: now };

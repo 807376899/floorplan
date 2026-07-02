@@ -157,6 +157,9 @@
 - [ ] Once relational business rows exist, visible-dataset reads do not re-import stale plan-copy legacy JSON in a way that resurrects deleted buildings, floor skeletons, spaces, or use units.
 - [ ] `plan_space_overrides` and `plan_lab_overrides` store only real plan differences; redundant overrides identical to global baseline rows are pruned before they can bloat `/api/bootstrap`, `/api/dataset/active`, login, refresh, or save responses.
 - [ ] Startup relational compaction creates a SQLite backup under `data/backups` before deleting redundant overrides, and preserves real copy differences, tombstones, assignments, and legacy JSON compatibility data.
+- [ ] 导入发布、快照恢复、中文修复、编号规范化和旧 `/api/dataset/active` 兼容保存以关系表为业务写入权威，覆盖写入会删除新 active dataset 中不存在的旧全局楼栋、骨架、空间、用途单元、active 方案和 active 分配。
+- [ ] 覆盖性 active dataset 写入在单个事务中完成；关系表写入成功后才更新 legacy JSON，失败、revision 冲突或文本腐坏时关系表和 legacy JSON 都不半更新。
+- [ ] 编号规范化同步 active/global 关系表和非删除 plan copy 关系行；方案分配写入优先使用规范化后的 `plan_code`，不会因旧 `plan_id` 复活中文或旧方案编号。
 - [ ] 详情栏编辑实验室、改建房间、新增房间、编辑房间和删除房间通过动作级 API 保存，不从前端回传整包可见 dataset 覆盖保存。
 - [ ] 详情栏 copy 方案写入优先更新 `plan_space_overrides`、`plan_lab_overrides`、`plan_assignments` 和 `plan_deleted_spaces`；新增 copy 房间不写入全局 `spaces` 基准表。
 - [ ] 详情栏保存成功后由关系表投影刷新可见 dataset；保存失败或 revision 冲突时不更新关系表，也不更新 legacy JSON 快照。

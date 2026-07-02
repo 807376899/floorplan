@@ -216,6 +216,26 @@ function syncFromVisibleDataset(db, dataset, copies = []) {
   pruneRedundantPlanOverrides(db);
 }
 
+function replaceActiveDataset(db, dataset) {
+  ensureRelationalSchema(db);
+  const activePlans = db.prepare("SELECT id FROM plans WHERE copy_id IS NULL").all().map((row) => row.id);
+  const deleteAssignments = db.prepare("DELETE FROM plan_assignments WHERE plan_id = ?");
+  for (const planId of activePlans) deleteAssignments.run(planId);
+  db.prepare("DELETE FROM plans WHERE copy_id IS NULL").run();
+  for (const table of [
+    "spaces",
+    "labs",
+    "floor_segments",
+    "buildings",
+    "majors",
+    "colleges",
+    "lab_types",
+  ]) {
+    db.prepare(`DELETE FROM ${table}`).run();
+  }
+  syncFromVisibleDataset(db, dataset, []);
+}
+
 function projectGlobalReferenceRows(db, dataset) {
   ensureRelationalSchema(db);
   const next = { ...(dataset || {}) };
@@ -660,7 +680,7 @@ function pruneRedundantPlanOverrides(db, options = {}) {
 }
 
 function upsertAssignment(db, row, now) {
-  const planCode = text(row.plan_id) || text(row.plan_code);
+  const planCode = text(row.plan_code) || text(row.plan_id);
   const labCode = text(row.lab_code) || text(row.lab_id);
   if (!planCode || !labCode) return;
   db.prepare(`
@@ -757,6 +777,7 @@ function numeric(value) {
 module.exports = {
   ensureRelationalSchema,
   syncFromVisibleDataset,
+  replaceActiveDataset,
   projectGlobalReferenceRows,
   hasRelationalBusinessData,
   pruneRedundantPlanOverrides,

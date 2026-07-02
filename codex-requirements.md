@@ -179,6 +179,9 @@
 - Startup may run an idempotent relational override compaction when redundant overrides are detected, but it must create a SQLite backup in `data/backups` before deleting redundant rows. The compaction must keep real copy differences, tombstones, assignments, and legacy JSON backup/export data intact.
 - Relational projection must enforce the same plan visibility rules as the old visible dataset builder: visitors see public and baseline plans, editor users also see their own private non-deleted plans, and admin users see all non-deleted plans.
 - Relation-only data must be sufficient to render the existing frontend dataset shape, including buildings, floor skeletons, spaces, use units, dictionaries, plans, assignments, and plan-scoped deleted-space tombstones, even when legacy business JSON is empty.
+- 导入发布、快照恢复、中文修复、显式编号规范化和旧 `/api/dataset/active` 兼容保存都必须以关系表为业务写入权威。覆盖性写入必须删除已不在新 active dataset 中的旧全局楼栋、骨架、空间、用途单元、active 方案和 active 分配，再同步 legacy JSON 快照。
+- 覆盖性 active dataset 写入必须在一个事务中完成：关系表写入成功后才更新 `active_dataset.dataset_json`；任何校验失败、文本腐坏、revision 冲突或数据库错误都不得留下半更新的关系表或 legacy JSON。
+- 编号规范化必须同步 active/global 关系表、非删除 plan copy 关系行、copy assignments、copy overrides 和 legacy JSON；关系表写入分配时必须优先使用规范化后的 `plan_code`，不得让旧 `plan_id` 复活中文或旧方案编号。
 - 详情栏日常编辑必须使用动作级写接口而不是从前端回传整包可见 dataset 覆盖保存。`editLab`、`renovateRoom`、`createSpace`、`editSpace` 和 `deleteSpace` 在服务端优先写关系表，成功后通过关系表投影返回可见 dataset。
 - 详情栏写入 copy 方案时，新建或修改的空间与用途单元必须写入当前方案的 override 表；新建 copy 房间不得写入全局 `spaces` 基准表。删除房间必须写入当前方案 tombstone 并只使当前方案相关分配变为 `Invalid`。
 - 详情栏动作保存成功后可同步 legacy JSON 快照用于兼容、导出或回滚；保存失败或 revision 冲突时不得更新关系表或 legacy JSON 快照。

@@ -43,12 +43,20 @@ function createDatasetService(db, config, audit) {
         payload: { revision: active.revision, dataset: active.dataset },
       });
     }
+    const normalized = normalizeIncomingDataset(dataset);
     const revision = active.revision + 1;
     const updatedAt = nowIso();
-    db.prepare("UPDATE active_dataset SET revision = ?, dataset_json = ?, updated_by = ?, updated_at = ? WHERE id = 1")
-      .run(revision, JSON.stringify(dataset), actor, updatedAt);
-    RelationalStore.syncFromVisibleDataset(db, normalizeIncomingDataset(dataset), []);
-    return { revision, updatedAt, dataset, maintenance: buildMaintenance(dataset) };
+    db.exec("BEGIN");
+    try {
+      RelationalStore.replaceActiveDataset(db, normalized);
+      db.prepare("UPDATE active_dataset SET revision = ?, dataset_json = ?, updated_by = ?, updated_at = ? WHERE id = 1")
+        .run(revision, JSON.stringify(normalized), actor, updatedAt);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    return { revision, updatedAt, dataset: normalized, maintenance: buildMaintenance(normalized) };
   }
 
   function seedDataset(snapshotService) {
