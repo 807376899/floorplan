@@ -93,6 +93,7 @@
     const nextLab = {
       ...currentLab,
       lab_name: stringValue(draft.labName) || currentLab.lab_name,
+      lab_type: stringValue(draft.labType) || currentLab.lab_type,
       college: stringValue(draft.college),
       major: stringValue(draft.major),
       director: stringValue(draft.director),

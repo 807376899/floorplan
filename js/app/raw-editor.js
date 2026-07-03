@@ -29,6 +29,7 @@
       normalizeSegment,
       normalizeSpace,
       normalizeLab,
+      normalizeCampus,
       normalizeCollege,
       normalizeMajor,
       normalizeLabType,
@@ -263,6 +264,7 @@
     }
     
     function normalizeEditorRowsForKey(key, rows) {
+      if (key === "campuses") return rows.map((row) => normalizeCampus(row));
       if (key === "buildings") return rows.map((row) => normalizeBuilding(row));
       if (key === "colleges") return rows.map((row) => normalizeCollege(row));
       if (key === "majors") return rows.map((row) => normalizeMajor(row));
@@ -556,6 +558,7 @@
       const type = normalizeElementType(elementType);
       const isVertical = type === "stairs" || type === "elevator";
       const width = type === "corridor" ? 2.4 : 4;
+      const defaultName = type === "stairs" ? "新楼梯" : (type === "elevator" ? "新电梯" : "新走廊");
       const draft = {
         building_code: buildingCode,
         floor_code: floorCode,
@@ -565,7 +568,8 @@
         end_y_m: isVertical ? 8 : 0,
         width_m: width,
         element_type: type,
-        notes: type === "stairs" ? "楼梯" : (type === "elevator" ? "电梯" : "走廊"),
+        segment_name: defaultName,
+        notes: "",
         created_at: now,
       };
       const segment = normalizeSegment({ ...(typeof copyScopeForActivePlan === "function" ? copyScopeForActivePlan() : {}), ...draft, segment_code: nextSegmentCodeForDraft(draft) || `segment-${Date.now()}` });
@@ -585,6 +589,8 @@
       const floorCode = els.floorSelect.value || "1";
       if (state.editorKey === "buildings") {
         state.data.buildings.push(normalizeBuilding({ ...nextGeneratedBuildingDraft(), created_at: now }));
+      } else if (state.editorKey === "campuses") {
+        state.data.campuses.push(normalizeCampus({ campus_code: "", campus_name: "新增校区", sort_order: state.data.campuses.length + 1, status: "active", notes: "", created_at: now }));
       } else if (state.editorKey === "floor_segments") {
         addFloorSegmentRow("corridor");
         return;
@@ -649,6 +655,7 @@
           return;
         }
       }
+      if (state.editorKey === "campuses") state.data.campuses = rows.map((row) => normalizeCampus(row));
       if (state.editorKey === "labs") state.data.labs = rows.map((row) => normalizeLab(row));
       if (state.editorKey === "colleges") state.data.colleges = rows.map((row) => normalizeCollege(row));
       if (state.editorKey === "majors") state.data.majors = rows.map((row) => normalizeMajor(row));

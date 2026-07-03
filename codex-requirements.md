@@ -81,6 +81,7 @@
 - 主图中的北边指示不应随着缩放一起变化。
 - 主图中的教学楼信息和北边指示必须固定浮在主图可视区域上，不得随着主图内部滚动条滚动而移动。
 - 主图放大到需要滚动查看时，必须支持按住主图空白区域拖动画面平移；滚动条仍保留为辅助方式，房间搬迁拖拽不得误触发画布平移。
+- 主图和缩略图中房间必须按 `length_m`、`width_m` 等真实长宽等比缩放；同样长宽的房间在不同方案或不同走廊方向中应呈现相同视觉尺寸，纵向走廊两侧房间可按方向旋转但不得改变长宽比例。
 - 宽屏下当 workspace 中缩略图栏、主图栏、详细信息栏并列时，workspace 高度必须按视口固定，不得因为楼层或缩略图数量变多而变高；多出的楼层/缩略图内容必须在对应内部区域使用滚动条查看。
 - 中屏下 workspace 必须显示为两行：缩略图区独占第一行，主图和详细信息栏在第二行并列且高度对齐。
 - 窄屏下当 workspace 改为堆叠布局时，workspace 高度必须由缩略图区域高度、主图区域高度和详细信息区域高度自然相加，主图不得被裁切或隐藏。
@@ -108,12 +109,14 @@
 ## 2026-06-09 高级编辑易用性
 
 - 高级数据编辑区不再提供“业务编辑”入口；默认进入第一个可见原始维护表，工具栏只对当前原始维护表执行“新增行 / 应用修改 / 导出当前表”。
+- 高级数据编辑区仅 admin 可见；editor、viewer 和游客不显示底部数据编辑区，也不显示不可编辑的原始维护表。
 - 物理空间、实验室资料和方案分配的日常编辑应优先由详细信息栏和主图/待安置区交互承接，不要求业务用户手动编辑 `spaces`、`labs`、`plan_assignments` 三张底层表。
 - 主图搬迁和新建待定场地交互应统一使用“待安置区”：可编辑方案中，用户可将已落位实验室拖入待安置区，系统立即保存为 `Invalid`、空 `space_code`，并记录 `previous_space_code`，来源空间显示为无归属未规划空间。
 - 待安置区只表示当前方案中已保存但未落位的实验室队列，不参与未保存变更拦截；有内容时仍可切楼层、切方案、点击其他空间查看详情。
 - 详细信息栏底部不得显示固定待安置 Dock；待安置区通过右侧检查器的“详细信息 / 待安置区”切换进入。
 - 详细信息栏不得提供“加入待安置区”按钮；已落位实验室进入待安置区只能通过拖入右侧栏完成，避免和直接拖放逻辑形成重复入口。
-- 待安置区必须提供“新增”入口，可新增计划新建但尚未确定场地的用途单元；新增时名称必填，学院、座位数和电脑数可选，保存后以已保存未落位条目进入待安置区。
+- 待安置区必须提供“新增”入口，可新增计划新建但尚未确定场地的用途单元；新增时名称必填，所属学院必须使用下拉单选，座位数和电脑数可选，保存后以已保存未落位条目进入待安置区。
+- 待安置区内所有已保存未落位用途单元都必须可编辑；可修改名称、用途类型、所属学院、专业、负责人、座位数和电脑数，保存必须作用于当前方案或当前副本的用途单元 override，不得误改其他方案。
 - 待安置区条目必须提供“归位”操作，也支持拖回原空间：自动保存回 `previous_space_code` 对应原空间并从待安置区移除；若原空间不可用或已被其他 `assigned` 分配占用，必须阻止归位并给出明确提示。
 - 从待安置区拖到目标未规划空间时必须立即保存为 `assigned` 到目标空间，保存成功后该条目从待安置区移除；尚未落位的实验室必须继续作为待安置条目保留或自动重建。
 - 待安置区不得撑高 workspace、主图、缩略图或详情栏；待安置实验室数量增加时只在右侧检查器内部滚动。
@@ -147,13 +150,14 @@
 - 原始表格能力仅保留为高级结构和字典维护入口；`spaces`、`labs`、`plan_assignments` 原始表不再作为可见编辑入口，详情栏日常编辑必须替代这些单表编辑。详情信息栏不再显示“编辑此空间”“编辑此实验室”“查看当前分配”等旧原始表跳转按钮。
 - admin 可在教学楼、楼层骨架、学院、专业、实验室类型原始表中删除行；删除教学楼必须级联删除该楼的楼层骨架和空间，删除楼层骨架必须级联删除绑定到该骨架的空间，相关方案分配必须标记为 `Invalid` 且保留实验室资料；被实验室或专业引用的学院、专业和实验室类型仍必须阻止删除，并在当前表格附近明确提示原因，非 admin 不显示删除入口。
 - admin 在楼层骨架原始表中修改教学楼编码、楼层编码或走廊段编码时，系统必须按原始骨架身份同步迁移绑定空间，并更新分配引用；若目标骨架键已存在，必须阻止保存并提示冲突，不得把原骨架复制成另一楼层的重复数据。
+- 楼层骨架必须支持 `segment_name` 名称或标识字段，用于区分多走廊、多楼梯的楼层；新增房间、编辑房间等需要绑定走廊段的下拉选择必须优先显示走廊名称，而不是只显示骨架编码。
 - 编辑权限仍必须遵守方案权限：editor 只能编辑自己创建且非基线的方案；admin 可编辑基线方案；viewer/游客只读。
 - 前端界面应采用清晰的业务工具风格，详情栏日常编辑和主要工作区不得使用渐变背景，状态颜色必须明确区分已建设、已规划、未规划、不可用。
-- 数据自动编号必须集中配置并可复用：默认校区编码为下沙校区 `01`、绍兴校区 `02`；教学楼编号为 `B` + 校区码 + 两位楼号；空间编号为 `0` + 校区码 + 两位楼号 + 两位楼层 + 前门牌两位 + 后门牌两位；单门空间后门牌为空时后门牌编号必须等于前门牌编号；楼层骨架编号使用 `EW/NS/ST/EV/OT` + 校区码 + 两位楼号 + 两位楼层 + 两位序号；新增用途单元编号使用 `UNIT` + 六位流水。
-- 教学楼数据必须支持 `sort_order` 排列顺序字段，admin 可在数据编辑中的教学楼表维护；顶部教学楼检索先按下沙校区、绍兴校区分组，再按校区内 `sort_order` 排列，并在选项中标注校区。
+- 数据自动编号必须集中配置并可复用：系统不得预设某个学校的校区名称或校区编码；校区名称、校区编码和排序优先级由 `campuses` 数据维护。教学楼编号为 `B` + 校区码 + 两位楼号；空间编号为 `0` + 校区码 + 两位楼号 + 两位楼层 + 前门牌两位 + 后门牌两位；单门空间后门牌为空时后门牌编号必须等于前门牌编号；楼层骨架编号使用 `EW/NS/ST/EV/OT` + 校区码 + 两位楼号 + 两位楼层 + 两位序号；新增用途单元编号使用 `UNIT` + 六位流水。未配置校区码时只能使用通用 fallback，不得硬编码特定学校校区。
+- 教学楼数据必须支持 `sort_order` 排列顺序字段，admin 可在数据编辑中的教学楼表维护；校区数据必须支持 `sort_order` 优先级字段。顶部教学楼检索先按校区优先级、再按楼栋 `sort_order` 排列，选项显示去掉“校区”后缀的校区名，并在教学楼名称后标注楼号。
 - 新增记录可自动生成编号；已有记录不得因字段变化静默改号，必须由 admin 显式执行补全/刷新编号后才更新，并同步相关空间、骨架和方案分配引用；导入数据已有编号时默认保留。
 - 现有 `labs` 表短期继续作为底层表名和关系字段来源，但业务含义扩展为“用途单元”，可承载实验室、教室、办公室、公共空间等用途；旧 `LAB...` 编号继续兼容，新建用途单元使用 `UNIT...` 编号。
-- `outputs/lab-info-import` 导入模板生成时，杭州口径等同下沙校区；下沙校区空间必须按门牌号从东到西逐渐变大生成排列位置；同一教学楼、楼层、前后门牌完全相同的源表记录只生成一个物理空间，额外用途单元保留但不得生成重复房间；Sheet2 仅补充已匹配实训室信息，不得单独生成源表不存在的空间。
+- `outputs/lab-info-import` 导入模板生成时不得依赖系统内置校区名称；源表中的校区口径必须通过导入数据或 `campuses` 配置映射。同一教学楼、楼层、前后门牌完全相同的源表记录只生成一个物理空间，额外用途单元保留但不得生成重复房间；Sheet2 仅补充已匹配实训室信息，不得单独生成源表不存在的空间。
 - `outputs/lab-info-import` 中 Sheet2 的房间号和实训室编号只能在实训室名称等关键信息精确匹配时覆盖主表生成值；若主表中同楼同层不同前后门牌生成了相同编码，未精确匹配 Sheet2 的记录必须使用完整门牌生成唯一空间编码，并同步更新用途单元和方案分配。
 ## Numbering and Stable Identity
 
@@ -171,7 +175,7 @@
 
 ## Hybrid Relational Storage
 
-- Core business entities must gradually move to relational tables. `buildings`, `floor_segments`, `colleges`, `majors`, `lab_types`, `spaces`, `labs`, `plans`, `plan_space_overrides`, `plan_lab_overrides`, `plan_assignments`, and `plan_deleted_spaces` are the target source-of-truth tables; JSON remains for import drafts, snapshots, compatibility export, projection, and rollback.
+- Core business entities must gradually move to relational tables. `campuses`, `buildings`, `floor_segments`, `colleges`, `majors`, `lab_types`, `spaces`, `labs`, `plans`, `plan_space_overrides`, `plan_lab_overrides`, `plan_assignments`, and `plan_deleted_spaces` are the target source-of-truth tables; JSON remains for import drafts, snapshots, compatibility export, projection, and rollback.
 - The frontend API may continue returning the existing `dataset` JSON shape, but service code must project that shape from relational/global data where available instead of treating every plan-copy JSON payload as a separate authoritative copy of all reference rows.
 - `/api/bootstrap`, `/api/dataset/active`, and save responses that send a visible dataset must read through the relational projection path once relational rows are available. Legacy `active_dataset.dataset_json` and `plan_copies.dataset_json` may be synchronized into relational tables as fallback for old deployments, but must not remain the read-interface authority after synchronization.
 - Once relational business rows exist, visible-dataset reads must not resynchronize stale plan-copy legacy JSON payloads into relational tables. Old copy JSON may be used only for first-time fallback backfill; otherwise stale copy `buildings`, `floor_segments`, `spaces`, or `labs` must not resurrect rows deleted or changed through relation-first services.
@@ -181,7 +185,7 @@
 - Plan override tables must store real plan differences only. `plan_space_overrides` and `plan_lab_overrides` rows whose payload is identical to the global `spaces` or `labs` baseline must be pruned, and copy saves must skip or remove those redundant overrides so `/api/bootstrap`, `/api/dataset/active`, login, refresh, and save responses do not return full duplicate plan payloads.
 - Startup may run an idempotent relational override compaction when redundant overrides are detected, but it must create a SQLite backup in `data/backups` before deleting redundant rows. The compaction must keep real copy differences, tombstones, assignments, and legacy JSON backup/export data intact.
 - Relational projection must enforce the same plan visibility rules as the old visible dataset builder: visitors see public and baseline plans, editor users also see their own private non-deleted plans, and admin users see all non-deleted plans.
-- Relation-only data must be sufficient to render the existing frontend dataset shape, including buildings, floor skeletons, spaces, use units, dictionaries, plans, assignments, and plan-scoped deleted-space tombstones, even when legacy business JSON is empty.
+- Relation-only data must be sufficient to render the existing frontend dataset shape, including campuses, buildings, floor skeletons, spaces, use units, dictionaries, plans, assignments, and plan-scoped deleted-space tombstones, even when legacy business JSON is empty.
 - 导入发布、快照恢复、中文修复、显式编号规范化和旧 `/api/dataset/active` 兼容保存都必须以关系表为业务写入权威。覆盖性写入必须删除已不在新 active dataset 中的旧全局楼栋、骨架、空间、用途单元、active 方案和 active 分配，再同步 legacy JSON 快照。
 - 覆盖性 active dataset 写入必须在一个事务中完成：关系表写入成功后才更新 `active_dataset.dataset_json`；任何校验失败、文本腐坏、revision 冲突或数据库错误都不得留下半更新的关系表或 legacy JSON。
 - 编号规范化必须同步 active/global 关系表、非删除 plan copy 关系行、copy assignments、copy overrides 和 legacy JSON；关系表写入分配时必须优先使用规范化后的 `plan_code`，不得让旧 `plan_id` 复活中文或旧方案编号。
@@ -196,11 +200,11 @@
 - server mode 下 `plan_assignments` 原始表只能作为只读诊断视图；分配维护必须通过主图、详情栏或待安置区动作接口完成。
 - server mode 下普通业务 UI 不得把 `/api/dataset/active` 作为日常保存兜底；该整包入口仅保留为 admin 兼容覆盖写，必须记录为兼容写审计，并继续以关系表为业务写入权威。
 - server mode 下 `plans` 原始表只能作为只读诊断视图；方案创建、公开/私有、删除、重命名和设为/取消基线必须通过方案生命周期 API 或管理方案入口完成。
-- 高级原始维护表中的 `buildings`、`floor_segments`、`colleges`、`majors` 和 `lab_types` 必须通过动作级 raw-maintenance API 保存。服务端应先写关系表并通过关系表投影返回可见 dataset；前端不得把整包可见 dataset 当作这些全局基础表的权威保存载荷。
+- 高级原始维护表中的 `campuses`、`buildings`、`floor_segments`、`colleges`、`majors` 和 `lab_types` 必须通过动作级 raw-maintenance API 保存。服务端应先写关系表并通过关系表投影返回可见 dataset；前端不得把整包可见 dataset 当作这些全局基础表的权威保存载荷。
 - 高级原始维护表删除教学楼或楼层骨架时，服务端必须在关系表事务中级联删除相关骨架或空间，并将受影响方案分配标记为 `Invalid`；删除学院、专业或用途类型时，若仍被实验室、专业或用途单元引用，必须阻止保存且不得更新 legacy JSON 快照。
 - 高级原始维护表删除教学楼或楼层骨架时，除全局基准 `spaces` 外，还必须删除绑定到该楼栋或骨架的当前方案 `plan_space_overrides`，并将相关 `plan_assignments` 标记为 `Invalid`；旧副本 JSON 中的同骨架空间不得在下一次读取时重新出现。
-- Teaching buildings, floor skeletons, colleges, majors, and use types are global shared reference data. They must not be duplicated per plan copy in the visible raw editor; admin seeing multiple visible plans must still see one row for the same `building_code` and one row for the same floor skeleton semantic key.
-- Saving the active dataset from raw global maintenance must immediately synchronize `buildings`, `floor_segments`, `colleges`, `majors`, and `lab_types` into relational tables; the system must not wait for a later read path to backfill those rows.
+- Campuses, teaching buildings, floor skeletons, colleges, majors, and use types are global shared reference data. They must not be duplicated per plan copy in the visible raw editor; admin seeing multiple visible plans must still see one row for the same `campus_code`, one row for the same `building_code`, and one row for the same floor skeleton semantic key.
+- Saving the active dataset from raw global maintenance must immediately synchronize `campuses`, `buildings`, `floor_segments`, `colleges`, `majors`, and `lab_types` into relational tables; the system must not wait for a later read path to backfill those rows.
 - Plan copies only express differences for spaces, use units, assignments, and deletion tombstones. Deleting a room in one plan copy must record plan-scoped deletion metadata and must not delete the global physical-space baseline or hide the same room in other plans.
 - Plan-scoped deleted-space rows must mirror the current saved copy payload. When a detail action or create-room flow clears a copy tombstone, `plan_deleted_spaces` for that plan must remove the stale tombstone instead of preserving an old hide rule.
 - Relational schema and service logic must remain SQLite-compatible for current local deployment while avoiding SQLite-only JSON-query business logic so the schema can later move to PostgreSQL.

@@ -16,6 +16,7 @@ function numberValue(value, fallback = 0) {
 function activeOnlySnapshot(dataset) {
   const unscoped = (rows) => (rows || []).filter((row) => !row.copy_id && !row.copyId);
   return {
+    campuses: dataset.campuses || [],
     buildings: dataset.buildings || [],
     floor_segments: dataset.floor_segments || [],
     spaces: unscoped(dataset.spaces),
@@ -29,6 +30,22 @@ function activeOnlySnapshot(dataset) {
     imports: dataset.imports || [],
     deleted_space_ids: (dataset.deleted_space_ids || []).filter((ref) => !String(ref || "").startsWith("copy:")),
   };
+}
+
+function upsertCampus(db, row, now) {
+  const code = text(row.campus_code || row.id || row.campus_name);
+  const name = text(row.campus_name || code);
+  if (!code && !name) return;
+  db.prepare(`
+    INSERT INTO campuses (id, campus_code, campus_name, sort_order, status, notes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(campus_code) DO UPDATE SET
+      campus_name = excluded.campus_name,
+      sort_order = excluded.sort_order,
+      status = excluded.status,
+      notes = excluded.notes,
+      updated_at = excluded.updated_at
+  `).run(code || name, code || name, name || code, numberValue(row.sort_order, 0), text(row.status) || "active", text(row.notes), text(row.created_at) || now, now);
 }
 
 function upsertBuilding(db, row, now) {
@@ -65,8 +82,8 @@ function upsertFloorSegment(db, row, now) {
   db.prepare(`
     INSERT INTO floor_segments (
       id, building_code, floor_code, segment_code, start_x_m, start_y_m, end_x_m, end_y_m,
-      width_m, element_type, notes, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      width_m, element_type, segment_name, notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(building_code, floor_code, segment_code) DO UPDATE SET
       start_x_m = excluded.start_x_m,
       start_y_m = excluded.start_y_m,
@@ -74,6 +91,7 @@ function upsertFloorSegment(db, row, now) {
       end_y_m = excluded.end_y_m,
       width_m = excluded.width_m,
       element_type = excluded.element_type,
+      segment_name = excluded.segment_name,
       notes = excluded.notes,
       updated_at = excluded.updated_at
   `).run(
@@ -87,6 +105,7 @@ function upsertFloorSegment(db, row, now) {
     numberValue(row.end_y_m, 0),
     numberValue(row.width_m, 0),
     text(row.element_type) || "corridor",
+    text(row.segment_name),
     text(row.notes),
     text(row.created_at) || now,
     now
@@ -263,6 +282,14 @@ function deleteFloorSegment(db, row) {
 }
 
 function replaceDictionary(db, key, rows, now) {
+  if (key === "campuses") {
+    const keep = new Set((rows || []).map((row) => text(row.campus_code)).filter(Boolean));
+    for (const row of db.prepare("SELECT campus_code AS code FROM campuses").all()) {
+      if (!keep.has(row.code)) db.prepare("DELETE FROM campuses WHERE campus_code = ?").run(row.code);
+    }
+    for (const row of rows || []) upsertCampus(db, row, now);
+    return;
+  }
   const table = key === "colleges" ? "colleges" : key === "majors" ? "majors" : "lab_types";
   const codeField = key === "colleges" ? "college_code" : key === "majors" ? "major_code" : "type_code";
   const keep = new Set((rows || []).map((row) => text(row[codeField])).filter(Boolean));
@@ -277,6 +304,7 @@ function replaceDictionary(db, key, rows, now) {
 }
 
 function deleteDictionaryRow(db, key, row) {
+  if (key === "campuses") db.prepare("DELETE FROM campuses WHERE campus_code = ?").run(text(row.campus_code));
   if (key === "colleges") db.prepare("DELETE FROM colleges WHERE college_code = ?").run(text(row.college_code));
   if (key === "majors") db.prepare("DELETE FROM majors WHERE major_code = ?").run(text(row.major_code));
   if (key === "lab_types") db.prepare("DELETE FROM lab_types WHERE type_code = ?").run(text(row.type_code));

@@ -61,8 +61,12 @@
     const vertical = segment.x1 === segment.x2;
     if (!horizontal && !vertical) return null;
 
-    const width = space.length_m * scale;
-    const height = space.width_m * scale;
+    const lengthPx = space.length_m * scale;
+    const widthPx = space.width_m * scale;
+    const roomSize = (side) => {
+      if (vertical && (side === "west" || side === "east")) return { width: widthPx, height: lengthPx };
+      return { width: lengthPx, height: widthPx };
+    };
     const gap = ROOM_GAP_M * scale;
     const left = Math.min(segment.x1, segment.x2);
     const right = Math.max(segment.x1, segment.x2);
@@ -71,6 +75,7 @@
     const along = space.offset_m * scale;
 
     if (horizontal) {
+      const { width, height } = roomSize(space.side);
       if (space.side === "north") return { space, x: left + along, y: segment.y1 - segment.width / 2 - gap - height, width, height };
       if (space.side === "south") return { space, x: left + along, y: segment.y1 + segment.width / 2 + gap, width, height };
       if (space.side === "west") return { space, x: left - gap - width, y: segment.y1 - height / 2, width, height };
@@ -78,6 +83,7 @@
     }
 
     if (vertical) {
+      const { width, height } = roomSize(space.side);
       if (space.side === "west") return { space, x: segment.x1 - segment.width / 2 - gap - width, y: top + along, width, height };
       if (space.side === "east") return { space, x: segment.x1 + segment.width / 2 + gap, y: top + along, width, height };
       if (space.side === "north") return { space, x: segment.x1 - width / 2, y: top - gap - height, width, height };
@@ -303,16 +309,22 @@
       onOpenBasket,
       onCloseBasket,
       onCreateUnplacedLab,
+      onEditBasketLab,
+      onSubmitBasketLabEdit,
+      onCancelBasketLabEdit,
     } = params;
     detailsEl.dataset.moveBasketDropzone = "true";
 
     if (inspectorMode === "placement") {
-      renderPlacementPanel(detailsEl, moveBasket, canEdit, placementDragActive, {
+      renderPlacementPanel(detailsEl, moveBasket, canEdit, placementDragActive, detailEditOptions, {
         onSetInspectorMode,
         onLocateBasketSource,
         onReturnBasketItem,
         onBasketCardPointerDown,
         onCreateUnplacedLab,
+        onEditBasketLab,
+        onSubmitBasketLabEdit,
+        onCancelBasketLabEdit,
       });
       return;
     }
@@ -598,6 +610,17 @@
     })).join("");
   }
 
+  function detailLabTypeOptionsHtml(options, selectedType) {
+    const rows = options.labTypeOptions || [];
+    const values = rows.map((row) => row.value).filter(Boolean);
+    if (selectedType && !values.includes(selectedType)) values.unshift(selectedType);
+    const optionRows = [`<option value="" ${selectedType ? "" : "selected"}>请选择类型</option>`];
+    return optionRows.concat(values.map((value) => {
+      const label = rows.find((row) => row.value === value)?.label || value;
+      return `<option value="${escapeHtml(value)}" ${value === selectedType ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    })).join("");
+  }
+
   function detailMajorOptionsHtml(options, selectedCollege, selectedMajor) {
     const byCollege = options.majorOptionsByCollege || {};
     const values = (byCollege[selectedCollege] || []).slice();
@@ -610,8 +633,9 @@
     return `<option value="${escapeHtml(value)}" ${String(selectedValue || "active") === value ? "selected" : ""}>${escapeHtml(label)}</option>`;
   }
 
-  function renderPlacementPanel(detailsEl, moveBasket, canEdit, placementDragActive, handlers) {
+  function renderPlacementPanel(detailsEl, moveBasket, canEdit, placementDragActive, options, handlers) {
     const items = moveBasket.items || [];
+    const editingItem = items.find((item) => item.id === moveBasket.editingItemId) || null;
     detailsEl.innerHTML = `<div class="details-panel is-placement ${placementDragActive ? "is-drop-active" : ""}" data-move-basket-dropzone="true">
       <div class="details-header">
         <div>
@@ -622,6 +646,7 @@
           ${inspectorTabsHtml("placement", items.length)}
         </div>
       </div>
+      ${editingItem ? basketLabEditFormHtml(editingItem, options, moveBasket.editErrors || {}, moveBasket.editDraft || {}) : ""}
       <div class="move-basket-list placement-list" data-move-basket-dropzone="true">
         ${items.length ? items.map((item) => basketItemHtml(item, canEdit)).join("") : `<div class="details-empty-inline">当前没有待安置实验室。</div>`}
       </div>
@@ -634,9 +659,50 @@
     detailsEl.querySelectorAll("[data-action='return-basket-item']").forEach((button) => {
       button.addEventListener("click", () => handlers.onReturnBasketItem?.(button.dataset.itemId));
     });
-    detailsEl.querySelectorAll(".move-basket-item").forEach((node) => {
-      node.addEventListener("pointerdown", (event) => handlers.onBasketCardPointerDown?.(event, node.dataset.itemId));
+    detailsEl.querySelectorAll("[data-action='edit-basket-lab']").forEach((button) => {
+      button.addEventListener("click", () => handlers.onEditBasketLab?.(button.dataset.itemId));
     });
+    detailsEl.querySelector("#basketLabEditForm")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      handlers.onSubmitBasketLabEdit?.(editingItem?.id, new FormData(event.currentTarget));
+    });
+    detailsEl.querySelector("[data-basket-edit-cancel]")?.addEventListener("click", (event) => {
+      event.preventDefault();
+      handlers.onCancelBasketLabEdit?.();
+    });
+    const collegeSelect = detailsEl.querySelector('#basketLabEditForm select[name="college"]');
+    const majorSelect = detailsEl.querySelector('#basketLabEditForm select[name="major"]');
+    collegeSelect?.addEventListener("change", () => {
+      if (!majorSelect) return;
+      majorSelect.innerHTML = detailMajorOptionsHtml(options, collegeSelect.value, majorSelect.value);
+    });
+    detailsEl.querySelectorAll(".move-basket-item").forEach((node) => {
+      node.addEventListener("pointerdown", (event) => {
+        if (event.target.closest("button,input,select,textarea,form")) return;
+        handlers.onBasketCardPointerDown?.(event, node.dataset.itemId);
+      });
+    });
+  }
+
+  function basketLabEditFormHtml(item, options, errors, draft = {}) {
+    const selectedCollege = draft.college ?? item.college ?? "";
+    const selectedMajor = draft.major ?? item.major ?? "";
+    return `<form id="basketLabEditForm" class="detail-edit-form basket-lab-edit-form">
+      <div class="detail-form-grid">
+        ${detailInput("实验室名称", "labName", draft.labName ?? item.labName ?? "", "text")}
+        ${detailSelect("实验室类型", "labType", detailLabTypeOptionsHtml(options, draft.labType ?? item.labType ?? ""))}
+        ${detailSelect("所属学院", "college", detailCollegeOptionsHtml(options, selectedCollege))}
+        ${detailSelect("专业", "major", detailMajorOptionsHtml(options, selectedCollege, selectedMajor))}
+        ${detailInput("负责人", "director", draft.director ?? item.director ?? "", "text")}
+        ${detailInput("座位数", "seatCount", draft.seatCount ?? item.seatCount ?? "", "number", "1")}
+        ${detailInput("电脑数", "computerCount", draft.computerCount ?? item.computerCount ?? "", "number", "1")}
+      </div>
+      ${errors.form ? `<p class="detail-form-error">${escapeHtml(errors.form)}</p>` : ""}
+      <div class="details-actions">
+        <button type="submit" class="primary-button">保存</button>
+        <button type="button" data-basket-edit-cancel>取消</button>
+      </div>
+    </form>`;
   }
 
   function basketItemHtml(item, canEdit) {
@@ -655,6 +721,7 @@
       </div>
       <div class="move-basket-item-actions">
         <button type="button" data-action="locate-basket-source" data-item-id="${escapeHtml(item.id)}">定位</button>
+        ${canEdit ? `<button type="button" data-action="edit-basket-lab" data-item-id="${escapeHtml(item.id)}">编辑</button>` : ""}
         ${canEdit ? `<button type="button" data-action="return-basket-item" data-item-id="${escapeHtml(item.id)}">归位</button>` : ""}
       </div>
     </article>`;
@@ -763,5 +830,6 @@
     renderFloorplan,
     renderDetailsPanel,
     floorRenderData,
+    buildLayoutForTest: buildLayout,
   };
 })(window);

@@ -14,7 +14,9 @@ function numberValue(value, fallback = 0) {
 }
 
 function generateSpaceCode(space, building) {
-  const campus = text(building?.campus_zone).includes("绍兴") ? "02" : "01";
+  const configuredCampus = text(building?.campus_code || building?.campusCode);
+  const parsedCampus = text(building?.building_code).match(/^B(\d{2})\d{2}$/i)?.[1] || "";
+  const campus = configuredCampus || parsedCampus || "00";
   const buildingNumber = String(numberValue(building?.building_number, Number(text(building?.building_code).match(/\d{2}(\d{2})$/)?.[1] || 0))).padStart(2, "0").slice(-2);
   const floorRaw = text(space?.floor_code).toUpperCase();
   const floorNumber = /^B\d$/.test(floorRaw) ? floorRaw : String(numberValue(floorRaw, 0)).padStart(2, "0").slice(-2);
@@ -94,6 +96,24 @@ function findAssignment(dataset, plan, space) {
   ) || null;
 }
 
+function findUnplacedAssignment(dataset, plan, input = {}) {
+  if (!plan) return null;
+  const labRefs = new Set([
+    text(input.id),
+    text(input.lab_id),
+    text(input.lab_code),
+  ].filter(Boolean));
+  return (dataset.plan_assignments || []).find((assignment) => {
+    if (!planMatches(assignment, plan.id || plan.plan_code)) return false;
+    if (assignment.assignment_status !== "Invalid") return false;
+    if (text(assignment.space_id) || text(assignment.space_code)) return false;
+    if (!labRefs.size) return false;
+    return labRefs.has(text(assignment.id)) ||
+      labRefs.has(text(assignment.lab_id)) ||
+      labRefs.has(text(assignment.lab_code));
+  }) || null;
+}
+
 function findLab(dataset, plan, assignment) {
   if (!assignment) return null;
   const copyId = Number(plan?.copy_id || 0);
@@ -130,6 +150,25 @@ function buildContext(dataset, body, copyId = 0) {
       space: null,
       assignment: null,
       lab: null,
+    };
+  }
+  if (body.action === "editUnplacedLab") {
+    const assignment = findUnplacedAssignment(dataset, activePlan, {
+      ...(body.assignment || {}),
+      ...(body.lab || {}),
+    });
+    if (!assignment) throw httpError(400, "assignment_not_found", "未找到待安置实验室");
+    let lab = findLab(dataset, activePlan, assignment);
+    if (!lab) throw httpError(400, "lab_not_found", "未找到待安置实验室资料");
+    if (copyId) lab = ensureScopedRow(dataset, "labs", lab, copyId);
+    return {
+      activePlan,
+      building: null,
+      buildingCode: "",
+      floorCode: "",
+      space: null,
+      assignment,
+      lab,
     };
   }
   const space = selectedSpaceFrom(dataset, activePlan, body.selectedSpace || {});
@@ -173,6 +212,7 @@ function applyAction(dataset, context, body, copyId = 0) {
     clearDeletedSpaceRefs: DetailActions.clearDeletedSpaceRefs,
   };
   if (body.action === "editLab") return DetailActions.applyDetailLabEdit(dataset, context, body.form || {}, deps);
+  if (body.action === "editUnplacedLab") return DetailActions.applyDetailLabEdit(dataset, context, body.form || {}, deps);
   if (body.action === "renovateRoom") return DetailActions.applyDetailRenovation(dataset, context, body.form || {}, deps);
   if (body.action === "createSpace") return DetailActions.applyDetailCreateSpace(dataset, context, body.form || {}, deps);
   if (body.action === "editSpace") return DetailActions.applyDetailSpaceEdit(dataset, context, body.form || {}, deps);

@@ -130,18 +130,11 @@ function createDatasetService(db, config, audit) {
     return /^[A-Z][A-Z0-9_-]*$/i.test(String(value || "").trim()) && !containsCjk(value);
   }
 
-  function campusCodeFromName(campusName) {
-    const raw = String(campusName || "").trim();
-    if (raw.includes("下沙")) return "01";
-    if (raw.includes("绍兴")) return "02";
-    return "00";
-  }
-
   function campusCodeForBuilding(building) {
-    const mapped = campusCodeFromName(building?.campus_zone);
-    if (mapped !== "00") return mapped;
+    const configured = String(building?.campus_code || "").trim();
+    if (configured) return configured.padStart(2, "0").slice(-2);
     const match = String(building?.building_code || "").trim().match(/^B(\d{2})\d{2}$/i);
-    return match?.[1] || mapped;
+    return match?.[1] || "00";
   }
 
   function buildingNumberCode(building) {
@@ -426,11 +419,13 @@ function createDatasetService(db, config, audit) {
    */
   function normalizeIncomingDataset(raw) {
     const data = sanitizeDataset(raw);
+    const campuses = dedupeById((data.campuses || []).map(normalizeCampusRow));
     const buildings = dedupeById(data.buildings.map((row) => ({
       ...row,
       id: row.id || row.building_code,
       building_code: String(row.building_code || "").trim(),
       building_name: String(row.building_name || row.building_code || "").trim(),
+      campus_code: String(row.campus_code || "").trim(),
       sort_order: Number(row.sort_order || 0),
     })));
     const floorSegments = dedupeById(data.floor_segments.map((row) => ({
@@ -439,6 +434,7 @@ function createDatasetService(db, config, audit) {
       building_code: String(row.building_code || "").trim(),
       floor_code: String(row.floor_code || "").trim(),
       segment_code: String(row.segment_code || "").trim(),
+      segment_name: String(row.segment_name || "").trim(),
       element_type: normalizeElementType(row.element_type),
     })));
     const spaces = dedupeById(data.spaces.map((row) => {
@@ -508,7 +504,8 @@ function createDatasetService(db, config, audit) {
     }));
     return {
       ...data,
-      buildings,
+      campuses,
+      buildings: applyCampusConfig(buildings, campuses),
       floor_segments: floorSegments,
       spaces,
       labs,
@@ -526,6 +523,40 @@ function createDatasetService(db, config, audit) {
       const copyId = String(row.copy_id || row.copyId || "").trim();
       return [`${copyId}::${row.id}`, row];
     })).values()];
+  }
+
+  function normalizeCampusRow(row) {
+    const code = String(row.campus_code || row.id || "").trim();
+    const name = String(row.campus_name || row.campus_zone || code || "").trim();
+    return {
+      ...row,
+      id: row.id || code || name,
+      campus_code: code,
+      campus_name: name,
+      sort_order: Number(row.sort_order || 0),
+      status: activeStatus(row.status),
+      notes: String(row.notes || ""),
+    };
+  }
+
+  function applyCampusConfig(buildings, campuses) {
+    const activeCampuses = (campuses || []).filter((campus) => activeStatus(campus.status) === "active");
+    const byName = new Map(activeCampuses
+      .map((campus) => [String(campus.campus_name || "").trim(), campus])
+      .filter(([name]) => name));
+    const byCode = new Map(activeCampuses
+      .map((campus) => [String(campus.campus_code || "").trim(), campus])
+      .filter(([code]) => code));
+    return (buildings || []).map((building) => {
+      const configured = byName.get(String(building.campus_zone || "").trim()) ||
+        byCode.get(String(building.campus_code || "").trim()) ||
+        null;
+      return {
+        ...building,
+        campus_code: configured?.campus_code || building.campus_code || campusCodeForBuilding(building),
+        campus_sort_order: configured ? Number(configured.sort_order || 0) : 9999,
+      };
+    });
   }
 
   function fillSequentialCodes(rows, field, prefix, width, options = {}) {
@@ -656,6 +687,7 @@ function createDatasetService(db, config, audit) {
 
   function emptyDataset() {
     return {
+      campuses: [],
       buildings: [],
       floor_segments: [],
       spaces: [],
@@ -770,7 +802,7 @@ function createDatasetService(db, config, audit) {
 
   function validateDataset(dataset) {
     const errors = [];
-    for (const key of ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments"]) {
+    for (const key of ["campuses", "buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments"]) {
       if (!Array.isArray(dataset[key])) errors.push(`${key} 必须是数组`);
     }
     if (errors.length) return { ok: false, errors };

@@ -11,11 +11,22 @@ function ensureRelationalSchema(db) {
       created_at TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL DEFAULT ''
     );
+    CREATE TABLE IF NOT EXISTS campuses (
+      id TEXT PRIMARY KEY,
+      campus_code TEXT NOT NULL UNIQUE,
+      campus_name TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      notes TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT ''
+    );
     CREATE TABLE IF NOT EXISTS floor_segments (
       id TEXT PRIMARY KEY,
       building_code TEXT NOT NULL,
       floor_code TEXT NOT NULL,
       segment_code TEXT NOT NULL,
+      segment_name TEXT NOT NULL DEFAULT '',
       start_x_m REAL,
       start_y_m REAL,
       end_x_m REAL,
@@ -170,6 +181,7 @@ function ensureRelationalSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_plan_space_overrides_plan ON plan_space_overrides(plan_id);
     CREATE INDEX IF NOT EXISTS idx_plan_lab_overrides_plan ON plan_lab_overrides(plan_id);
   `);
+  ensureColumn(db, "floor_segments", "segment_name", "TEXT NOT NULL DEFAULT ''");
 }
 
 function syncFromVisibleDataset(db, dataset, copies = []) {
@@ -180,6 +192,7 @@ function syncFromVisibleDataset(db, dataset, copies = []) {
   const syncedSpaceOverrides = new Map();
   const syncedLabOverrides = new Map();
 
+  for (const row of dataset.campuses || []) upsertCampus(db, row, now);
   for (const row of dataset.buildings || []) upsertBuilding(db, row, now);
   for (const row of dataset.floor_segments || []) upsertFloorSegment(db, row, now);
   for (const row of dataset.colleges || []) upsertCollege(db, row, now);
@@ -227,6 +240,7 @@ function replaceActiveDataset(db, dataset) {
     "labs",
     "floor_segments",
     "buildings",
+    "campuses",
     "majors",
     "colleges",
     "lab_types",
@@ -252,11 +266,13 @@ function syncPlanLifecycle(db, copy) {
 function projectGlobalReferenceRows(db, dataset) {
   ensureRelationalSchema(db);
   const next = { ...(dataset || {}) };
+  const campuses = selectRows(db, "campuses", "sort_order ASC, campus_code ASC");
   const buildings = selectRows(db, "buildings", "sort_order ASC, building_code ASC");
   const floorSegments = selectRows(db, "floor_segments", "building_code ASC, floor_code ASC, segment_code ASC");
   const colleges = selectRows(db, "colleges", "sort_order ASC, college_code ASC");
   const majors = selectRows(db, "majors", "sort_order ASC, major_code ASC");
   const labTypes = selectRows(db, "lab_types", "sort_order ASC, type_code ASC");
+  if (campuses.length) next.campuses = campuses.map(stripRelationalNulls);
   if (buildings.length) next.buildings = buildings.map(stripRelationalNulls);
   if (floorSegments.length) next.floor_segments = floorSegments.map(stripRelationalNulls);
   if (colleges.length) next.colleges = colleges.map(stripRelationalNulls);
@@ -307,6 +323,28 @@ function selectRows(db, table, orderBy) {
   return db.prepare(`SELECT * FROM ${table} ORDER BY ${orderBy}`).all();
 }
 
+function ensureColumn(db, table, column, definition) {
+  const columns = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
+  if (!columns.has(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+function upsertCampus(db, row, now) {
+  const code = text(row.campus_code) || text(row.id);
+  const name = text(row.campus_name) || code;
+  if (!code && !name) return;
+  const id = code || name;
+  db.prepare(`
+    INSERT INTO campuses (id, campus_code, campus_name, sort_order, status, notes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(campus_code) DO UPDATE SET
+      campus_name = excluded.campus_name,
+      sort_order = excluded.sort_order,
+      status = excluded.status,
+      notes = excluded.notes,
+      updated_at = excluded.updated_at
+  `).run(id, code || id, name || id, integer(row.sort_order), text(row.status) || "active", text(row.notes), text(row.created_at) || now, now);
+}
+
 function upsertBuilding(db, row, now) {
   const code = text(row.building_code) || text(row.id);
   if (!code) return;
@@ -341,8 +379,8 @@ function upsertFloorSegment(db, row, now) {
   db.prepare(`
     INSERT INTO floor_segments (
       id, building_code, floor_code, segment_code, start_x_m, start_y_m, end_x_m, end_y_m,
-      width_m, element_type, notes, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      width_m, element_type, segment_name, notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(building_code, floor_code, segment_code) DO UPDATE SET
       start_x_m = excluded.start_x_m,
       start_y_m = excluded.start_y_m,
@@ -350,6 +388,7 @@ function upsertFloorSegment(db, row, now) {
       end_y_m = excluded.end_y_m,
       width_m = excluded.width_m,
       element_type = excluded.element_type,
+      segment_name = excluded.segment_name,
       notes = excluded.notes,
       updated_at = excluded.updated_at
   `).run(
@@ -363,6 +402,7 @@ function upsertFloorSegment(db, row, now) {
     numeric(row.end_y_m),
     numeric(row.width_m),
     text(row.element_type) || "corridor",
+    text(row.segment_name),
     text(row.notes),
     text(row.created_at) || now,
     now

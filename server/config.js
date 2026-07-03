@@ -14,7 +14,7 @@ module.exports = {
   backupsDir,
   dbPath: path.join(dataDir, "app.db"),
   sessionCookieName: "floorplan_session",
-  datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  datasetKeys: ["campuses", "buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
   contentTypes: {
     ".html": "text/html; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",

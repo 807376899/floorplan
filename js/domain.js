@@ -11,10 +11,6 @@
     "#65a30d", "#9333ea", "#ca8a04", "#0d9488", "#1d4ed8", "#be185d", "#15803d", "#7c2d12",
   ];
   const NUMBERING_RULES = {
-    campusCodes: [
-      { code: "01", names: ["下沙校区", "下沙"] },
-      { code: "02", names: ["绍兴校区", "绍兴"] },
-    ],
     fallbackCampusCode: "00",
     buildingPrefix: "B",
     spacePrefix: "0",
@@ -31,6 +27,18 @@
   };
 
   const DATASETS = [
+    {
+      key: "campuses",
+      label: "校区",
+      sheet: "campuses",
+      columns: [
+        ["campus_code", "校区编码"],
+        ["campus_name", "校区名称"],
+        ["sort_order", "排序"],
+        ["status", "状态"],
+        ["notes", "备注"],
+      ],
+    },
     {
       key: "buildings",
       label: "教学楼",
@@ -52,6 +60,7 @@
         ["building_code", "教学楼编码"],
         ["floor_code", "楼层编码"],
         ["segment_code", "走廊段编码"],
+        ["segment_name", "名称"],
         ["start_x_m", "起点X"],
         ["start_y_m", "起点Y"],
         ["end_x_m", "终点X"],
@@ -179,10 +188,18 @@
       sort_order: ["sort_order", "排列顺序", "排序"],
       notes: ["notes", "备注"],
     },
+    campuses: {
+      campus_code: ["campus_code", "校区编码"],
+      campus_name: ["campus_name", "校区名称", "所属校区"],
+      sort_order: ["sort_order", "排序", "排列顺序"],
+      status: ["status", "状态"],
+      notes: ["notes", "备注"],
+    },
     floor_segments: {
       building_code: ["building_code", "教学楼编码"],
       floor_code: ["floor_code", "楼层编码"],
       segment_code: ["segment_code", "走廊段编码"],
+      segment_name: ["segment_name", "名称", "走廊名称", "骨架名称"],
       start_x_m: ["start_x_m", "起点X"],
       start_y_m: ["start_y_m", "起点Y"],
       end_x_m: ["end_x_m", "终点X"],
@@ -266,6 +283,7 @@
   function emptyDataset() {
     return {
       buildings: [],
+      campuses: [],
       floor_segments: [],
       spaces: [],
       labs: [],
@@ -340,17 +358,11 @@
     return String(Math.max(0, Math.trunc(numberValue(value, 0)))).padStart(2, "0").slice(-2);
   }
 
-  function campusCodeFromName(campusName) {
-    const raw = String(campusName ?? "").trim();
-    const match = NUMBERING_RULES.campusCodes.find((item) => item.names.some((name) => raw.includes(name)));
-    return match?.code || NUMBERING_RULES.fallbackCampusCode;
-  }
-
   function campusCodeForBuilding(building) {
-    const mapped = campusCodeFromName(building?.campus_zone);
-    if (mapped !== NUMBERING_RULES.fallbackCampusCode) return mapped;
+    const configured = String(building?.campus_code || building?.campusCode || "").trim();
+    if (configured) return configured.padStart(2, "0").slice(-2);
     const codeMatch = String(building?.building_code || "").trim().match(/^B(\d{2})\d{2}$/i);
-    return codeMatch?.[1] || mapped;
+    return codeMatch?.[1] || NUMBERING_RULES.fallbackCampusCode;
   }
 
   function buildingNumberCode(building) {
@@ -466,15 +478,9 @@
     })).values()];
   }
 
-  function campusSortOrder(campusName) {
-    const raw = String(campusName || "").trim();
-    if (raw.includes("下沙") || raw.includes("杭州")) return 1;
-    if (raw.includes("绍兴")) return 2;
-    return 99;
-  }
-
   function compareBuildings(a, b) {
-    return campusSortOrder(a.campus_zone) - campusSortOrder(b.campus_zone)
+    return numberValue(a.campus_sort_order, 9999) - numberValue(b.campus_sort_order, 9999)
+      || compare(a.campus_zone, b.campus_zone)
       || numberValue(a.sort_order, 0) - numberValue(b.sort_order, 0)
       || numberValue(a.building_number, 0) - numberValue(b.building_number, 0)
       || compare(a.building_name, b.building_name);
@@ -514,8 +520,26 @@
       building_code: code,
       building_name: row.building_name || code,
       campus_zone: row.campus_zone || "未分区",
+      campus_code: row.campus_code || row.campusCode || "",
+      campus_sort_order: numberValue(row.campus_sort_order ?? row.campusSortOrder, 9999),
       building_number: numberValue(row.building_number, 0),
       sort_order: numberValue(row.sort_order, 0),
+      notes: row.notes || "",
+      created_at: row.created_at || now,
+      updated_at: now,
+    };
+  }
+
+  function normalizeCampus(row) {
+    const now = isoNow();
+    const code = String(row.campus_code || row.id || "").trim();
+    const name = String(row.campus_name || row.campus_zone || code || "").trim();
+    return {
+      id: row.id || code || name,
+      campus_code: code,
+      campus_name: name,
+      sort_order: numberValue(row.sort_order, 0),
+      status: String(row.status || "active").trim(),
       notes: row.notes || "",
       created_at: row.created_at || now,
       updated_at: now,
@@ -533,6 +557,7 @@
       building_code: buildingCode,
       floor_code: floorCode,
       segment_code: segmentCode,
+      segment_name: row.segment_name || row.segmentName || "",
       start_x_m: numberValue(row.start_x_m, 0),
       start_y_m: numberValue(row.start_y_m, 0),
       end_x_m: numberValue(row.end_x_m, 0),
@@ -916,6 +941,26 @@
     return [...byCode.values()].sort(compareBuildings);
   }
 
+  function applyCampusConfig(buildings, campuses) {
+    const activeCampuses = (campuses || []).filter((campus) => String(campus.status || "active") === "active");
+    const byName = new Map(activeCampuses.map((campus) => [String(campus.campus_name || "").trim(), campus]));
+    return (buildings || []).map((building) => {
+      const configured = byName.get(String(building.campus_zone || "").trim());
+      if (!configured) {
+        return {
+          ...building,
+          campus_code: building.campus_code || campusCodeForBuilding(building),
+          campus_sort_order: 9999,
+        };
+      }
+      return {
+        ...building,
+        campus_code: configured.campus_code,
+        campus_sort_order: numberValue(configured.sort_order, 9999),
+      };
+    }).sort(compareBuildings);
+  }
+
   function projectRow(key, row) {
     const aliases = KEY_ALIASES[key];
     return {
@@ -926,6 +971,7 @@
   }
 
   function normalizeDataset(raw) {
+    const campuses = (raw.campuses || []).map((row) => normalizeCampus(projectRow("campuses", row)));
     const buildings = (raw.buildings || []).map((row) => normalizeBuilding(projectRow("buildings", row)));
     const floorSegments = (raw.floor_segments || []).map((row) => normalizeSegment(projectRow("floor_segments", row)));
     const spaces = (raw.spaces || []).map((row) => normalizeSpace(projectRow("spaces", row)));
@@ -941,7 +987,8 @@
     const relation = relationMaps({ spaces, labs, plans });
     const planAssignments = (raw.plan_assignments || []).map((row) => normalizeAssignment(projectRow("plan_assignments", row), relation));
     return {
-      buildings: deriveBuildings(buildings, spaces, floorSegments),
+      campuses: dedupeBy(campuses, "id"),
+      buildings: applyCampusConfig(deriveBuildings(buildings, spaces, floorSegments), campuses),
       floor_segments: copyScopedDedupeBy(floorSegments, "id"),
       spaces: copyScopedDedupeBy(spaces, "id"),
       labs: copyScopedDedupeBy(labs, "id"),
@@ -1041,7 +1088,7 @@
     return [
       ["使用说明", "整套数据只需维护这一个 Excel 文件。"],
       ["导入方式", "上传本工作簿即可，系统会自动读取各工作表。"],
-      ["工作表", "buildings, floor_segments, spaces, labs, colleges, majors, lab_types, plans, plan_assignments"],
+      ["工作表", "campuses, buildings, floor_segments, spaces, labs, colleges, majors, lab_types, plans, plan_assignments"],
       ["字段约定", "编码字段保持唯一；side 使用 north/south/east/west；element_type 使用 corridor/stairs/elevator/other。"],
       ["方案分配", "plan_assignments 用 plan_code + lab_code 表示一条用途单元落位关系。"],
     ];
@@ -1049,11 +1096,12 @@
 
   function templateRows(key) {
     return {
+      campuses: [{ campus_code: "01", campus_name: "示例校区", sort_order: 1, status: "active", notes: "示例校区，可按学校实际情况维护" }],
       buildings: [{ building_code: "B01", building_name: "第一教学楼", campus_zone: "本部", building_number: 1, notes: "示例楼" }],
       floor_segments: [
-        { building_code: "B01", floor_code: "1", segment_code: "main", start_x_m: 0, start_y_m: 0, end_x_m: 28, end_y_m: 0, width_m: 2.4, element_type: "corridor", notes: "主走廊" },
-        { building_code: "B01", floor_code: "1", segment_code: "stairs-east", start_x_m: 28, start_y_m: 4, end_x_m: 28, end_y_m: 10, width_m: 4, element_type: "stairs", notes: "东侧楼梯" },
-        { building_code: "B01", floor_code: "1", segment_code: "elevator-west", start_x_m: 2, start_y_m: 4, end_x_m: 2, end_y_m: 8, width_m: 4, element_type: "elevator", notes: "西侧电梯" },
+        { building_code: "B01", floor_code: "1", segment_code: "main", segment_name: "主走廊", start_x_m: 0, start_y_m: 0, end_x_m: 28, end_y_m: 0, width_m: 2.4, element_type: "corridor", notes: "" },
+        { building_code: "B01", floor_code: "1", segment_code: "stairs-east", segment_name: "东侧楼梯", start_x_m: 28, start_y_m: 4, end_x_m: 28, end_y_m: 10, width_m: 4, element_type: "stairs", notes: "" },
+        { building_code: "B01", floor_code: "1", segment_code: "elevator-west", segment_name: "西侧电梯", start_x_m: 2, start_y_m: 4, end_x_m: 2, end_y_m: 8, width_m: 4, element_type: "elevator", notes: "" },
       ],
       spaces: [{ space_code: "101", building_code: "B01", floor_code: "1", segment_code: "main", offset_m: 0, side: "north", front_door: "101", rear_door: "", length_m: 9.6, width_m: 7.2, network_segment: "192.168.1.0/24", current_status: "active" }],
       labs: [{ lab_code: "UNIT000001", lab_name: "计算机组成原理实验室", college: "计算机学院", major: "计算机科学", lab_type: "教学实验室", director: "李老师", seat_count: 48, computer_count: 48, status: "active", notes: "" }],
@@ -1094,6 +1142,7 @@
     normalizeSegment,
     normalizeSpace,
     normalizeLab,
+    normalizeCampus,
     normalizeCollege,
     normalizeMajor,
     normalizeLabType,

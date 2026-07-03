@@ -159,7 +159,7 @@ function createDatasetServiceStub() {
 function createDatasetServiceStubWithNormalizer() {
   const stub = createDatasetServiceStub();
   const normalizer = createDatasetService({}, {
-    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+    datasetKeys: ["campuses", "buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
   }, {});
   return {
     ...stub,
@@ -191,7 +191,7 @@ function createRelationalActiveDatasetService(db, initialDataset = activeApplyDa
     dataDir: __dirname,
     uploadsDir: __dirname,
     backupsDir: __dirname,
-    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+    datasetKeys: ["campuses", "buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
   }, { writeAudit() {} });
   db.prepare("UPDATE active_dataset SET dataset_json = ? WHERE id = 1").run(JSON.stringify(datasetService.normalizeIncomingDataset(initialDataset)));
   return datasetService;
@@ -358,18 +358,42 @@ function seedRelationalProjectionFixture(db) {
   `).run();
 }
 
-test("building sort uses campus groups then editable sort order", () => {
+test("building sort uses configured campus priority then editable sort order", () => {
   const { FloorplanDomain } = loadBrowserModules();
-  const buildings = [
-    FloorplanDomain.normalizeBuilding({ building_code: "B0201", building_name: "绍兴一号楼", campus_zone: "绍兴校区", building_number: 1, sort_order: 1 }),
-    FloorplanDomain.normalizeBuilding({ building_code: "B0109", building_name: "光大教学楼", campus_zone: "下沙校区", building_number: 9, sort_order: 20 }),
-    FloorplanDomain.normalizeBuilding({ building_code: "B0106", building_name: "信泰教学楼", campus_zone: "下沙校区", building_number: 6, sort_order: 10 }),
-  ];
+  const dataset = FloorplanDomain.normalizeDataset({
+    campuses: [
+      { campus_code: "20", campus_name: "北部校区", sort_order: 2, status: "active" },
+      { campus_code: "10", campus_name: "南部校区", sort_order: 1, status: "active" },
+    ],
+    buildings: [
+      { building_code: "B2001", building_name: "北部一号楼", campus_zone: "北部校区", building_number: 1, sort_order: 1 },
+      { building_code: "B1009", building_name: "南部九号楼", campus_zone: "南部校区", building_number: 9, sort_order: 20 },
+      { building_code: "B1006", building_name: "南部六号楼", campus_zone: "南部校区", building_number: 6, sort_order: 10 },
+      { building_code: "B3001", building_name: "未配置楼", campus_zone: "临时校区", building_number: 1, sort_order: 1 },
+    ],
+  });
+  const buildings = dataset.buildings.slice();
 
   buildings.sort(FloorplanDomain.compareBuildings);
 
-  assert.deepEqual(buildings.map((row) => row.building_code), ["B0106", "B0109", "B0201"]);
+  assert.deepEqual(Array.from(buildings.map((row) => row.building_code)), ["B1006", "B1009", "B2001", "B3001"]);
   assert.equal(buildings[0].sort_order, 10);
+  assert.equal(FloorplanDomain.generateBuildingCode(buildings[0]), "B1006");
+  assert.equal(FloorplanDomain.generateBuildingCode({ campus_zone: "临时校区", building_number: 4 }), "B0004");
+});
+
+test("campus configuration is generic and not preseeded for a specific school", () => {
+  const { FloorplanDomain } = loadBrowserModules();
+  const empty = FloorplanDomain.emptyDataset();
+  const normalized = FloorplanDomain.normalizeDataset({
+    campuses: [{ campus_code: "88", campus_name: "主校区", sort_order: 1, status: "active" }],
+    buildings: [{ building_code: "B8803", building_name: "综合楼", campus_zone: "主校区", building_number: 3 }],
+  });
+
+  assert.deepEqual(Array.from(empty.campuses), []);
+  assert.ok(FloorplanDomain.DATASETS.some((item) => item.key === "campuses"));
+  assert.equal(normalized.campuses[0].campus_code, "88");
+  assert.equal(FloorplanDomain.generateBuildingCode(normalized.buildings[0]), "B8803");
 });
 
 test("classroom spaces render gray even when assigned to a college", () => {
@@ -684,7 +708,10 @@ test("placement panel exposes a concise create action without the old dock copy"
 
   assert.match(indexSource, /id="newUnplacedLabModal"/);
   assert.match(indexSource, /id="newUnplacedLabNameInput"[\s\S]*required/);
+  assert.match(indexSource, /<select id="newUnplacedLabCollegeSelect"/);
+  assert.doesNotMatch(indexSource, /id="newUnplacedLabCollegeInput"/);
   assert.match(renderSource, /data-action="create-unplaced-lab"/);
+  assert.match(renderSource, /data-action="edit-basket-lab"/);
   assert.doesNotMatch(renderSource, /拖到未规划空间落位，也可以归位到原空间。/);
   assert.doesNotMatch(renderSource, />加入待安置区</);
 });
@@ -1284,6 +1311,7 @@ test("restoring a snapshot applies the dataset relation first", () => {
 
 test("numbering normalization updates relational active and copy rows", () => {
   const initial = activeApplyDataset({
+    campuses: [{ campus_code: "01", campus_name: "下沙校区", sort_order: 1, status: "active" }],
     buildings: [{ id: "building-old", building_code: "旧楼", building_name: "旧编号楼", campus_zone: "下沙校区", building_number: 5, sort_order: 1 }],
     floor_segments: [{ id: "seg-old", building_code: "旧楼", floor_code: "1", segment_code: "EWOLD", element_type: "corridor" }],
     spaces: [{ id: "space-old", space_code: "S501", building_code: "旧楼", floor_code: "1", segment_code: "EWOLD", front_door: "501", rear_door: "", length_m: 8, width_m: 6, area_m2: 48, current_status: "active" }],
@@ -1323,6 +1351,7 @@ test("numbering normalization updates relational active and copy rows", () => {
 
 test("numbering normalization ignores stale active and copy legacy json after relational backfill", () => {
   const staleDataset = activeApplyDataset({
+    campuses: [{ campus_code: "01", campus_name: "下沙校区", sort_order: 1, status: "active" }],
     buildings: [{ id: "stale-building", building_code: "旧JSON楼", building_name: "旧JSON楼", campus_zone: "下沙校区", building_number: 9, sort_order: 1 }],
     floor_segments: [{ id: "stale-seg", building_code: "旧JSON楼", floor_code: "9", segment_code: "EWSTALE", element_type: "corridor" }],
     spaces: [{ id: "stale-space", space_code: "STALE-SPACE", building_code: "旧JSON楼", floor_code: "9", segment_code: "EWSTALE", front_door: "901", rear_door: "", current_status: "active" }],
@@ -1333,6 +1362,7 @@ test("numbering normalization ignores stale active and copy legacy json after re
   const db = createActiveDatasetTestDb(staleDataset);
   const datasetService = createRelationalActiveDatasetService(db, staleDataset);
   const relationalDataset = activeApplyDataset({
+    campuses: [{ campus_code: "01", campus_name: "下沙校区", sort_order: 1, status: "active" }],
     buildings: [{ id: "rel-building", building_code: "关系旧楼", building_name: "关系楼", campus_zone: "下沙校区", building_number: 5, sort_order: 1 }],
     floor_segments: [{ id: "rel-seg", building_code: "关系旧楼", floor_code: "1", segment_code: "EWREL", element_type: "corridor" }],
     spaces: [{ id: "rel-space", space_code: "REL-SPACE", building_code: "关系旧楼", floor_code: "1", segment_code: "EWREL", front_door: "501", rear_door: "", length_m: 8, width_m: 6, area_m2: 48, current_status: "active" }],
@@ -1923,6 +1953,59 @@ test("copy assignment action creates an unplaced use unit as a plan lab override
   assert.equal(Number(override.copy_id), 8);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM labs WHERE lab_code = 'UNIT000002'").get().count, 0);
   const assignment = db.prepare("SELECT space_code, assignment_status FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000002'").get();
+  assert.equal(assignment.space_code, "");
+  assert.equal(assignment.assignment_status, "Invalid");
+});
+
+test("copy detail action edits any unplaced basket lab through a plan lab override", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: {
+      labs: [{ id: "copy:8::UNIT000001", copy_id: 8, lab_code: "UNIT000001", lab_name: "原待安置", college: "关系学院", lab_type: "实验室" }],
+      spaces: [],
+      deleted_space_ids: [],
+    },
+    assignments: [{ id: "copy-8__UNIT000001", plan_id: "copy-8", plan_code: "copy-8", lab_code: "UNIT000001", space_code: "", previous_space_code: "00101010101", assignment_status: "Invalid" }],
+  });
+  db.prepare(`
+    UPDATE plan_assignments
+    SET space_code = '', previous_space_code = '00101010101', assignment_status = 'Invalid'
+    WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'
+  `).run();
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids", "campuses"],
+  }, { writeAudit() {} });
+  const detailService = createDetailActionService(db, datasetService);
+
+  detailService.submitCopyDetailAction(8, {
+    expectedRevision: 1,
+    planCode: "copy-8",
+    action: "editUnplacedLab",
+    assignment: { id: "copy-8__UNIT000001", lab_code: "UNIT000001" },
+    form: {
+      labName: "修改后的待安置",
+      labType: "实验室",
+      college: "新学院",
+      major: "新专业",
+      director: "负责人",
+      seatCount: "24",
+      computerCount: "12",
+    },
+  }, { id: 2, username: "editor", role: "editor" });
+
+  const payload = JSON.parse(db.prepare("SELECT payload_json FROM plan_lab_overrides WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'").get().payload_json);
+  assert.equal(payload.lab_name, "修改后的待安置");
+  assert.equal(payload.college, "新学院");
+  assert.equal(Number(payload.copy_id), 8);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM labs WHERE lab_code = 'UNIT000001' AND lab_name = '修改后的待安置'").get().count, 0);
+  const assignment = db.prepare("SELECT space_code, assignment_status FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'").get();
   assert.equal(assignment.space_code, "");
   assert.equal(assignment.assignment_status, "Invalid");
 });
@@ -2736,13 +2819,81 @@ test("data editor no longer exposes the business edit tab or script", () => {
   const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
   const rawEditorSource = fs.readFileSync(path.join(__dirname, "..", "js", "app", "raw-editor.js"), "utf8");
 
+  assert.match(html, /<section id="dataPanel" class="data-panel">/);
   assert.doesNotMatch(html, /business-edit\.js/);
   assert.doesNotMatch(appSource, />业务编辑</);
   assert.doesNotMatch(appSource, /editorMode:\s*"business"/);
+  assert.match(appSource, /els\.dataPanel\.hidden = !state\.permissions\.canAdmin/);
+  assert.match(appSource, /if \(!state\.permissions\.canAdmin\)[\s\S]*els\.editorTabs\.innerHTML = ""/);
   assert.doesNotMatch(rawEditorSource, /state\.editorMode === "business"/);
   assert.match(rawEditorSource, /els\.addRowBtn\.textContent = "新增行"/);
   assert.match(rawEditorSource, /els\.applyTableBtn\.textContent = "应用修改"/);
   assert.match(rawEditorSource, /els\.downloadSheetBtn\.hidden = false/);
+});
+
+test("floor segment names persist and appear in room segment selectors", () => {
+  const { FloorplanDomain, FloorplanRender } = loadBrowserModules();
+  const dataset = FloorplanDomain.normalizeDataset({
+    floor_segments: [{
+      building_code: "B0101",
+      floor_code: "1",
+      segment_code: "EW01010101",
+      segment_name: "一层东侧主走廊",
+      element_type: "corridor",
+      notes: "旧备注",
+    }],
+  });
+  const detailsEl = new StubElement();
+
+  assert.equal(dataset.floor_segments[0].segment_name, "一层东侧主走廊");
+  assert.ok(FloorplanDomain.DATASETS.find((item) => item.key === "floor_segments").columns.some(([key]) => key === "segment_name"));
+
+  FloorplanRender.renderDetailsPanel({
+    detailsEl,
+    context: {
+      building: { building_code: "B0101", building_name: "测试楼" },
+      space: { id: "space-1", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", space_code: "00101010101", front_door: "101", rear_door: "", side: "north", offset_m: 0, length_m: 8, width_m: 6, area_m2: 48, network_segment: "", current_status: "active" },
+      lab: null,
+      assignment: null,
+    },
+    mode: "view",
+    canEdit: true,
+    canAdmin: true,
+    detailsEdit: { mode: "editSpace", moreOpen: false, errors: {} },
+    detailEditOptions: {
+      segmentOptions: [{ value: "EW01010101", label: "一层东侧主走廊", selected: true }],
+      spaceCodePreview: "00101010101",
+    },
+    moveBasket: { items: [] },
+  });
+
+  assert.match(detailsEl.innerHTML, /<option value="EW01010101" selected>一层东侧主走廊<\/option>/);
+});
+
+test("rooms with the same dimensions render with equal SVG size across plans and corridor directions", () => {
+  const { FloorplanRender } = loadBrowserModules();
+  const data = {
+    floor_segments: [
+      { id: "seg-h", building_code: "B0101", floor_code: "1", segment_code: "H", start_x_m: 0, start_y_m: 0, end_x_m: 20, end_y_m: 0, width_m: 2.4, element_type: "corridor" },
+      { id: "seg-v", building_code: "B0101", floor_code: "1", segment_code: "V", start_x_m: 0, start_y_m: 8, end_x_m: 0, end_y_m: 28, width_m: 2.4, element_type: "corridor" },
+    ],
+    spaces: [
+      { id: "space-h", building_code: "B0101", floor_code: "1", segment_code: "H", offset_m: 0, side: "north", space_code: "101", front_door: "101", length_m: 10, width_m: 5, area_m2: 50, current_status: "active" },
+      { id: "space-v", building_code: "B0101", floor_code: "1", segment_code: "V", offset_m: 0, side: "east", space_code: "102", front_door: "102", length_m: 10, width_m: 5, area_m2: 50, current_status: "active" },
+    ],
+    labs: [],
+    plan_assignments: [],
+  };
+
+  const layout = FloorplanRender.buildLayoutForTest(data.floor_segments, data.spaces, 10);
+  const horizontal = layout.rooms.find((room) => room.space.id === "space-h");
+  const vertical = layout.rooms.find((room) => room.space.id === "space-v");
+
+  assert.equal(horizontal.width, 100);
+  assert.equal(horizontal.height, 50);
+  assert.equal(vertical.width, 50);
+  assert.equal(vertical.height, 100);
+  assert.equal(horizontal.width * horizontal.height, vertical.width * vertical.height);
 });
 
 test("startup does not block on the SheetJS CDN and Excel loading is on demand", () => {

@@ -6,7 +6,7 @@
     root.FloorplanApp.RawMaintenanceActions = factory();
   }
 })(typeof window !== "undefined" ? window : globalThis, function () {
-  const RAW_MAINTENANCE_KEYS = new Set(["buildings", "floor_segments", "colleges", "majors", "lab_types"]);
+  const RAW_MAINTENANCE_KEYS = new Set(["campuses", "buildings", "floor_segments", "colleges", "majors", "lab_types"]);
 
   function text(value) {
     return String(value ?? "").trim();
@@ -40,6 +40,21 @@
     };
   }
 
+  function normalizeCampus(row = {}) {
+    const code = text(row.campus_code || row.id || row.campus_name);
+    const name = text(row.campus_name || code);
+    return {
+      id: text(row.id) || code || name,
+      campus_code: code,
+      campus_name: name,
+      sort_order: numberValue(row.sort_order, 0),
+      status: text(row.status) || "active",
+      notes: text(row.notes),
+      created_at: text(row.created_at),
+      updated_at: text(row.updated_at),
+    };
+  }
+
   function normalizeSegment(row = {}) {
     const buildingCode = text(row.building_code);
     const floorCode = text(row.floor_code);
@@ -49,6 +64,7 @@
       building_code: buildingCode,
       floor_code: floorCode,
       segment_code: segmentCode,
+      segment_name: text(row.segment_name),
       start_x_m: numberValue(row.start_x_m, 0),
       start_y_m: numberValue(row.start_y_m, 0),
       end_x_m: numberValue(row.end_x_m, 0),
@@ -106,6 +122,7 @@
   }
 
   function normalizeRows(key, rows) {
+    if (key === "campuses") return (rows || []).map(normalizeCampus);
     if (key === "buildings") return (rows || []).map(normalizeBuilding);
     if (key === "floor_segments") return (rows || []).map(normalizeSegment);
     if (key === "colleges") return (rows || []).map(normalizeCollege);
@@ -236,6 +253,13 @@
   }
 
   function deleteBlocker(dataset, key, row) {
+    if (key === "campuses") {
+      const code = text(row.campus_code);
+      const name = text(row.campus_name);
+      if ((dataset.buildings || []).some((item) => text(item.campus_zone) === name || text(item.campus_code) === code)) {
+        return "该校区仍被教学楼引用，不能删除。";
+      }
+    }
     if (key === "colleges") {
       const code = text(row.college_code);
       const name = text(row.college_name);
@@ -290,7 +314,7 @@
   function deleteSimpleRow(dataset, key, row) {
     const blocker = deleteBlocker(dataset, key, row);
     if (blocker) return { ok: false, message: blocker };
-    const codeKey = key === "colleges" ? "college_code" : key === "majors" ? "major_code" : "type_code";
+    const codeKey = key === "campuses" ? "campus_code" : key === "colleges" ? "college_code" : key === "majors" ? "major_code" : "type_code";
     const id = text(row.id);
     const code = text(row[codeKey]);
     dataset[key] = (dataset[key] || []).filter((item) => text(item.id) !== id && text(item[codeKey]) !== code);

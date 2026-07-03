@@ -46,6 +46,7 @@
 - [ ] 缩放主图时，北边指示保持固定显示，不随缩放变化。
 - [ ] 放大主图并滚动 `.floorplan` 后，教学楼信息和北边指示仍固定浮在主图可视区域，不随内部滚动条移动。
 - [ ] 放大主图后，可按住主图空白区域拖动画面平移；拖拽实验室搬迁时不会触发画布平移。
+- [ ] 相同 `length_m`、`width_m` 的房间在不同方案和不同走廊方向中按同一比例显示；纵向走廊房间允许旋转但不改变长宽比例。
 - [ ] 宽屏三栏并列时，楼层或缩略图数量变多不会撑高 workspace，多余内容在缩略图/对应内部区域滚动查看。
 - [ ] 中屏时，缩略图区独占 workspace 第一行，主图和详细信息栏在第二行并列且高度对齐。
 - [ ] 窄屏堆叠时，workspace 高度由缩略图区域、主图区域、详细信息区域三段自然相加，主图不会被裁切或隐藏。
@@ -75,6 +76,7 @@
 ## 2026-06-09 高级编辑易用性验收
 
 - [ ] 高级数据编辑不显示“业务编辑”tab，默认进入第一个可见原始维护表。
+- [ ] 高级数据编辑区仅 admin 可见；editor/viewer/游客不显示底部数据编辑区。
 - [ ] 数据编辑栏将教学楼、楼层骨架、学院、专业、用途类型、方案等视图切换入口与“新增行 / 应用修改 / 导出当前表”等当前视图操作分组展示，视觉样式可明确区分。
 - [ ] 详情栏和主图/待安置区交互承接物理空间、实验室资料和方案分配日常编辑，用户不需要手填 `plan_code/lab_code/space_code` 或直接编辑 `spaces/labs/plan_assignments` 原始表。
 - [ ] 物理空间状态按当前方案推导：已建设、已规划、未规划、不可用显示正确，且不可用优先。
@@ -92,6 +94,7 @@
 - [ ] admin 通过数据编辑中的学院、专业和实验室类型原始表维护基础信息，顶部不再显示重复的“基础信息”独立弹窗入口；详情栏专业按学院联动过滤，停用项不出现在详情栏下拉候选中。
 - [ ] admin 可在教学楼、楼层骨架、学院、专业、实验室类型原始表删除行；删除教学楼级联删除该楼骨架和空间，删除楼层骨架级联删除绑定空间，相关方案分配变为 `Invalid` 且实验室资料保留；非 admin 不显示删除入口，学院/专业/实验室类型被引用时在当前表格附近给出明确阻止提示。
 - [ ] admin 修改楼层骨架的教学楼编码、楼层编码或走廊段编码时，绑定空间同步迁移，分配引用刷新；目标骨架键已存在时保存被阻止，不会把原骨架复制成另一楼层的重复数据。
+- [ ] 楼层骨架表包含 `segment_name` 名称字段；新增房间和编辑房间的骨架下拉优先显示走廊/楼梯名称而非只显示编码。
 - [ ] 数据编辑中的学院和专业信息只有 admin 可见可编辑；editor/viewer 不显示学院、专业原始表。
 - [ ] 点击“规划”未规划空间时，所属学院使用下拉单选，并生成对应学院的“未规划实验室+门牌号”实验室和 `assigned` 分配。
 - [ ] 详情栏实验室表单中的类型、学院、专业均为下拉单选；从未规划空间选择实验室后，具备权限的用户可立即编辑实验室资料。
@@ -101,7 +104,8 @@
 - [ ] 待安置区有条目时不触发未保存提示；切楼层、切方案和点击主图其他空间查看详情仍可正常进行。
 - [ ] 详细信息栏底部不显示固定待安置 Dock；待安置区通过右侧检查器的“详细信息 / 待安置区”切换进入。
 - [ ] 详细信息栏不显示“加入待安置区”按钮；已落位实验室进入待安置区通过拖入右侧栏完成。
-- [ ] 待安置区提供“新增”入口，可新增计划新建但尚未确定场地的用途单元；名称必填，学院、座位数和电脑数可选，保存后作为已保存未落位条目显示。
+- [ ] 待安置区提供“新增”入口，可新增计划新建但尚未确定场地的用途单元；名称必填，所属学院使用下拉单选，座位数和电脑数可选，保存后作为已保存未落位条目显示。
+- [ ] 待安置区内所有未落位用途单元都可编辑名称、用途类型、所属学院、专业、负责人、座位数和电脑数；保存只影响当前方案或当前副本。
 - [ ] 待安置区不改变 workspace、主图、缩略图或详情栏高度；待安置实验室数量较多时只在右侧检查器内部滚动。
 - [ ] 待安置区卡片使用学院颜色，展示实验室名称、学院、来源地点和座位数；长地点使用省略和悬停 title，不显示“已保存”标签。
 - [ ] 拖动主图实验室进入详细信息栏任意位置时，右侧自动切换为待安置区，整个详细信息栏都可作为加入待安置区的投放目标。
@@ -122,14 +126,14 @@
 - [ ] admin 可删除任意非基线方案中的空间；editor 只能删除自己创建且非基线方案中的空间；基线方案空间不可删除。
 - [ ] editor 只能在自己创建且非基线的方案中保存详情栏日常编辑；admin 可保存基线方案详情栏日常编辑。
 - [ ] viewer/游客不可保存详情栏日常编辑。
-- [ ] 新增教学楼、空间、楼层骨架和用途单元时按配置化编号规则生成编号；单门空间后门牌为空时使用前门牌生成后两位编号。
-- [ ] 教学楼表包含 `sort_order` 字段，admin 可在数据编辑中维护；顶部教学楼检索按下沙校区、绍兴校区分组，再按校区内 `sort_order` 排列，并在选项中标注校区。
+- [ ] 新增教学楼、空间、楼层骨架和用途单元时按配置化编号规则生成编号；校区名称和校区编码来自 `campuses` 数据，不使用系统内置学校校区预设；单门空间后门牌为空时使用前门牌生成后两位编号。
+- [ ] 教学楼表包含 `sort_order` 字段，校区表包含 `sort_order` 优先级字段，admin 可在数据编辑中维护；顶部教学楼检索按校区优先级和楼栋 `sort_order` 排列，选项去掉“校区”后缀并在楼名后标注楼号。
 - [ ] admin 显式执行“补全/刷新编号”后才更新已有教学楼、楼层骨架或用途单元编号；刷新教学楼或楼层骨架编号时相关空间和分配引用同步迁移。
 - [ ] 空间只能绑定到走廊骨架；楼梯、电梯和其他骨架不能作为空间落位骨架。
 - [ ] `labs` 底层表可作为用途单元承载实验室、教室、办公室、公共空间等类型；旧 `LAB...` 编号兼容，新建用途单元使用 `UNIT...` 编号。
 - [ ] 主图放大时，`.floorplan` 和 `.floorplan-stage` 不会在垂直方向无意义撑高；只有真实超出时出现滚动。
 - [ ] 详情栏日常编辑和主要工作区不显示渐变背景，状态配色清晰区分已建设、已规划、未规划和不可用。
-- [ ] `outputs/lab-info-import` 导入模板中，杭州口径按下沙校区处理；下沙校区同楼同层空间按门牌号从东到西逐渐变大；光大教学楼和金通教学楼没有源表不存在的空间或重复物理空间。
+- [ ] `outputs/lab-info-import` 导入模板不依赖系统内置校区名称；校区口径来自导入数据或 `campuses` 配置，同楼同层同门牌不产生重复物理空间。
 - [ ] `outputs/lab-info-import` 导入模板中，Sheet2 房间号只覆盖精确匹配的主表实训室；同楼同层不同前后门牌不得产生重复 `space_code`，修正后的 `labs` 和 `plan_assignments` 引用同步更新。
 ## Numbering Acceptance
 
@@ -148,7 +152,7 @@
 
 ## Hybrid Relational Storage Acceptance
 
-- [ ] SQLite initialization creates the relational business tables for buildings, floor skeletons, colleges, majors, use types, spaces, use units, plans, plan overrides, assignments, and plan-scoped deleted spaces.
+- [ ] SQLite initialization creates the relational business tables for campuses, buildings, floor skeletons, colleges, majors, use types, spaces, use units, plans, plan overrides, assignments, and plan-scoped deleted spaces.
 - [ ] Existing JSON plan-copy data is backfilled or synchronized into relational tables without duplicating the same `building_code` or same floor skeleton semantic key across visible plan copies.
 - [ ] `/api/bootstrap` and `/api/dataset/active` continue returning the existing `dataset` JSON shape while projecting global shared reference rows from relational storage when available.
 - [ ] `/api/bootstrap`, `/api/dataset/active`, and save responses can return a complete visible dataset from relation-only rows when legacy business JSON is empty.
@@ -174,11 +178,11 @@
 - [ ] server mode 下 `plan_assignments` 原始表为只读诊断视图，批量保存被阻止并提示通过主图、详情栏或待安置区维护分配。
 - [ ] server mode 下普通业务 UI 不把 `/api/dataset/active` 作为日常保存兜底；该整包入口仅 admin 可调用，并记录为兼容覆盖写审计。
 - [ ] server mode 下 `plans` 原始表为只读诊断视图，方案创建、公开/私有、删除、重命名和设为/取消基线通过方案生命周期 API 或管理方案入口完成。
-- [ ] 高级原始维护表中的教学楼、楼层骨架、学院、专业和用途类型通过动作级 raw-maintenance API 保存，服务端优先写关系表并通过关系表投影刷新前端，不以整包可见 dataset 作为权威保存载荷。
+- [ ] 高级原始维护表中的校区、教学楼、楼层骨架、学院、专业和用途类型通过动作级 raw-maintenance API 保存，服务端优先写关系表并通过关系表投影刷新前端，不以整包可见 dataset 作为权威保存载荷。
 - [ ] 删除教学楼或楼层骨架会在关系表事务中级联删除相关骨架或空间，并将受影响方案分配标记为 `Invalid`；删除被引用的学院、专业或用途类型会被阻止，失败时不更新关系表或 legacy JSON 快照。
 - [ ] 删除教学楼或楼层骨架同时删除绑定到该楼栋或骨架的 `plan_space_overrides`，并且旧副本 JSON 不会在保存响应、登录或刷新时把已删除空间重新写回关系表。
 - [ ] Admin viewing multiple plans sees each teaching building only once in the raw teaching-building table, even when several visible plan copies contain that building in legacy JSON payloads.
-- [ ] Saving active raw maintenance data immediately updates relational global reference tables for buildings, floor skeletons, colleges, majors, and use types.
+- [ ] Saving active raw maintenance data immediately updates relational global reference tables for campuses, buildings, floor skeletons, colleges, majors, and use types.
 - [ ] Spaces, use units, assignments, and deleted-space tombstones remain plan-scoped so editing or deleting a room in one non-baseline copy does not affect other plans.
 - [ ] When a copy save clears a deleted-space tombstone, `plan_deleted_spaces` removes the stale tombstone for that copy.
 

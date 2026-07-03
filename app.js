@@ -12,6 +12,7 @@ const {
   normalizeSegment,
   normalizeSpace,
   normalizeLab,
+  normalizeCampus,
   normalizeCollege,
   nextCollegeColor,
   normalizeMajor,
@@ -53,8 +54,8 @@ const PlanDiffPanel = window.FloorplanApp.PlanDiffPanel;
 const DetailActions = window.FloorplanApp.DetailActions;
 const REMEMBERED_USER_KEY = "floorplan_remembered_user";
 const RAW_EDITOR_REPLACED_BY_BUSINESS = new Set(["spaces", "labs", "plan_assignments"]);
-const ADMIN_ONLY_RAW_EDITOR_KEYS = new Set(["colleges", "majors"]);
-const RAW_EDITOR_DELETE_KEYS = new Set(["buildings", "floor_segments", "colleges", "majors", "lab_types"]);
+const ADMIN_ONLY_RAW_EDITOR_KEYS = new Set(["campuses", "colleges", "majors"]);
+const RAW_EDITOR_DELETE_KEYS = new Set(["campuses", "buildings", "floor_segments", "colleges", "majors", "lab_types"]);
 
 const state = {
   data: emptyDataset(),
@@ -91,6 +92,9 @@ const state = {
     items: [],
     isOpen: false,
     draggingItemId: "",
+    editingItemId: "",
+    editDraft: null,
+    editErrors: {},
   },
   moveUndoStack: [],
   moveDrag: null,
@@ -177,6 +181,7 @@ const RawEditorController = RawEditor.createRawEditor({
   normalizeSegment,
   normalizeSpace,
   normalizeLab,
+  normalizeCampus,
   normalizeCollege,
   normalizeMajor,
   normalizeLabType,
@@ -383,6 +388,7 @@ function applyAuthUi() {
   els.normalizeNumberingBtn.hidden = !state.permissions.canAdmin;
   els.repairTextBtn.hidden = !(state.permissions.canAdmin && state.maintenance.textRepairAvailable);
   els.loadSampleBtn.hidden = state.serverMode;
+  els.dataPanel.hidden = !state.permissions.canAdmin;
   els.addRowBtn.hidden = !state.permissions.canEdit;
   els.applyTableBtn.hidden = !state.permissions.canEdit;
   els.newPlanBtn.hidden = !state.permissions.canEdit;
@@ -497,7 +503,7 @@ function detailActionName(mode) {
   return mode;
 }
 
-async function submitDetailActionToServer(mode, formData, selectedSpace, changeNote) {
+async function submitDetailActionToServer(mode, formData, selectedSpace, changeNote, extraPayload = {}) {
   if (!state.serverMode) return null;
   const activeCopy = activePlanCopyMeta();
   const endpoint = activeCopy && canEditPlanDataset(activeCopy)
@@ -507,6 +513,7 @@ async function submitDetailActionToServer(mode, formData, selectedSpace, changeN
   const payload = await fetchJson(endpoint, {
     method: "POST",
     body: JSON.stringify({
+      ...extraPayload,
       action: detailActionName(mode),
       expectedRevision,
       planCode: planById(state.activePlanId)?.plan_code || planById(state.activePlanId)?.id || "",
@@ -812,7 +819,7 @@ function bindImportDraftDetailEvents(dataset) {
   const planSelect = els.importDraftDetail.querySelector("#importPreviewPlanSelect");
   fillInlineSelect(buildingSelect, dataset.buildings.slice().sort(compareBuildings).map((row) => ({
     value: row.building_code,
-    label: `${row.campus_zone || "未分区"} - ${row.building_name || row.building_code}`,
+    label: buildingOptionLabel(row),
   })), state.importDrafts.preview.buildingCode);
   fillImportPreviewFloors(dataset);
   fillInlineSelect(planSelect, dataset.plans.map((plan) => ({ value: plan.id || plan.plan_code, label: plan.plan_name || plan.plan_code })), state.importDrafts.preview.planId);
@@ -1111,7 +1118,7 @@ function resetContextState() {
   state.moveErrors = {};
   state.moveDirty = false;
   state.moveTargetKey = null;
-  state.moveBasket = { items: [], isOpen: false, draggingItemId: "" };
+  state.moveBasket = { items: [], isOpen: false, draggingItemId: "", editingItemId: "", editDraft: null, editErrors: {} };
   state.moveUndoStack = [];
   state.moveDrag = null;
   state.pendingNavigation = null;
@@ -1309,7 +1316,7 @@ function populateBuildingOptions() {
   const rowsByCode = new Map((planData.buildings || []).slice().sort(compareBuildings).map((row) => [row.building_code, row]));
   const items = [...rowsByCode.values()].map((row) => ({
     value: row.building_code,
-    label: `${row.campus_zone || "未分区"} - ${row.building_name || row.building_code}`,
+    label: buildingOptionLabel(row),
   }));
   fillSelect(els.buildingSelect, items);
 }
@@ -1453,6 +1460,11 @@ function renderCompareChrome() {
 }
 
 function renderEditorTabs() {
+  if (!state.permissions.canAdmin) {
+    els.editorTabs.innerHTML = "";
+    els.dataEditor.innerHTML = "";
+    return;
+  }
   const visibleDefinitions = visibleRawEditorDefinitions();
   if (state.editorMode !== "raw" || !canViewRawEditorKey(state.editorKey)) {
     state.editorMode = "raw";
@@ -1600,6 +1612,9 @@ function renderApp() {
     onOpenBasket: openMoveBasket,
     onCloseBasket: closeMoveBasket,
     onCreateUnplacedLab: openNewUnplacedLabModal,
+    onEditBasketLab: openBasketLabEdit,
+    onSubmitBasketLabEdit: submitBasketLabEditAction,
+    onCancelBasketLabEdit: cancelBasketLabEdit,
   });
   renderPlanDiffPanel(beforePlan, afterPlan);
 
@@ -1798,7 +1813,7 @@ function buildDetailEditOptions(context) {
   const currentSegment = context.space?.segment_code;
   const segmentOptions = copySegments.map((segment) => ({
     value: segment.segment_code,
-    label: `${segment.segment_code} · ${segmentTypeLabel(segment.element_type)}`,
+    label: segmentDisplayName(segment),
     selected: segment.segment_code === currentSegment,
   }));
   if (currentSegment && !segmentOptions.some((item) => item.value === currentSegment)) {
@@ -1808,6 +1823,10 @@ function buildDetailEditOptions(context) {
   const collegeOptions = activeCollegeOptions().map((row) => ({
     value: row.college_name,
     label: row.college_name,
+  }));
+  const labTypeOptions = activeLabTypeOptions().map((row) => ({
+    value: row.type_name,
+    label: row.type_name,
   }));
   const majorOptionsByCollege = {};
   for (const college of collegeOptions) {
@@ -1831,6 +1850,7 @@ function buildDetailEditOptions(context) {
     segmentOptions,
     renovationMonth,
     collegeOptions,
+    labTypeOptions,
     majorOptionsByCollege,
     createSpaceDraft,
     spaceCodePreview: context.space ? generateSpaceCode(context.space, context.building) || context.space.space_code : "",
@@ -2515,8 +2535,12 @@ function openNewUnplacedLabModal() {
     updateStatus("当前账号没有编辑此方案的权限。");
     return;
   }
+  const colleges = activeCollegeOptions();
+  fillInlineSelect(els.newUnplacedLabCollegeSelect, [
+    { value: "", label: "未选择学院" },
+    ...colleges.map((row) => ({ value: row.college_name, label: row.college_name })),
+  ], "");
   els.newUnplacedLabNameInput.value = "";
-  els.newUnplacedLabCollegeInput.value = "";
   els.newUnplacedLabSeatInput.value = "";
   els.newUnplacedLabComputerInput.value = "";
   els.newUnplacedLabErrorText.textContent = "";
@@ -2675,7 +2699,7 @@ function nextGeneratedBuildingDraft() {
   const draft = {
     building_code: "",
     building_name: "新增教学楼",
-    campus_zone: "下沙校区",
+    campus_zone: "",
     building_number: buildingNumber,
     notes: "",
   };
@@ -2738,6 +2762,10 @@ function segmentTypeLabel(type) {
     elevator: "电梯",
     other: "其他",
   }[type] || "走廊";
+}
+
+function segmentDisplayName(segment) {
+  return String(segment?.segment_name || segment?.notes || segment?.segment_code || "").trim() || "未命名走廊";
 }
 
 function spaceStatusLabel(status) {
@@ -2988,7 +3016,7 @@ async function createUnplacedLabAction() {
   const lab = normalizeLab({
     lab_code: nextUnitCode(),
     lab_name: labName,
-    college: String(els.newUnplacedLabCollegeInput.value || "").trim(),
+    college: String(els.newUnplacedLabCollegeSelect.value || "").trim(),
     major: "",
     lab_type: "实验室",
     director: "",
@@ -3040,8 +3068,143 @@ async function createUnplacedLabAction() {
   refreshStateAndRender(`已新增待安置用途单元 ${labName}。`, { stamp: false });
 }
 
+function openBasketLabEdit(itemId) {
+  if (!canEditActivePlan()) {
+    updateStatus("当前账号没有编辑此方案的权限。");
+    return;
+  }
+  const item = state.moveBasket.items.find((row) => row.id === itemId);
+  if (!item) {
+    updateStatus("未找到待安置条目。");
+    return;
+  }
+  state.moveBasket = {
+    ...state.moveBasket,
+    editingItemId: itemId,
+    editErrors: {},
+    editDraft: {
+      labName: item.labName || "",
+      labType: item.labType || "",
+      college: item.college || "",
+      major: item.major || "",
+      director: item.director || "",
+      seatCount: item.seatCount || "",
+      computerCount: item.computerCount || "",
+    },
+  };
+  state.inspectorMode = "placement";
+  renderApp();
+}
+
+function cancelBasketLabEdit() {
+  state.moveBasket = {
+    ...state.moveBasket,
+    editingItemId: "",
+    editDraft: null,
+    editErrors: {},
+  };
+  renderApp();
+}
+
+function findBasketLabContext(itemId) {
+  const item = state.moveBasket.items.find((row) => row.id === itemId) || null;
+  const activePlan = planById(state.activePlanId);
+  if (!item || !activePlan) return { item, activePlan, assignment: null, lab: null };
+  const assignment = state.data.plan_assignments.find((row) =>
+    row.id === item.assignmentId ||
+    (row.plan_id === activePlan.id && (row.lab_id === item.labId || row.lab_code === item.labCode))
+  ) || null;
+  const lab = state.data.labs.find((row) =>
+    row.id === (assignment?.lab_id || item.labId) ||
+    row.lab_code === (assignment?.lab_code || item.labCode)
+  ) || null;
+  return { item, activePlan, assignment, lab };
+}
+
+async function submitBasketLabEditAction(itemId, formData) {
+  if (!canEditActivePlan()) {
+    updateStatus("当前账号没有编辑此方案的权限。");
+    return;
+  }
+  const form = plainObjectFromFormData(formData);
+  const labName = String(form.labName || "").trim();
+  if (!labName) {
+    state.moveBasket = { ...state.moveBasket, editDraft: form, editErrors: { form: "请输入实验室名称。" } };
+    renderApp();
+    return;
+  }
+  const { item, activePlan, assignment, lab } = findBasketLabContext(itemId);
+  if (!item || !activePlan || !assignment || !lab) {
+    state.moveBasket = { ...state.moveBasket, editDraft: form, editErrors: { form: "未找到要编辑的待安置实验室。" } };
+    renderApp();
+    return;
+  }
+  const previousData = cloneDataset(state.data);
+  const previousRevision = state.serverRevision;
+  const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
+  const context = { activePlan, assignment, lab };
+  const result = DetailActions.applyDetailLabEdit(state.data, context, form, {
+    normalizeLab,
+    normalizeAssignment,
+  });
+  if (!result.ok) {
+    state.moveBasket = { ...state.moveBasket, editDraft: form, editErrors: { form: result.message || "保存失败。" } };
+    renderApp();
+    return;
+  }
+  state.data = normalizeDataset(state.data);
+  state.moveBasket = {
+    ...state.moveBasket,
+    editingItemId: "",
+    editDraft: null,
+    editErrors: {},
+  };
+  syncSavedUnplacedMoveBasketItems();
+  renderEditor();
+  renderApp();
+  try {
+    if (state.serverMode) {
+      await submitDetailActionToServer("editUnplacedLab", form, null, "编辑待安置实验室", {
+        assignment: { id: assignment.id, lab_id: assignment.lab_id, lab_code: assignment.lab_code },
+        lab: { id: lab.id, lab_code: lab.lab_code },
+      });
+    } else {
+      const saveOk = await saveWithRollback(previousData, previousRevision, "编辑待安置实验室", "编辑待安置实验室失败");
+      if (!saveOk) throw new Error("编辑待安置实验室失败");
+    }
+  } catch (error) {
+    state.data = normalizeDataset(previousData);
+    state.serverRevision = previousRevision;
+    state.planCopies = previousCopies;
+    state.moveBasket = { ...state.moveBasket, editingItemId: itemId, editDraft: form, editErrors: { form: error.message } };
+    refreshStateAndRender(`编辑待安置实验室失败：${error.message}`, { stamp: false, forceMoveReset: false });
+    return;
+  }
+  refreshStateAndRender(`已更新待安置实验室 ${labName}。`, { stamp: false, forceMoveReset: false });
+}
+
 function buildingByCode(buildingCode) {
   return state.data.buildings.find((row) => row.building_code === buildingCode) || null;
+}
+
+function cleanCampusLabel(value) {
+  return String(value || "未分区").trim().replace(/校区$/, "") || "未分区";
+}
+
+function buildingNumberLabel(building) {
+  const configured = Number(building?.building_number || 0);
+  if (configured > 0) return `${configured}号楼`;
+  const match = String(building?.building_code || "").match(/^B\d{2}(\d{2})$/i);
+  if (!match) return "";
+  const parsed = Number(match[1]);
+  return parsed > 0 ? `${parsed}号楼` : "";
+}
+
+function buildingOptionLabel(building) {
+  const campus = cleanCampusLabel(building?.campus_zone);
+  const name = building?.building_name || building?.building_code || "";
+  const number = buildingNumberLabel(building);
+  return `${campus} - ${name}${number ? `（${number}）` : ""}`;
 }
 
 function planById(id) {

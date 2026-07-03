@@ -59,7 +59,22 @@
           labCode: row.lab_code,
           assignmentId: row.id,
       })));
-      const retainedItems = state.moveBasket.items.filter((item) => activeAssignmentKeys.has(MoveBasket.basketItemKey(item)));
+      const retainedItems = state.moveBasket.items
+        .filter((item) => activeAssignmentKeys.has(MoveBasket.basketItemKey(item)))
+        .map((item) => {
+          const lab = labsById.get(item.labId) || {};
+          return {
+            ...item,
+            labName: lab.lab_name || item.labName,
+            labType: lab.lab_type || item.labType || "",
+            college: lab.college || "",
+            major: lab.major || "",
+            director: lab.director || "",
+            seatCount: lab.seat_count || "",
+            computerCount: lab.computer_count || "",
+            color: colors[lab.college || ""] || item.color || "#64748b",
+          };
+        });
       const savedItems = MoveBasket.basketItemsFromUnplacedAssignments(state.data.plan_assignments, {
         planId: activePlan.id,
         labsById,

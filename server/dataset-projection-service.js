@@ -138,6 +138,11 @@ function planParamList(plans) {
 
 function loadGlobalRows(db) {
   return {
+    campuses: db.prepare(`
+      SELECT campus_code, campus_name, sort_order, status, notes, created_at, updated_at
+      FROM campuses
+      ORDER BY sort_order ASC, campus_code ASC
+    `).all().map(stripEmpty),
     buildings: db.prepare(`
       SELECT building_code, building_name, campus_zone, building_number, sort_order, notes, created_at, updated_at
       FROM buildings
@@ -146,7 +151,7 @@ function loadGlobalRows(db) {
     floor_segments: db.prepare(`
       SELECT
         id, building_code, floor_code, segment_code,
-        start_x_m, start_y_m, end_x_m, end_y_m, width_m, element_type, notes, created_at, updated_at
+        segment_name, start_x_m, start_y_m, end_x_m, end_y_m, width_m, element_type, notes, created_at, updated_at
       FROM floor_segments
       ORDER BY building_code ASC, floor_code ASC, segment_code ASC
     `).all().map((row) => stripEmpty({
@@ -302,6 +307,7 @@ function projectVisibleDataset(db, user, options = {}) {
   const baseline = plans.find((plan) => booleanFlag(plan.is_baseline));
   return {
     buildings: globals.buildings,
+    campuses: globals.campuses,
     floor_segments: globals.floor_segments,
     spaces: loadSpaces(db, plans),
     labs: loadLabs(db, plans),
