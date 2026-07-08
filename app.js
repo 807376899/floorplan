@@ -1301,10 +1301,6 @@ function canEditEditorKey(key) {
   return state.permissions.canAdmin;
 }
 
-function assignmentRowsForPlan(planId) {
-  return state.data.plan_assignments.filter((row) => row.plan_id === planId);
-}
-
 function syncPlanViewMode() {
   if (state.data.plans.length < 2) state.planViewMode = "single";
   else if (!["single", "compare"].includes(state.planViewMode)) state.planViewMode = "single";
@@ -2603,24 +2599,6 @@ async function toggleActivePlanVisibility() {
   }
 }
 
-function confirmDeletePlan() {
-  const planId = state.planDeleteTargetId;
-  const plan = planById(planId);
-  if (!plan) {
-    closeDeletePlanModal();
-    return;
-  }
-
-  state.data.plans = state.data.plans.filter((row) => row.id !== planId);
-  state.data.plan_assignments = state.data.plan_assignments.filter((row) => row.plan_id !== planId);
-  state.data = normalizeDataset(state.data);
-  state.activePlanId = null;
-  state.detailsMode = "view";
-  syncMoveDraft(true);
-  closeDeletePlanModal();
-  refreshStateAndRender(`已删除方案 ${plan.plan_name}`, { stamp: false, forceMoveReset: true });
-}
-
 async function confirmDeletePlanAction() {
   const copy = activePlanCopyMeta();
   if (!canManageCopy(copy)) {
@@ -2769,22 +2747,6 @@ function segmentDisplayName(segment) {
   return String(segment?.segment_name || segment?.notes || segment?.segment_code || "").trim() || "未命名走廊";
 }
 
-function spaceStatusLabel(status) {
-  return {
-    active: "可用",
-    unavailable: "不可用",
-  }[status] || status || "-";
-}
-
-function sideLabel(side) {
-  return {
-    north: "北",
-    south: "南",
-    east: "东",
-    west: "西",
-  }[side] || side || "-";
-}
-
 function canEditBusinessBaseData() {
   if (!state.serverMode) return state.permissions.canEdit;
   const copy = activePlanCopyMeta();
@@ -2801,11 +2763,6 @@ function canDeleteSpaceInActivePlan() {
     copy,
     canEditCopy: copy ? canEditPlanDataset(copy) : false,
   });
-}
-
-function firstUnassignedLabCode(assignments) {
-  const assigned = new Set(assignments.map((row) => row.lab_code));
-  return labsForActivePlan().find((lab) => !assigned.has(lab.lab_code))?.lab_code || "";
 }
 
 function editorRows(...args) {
@@ -2898,69 +2855,6 @@ function replaceFilteredRows(...args) {
 
 function replaceFilteredAssignments(...args) {
   return RawEditorController.replaceFilteredAssignments(...args);
-}
-
-async function createPlanFromActive(planNameInput) {
-  if (!state.permissions.canEdit) {
-    updateStatus("当前账号没有新增方案权限。");
-    return;
-  }
-  const activePlan = planById(state.activePlanId) || state.data.plans[0];
-  if (!activePlan) {
-    updateStatus("当前没有可复制的方案。");
-    return;
-  }
-
-  const planCode = `plan-${Date.now()}`;
-  const normalizedName = String(planNameInput || "").trim();
-  if (!normalizedName) {
-    els.newPlanErrorText.textContent = "请输入方案名称。";
-    return;
-  }
-  const planName = normalizedName;
-  const newPlan = normalizePlan({
-    plan_code: planCode,
-    plan_name: planName,
-    plan_type: "draft",
-    source_plan_code: activePlan.plan_code,
-    description: `基于 ${activePlan.plan_name} 复制创建`,
-    is_locked: false,
-    is_default_compare_before: false,
-    is_default_compare_after: false,
-    created_at: isoNow(),
-  });
-
-  const nextPlans = [...state.data.plans, newPlan];
-  const relation = relationMaps({ spaces: state.data.spaces, labs: state.data.labs, plans: nextPlans });
-  const copiedAssignments = state.data.plan_assignments
-    .filter((row) => row.plan_id === activePlan.id)
-    .map((row) => normalizeAssignment({
-      plan_code: newPlan.plan_code,
-      lab_code: row.lab_code,
-      space_code: row.space_code,
-      previous_space_code: row.previous_space_code,
-      assignment_status: row.assignment_status,
-      move_note: row.move_note,
-      effective_from: row.effective_from,
-      created_at: isoNow(),
-    }, relation));
-
-  state.data.plans = nextPlans;
-  state.data.plan_assignments = [...state.data.plan_assignments, ...copiedAssignments];
-  state.data = normalizeDataset(state.data);
-
-  if (state.planViewMode === "compare") {
-    const beforePlanId = els.beforePlanSelect.value || activePlan.id;
-    els.beforePlanSelect.value = beforePlanId;
-    els.afterPlanSelect.value = newPlan.id;
-  } else {
-    els.currentPlanSelect.value = newPlan.id;
-  }
-  state.activePlanId = newPlan.id;
-  state.detailsMode = "view";
-  closeNewPlanModal();
-
-  refreshStateAndRender(`已基于 ${activePlan.plan_name} 新增方案 ${planName}。`, { stamp: false, forceMoveReset: true });
 }
 
 async function createPlanFromActiveAction() {

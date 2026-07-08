@@ -814,10 +814,6 @@ function createPlanCopyService(db, datasetService) {
     return Object.fromEntries(Object.entries(rest).sort(([left], [right]) => left.localeCompare(right)));
   }
 
-  function markRowsForCopy(rows, copyId) {
-    return (rows || []).map((row) => markRowForCopy(row, copyId));
-  }
-
   function markRowForCopy(row, copyId) {
     const current = Number(row?.copy_id || row?.copyId || 0);
     return current === copyId ? row : { ...row, copy_id: copyId };

@@ -895,11 +895,6 @@ function parseScopedRef(value) {
   return { copyId: Number(match[1]), ref: text(match[2]) };
 }
 
-function unscopedId(id, fallback) {
-  const parsed = parseScopedRef(id);
-  return parsed.ref || text(fallback);
-}
-
 function stripRelationalNulls(row) {
   const next = {};
   for (const [key, value] of Object.entries(row)) {
