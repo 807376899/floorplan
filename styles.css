@@ -2627,10 +2627,14 @@ button,
   }
 
   .compare-column {
-    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+    grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
     align-items: stretch;
     width: max-content;
     min-width: 100%;
+  }
+
+  .compare-plan-select select {
+    line-height: 1.22;
   }
 
   .floor-thumbs {
@@ -2694,10 +2698,14 @@ button,
   }
 
   .compare-column {
-    grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+    grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
     align-items: stretch;
     width: max-content;
     min-width: 100%;
+  }
+
+  .compare-plan-select select {
+    line-height: 1.22;
   }
 
   .floor-thumbs {

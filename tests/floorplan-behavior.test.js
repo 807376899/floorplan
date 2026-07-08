@@ -2865,7 +2865,8 @@ test("medium viewport stacks compare plans while floor thumbnails scroll horizon
 
   assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.compare-columns\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
   assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.compare-columns\s*\{[\s\S]*?overflow-x:\s*auto/);
-  assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.compare-column\s*\{[\s\S]*?grid-template-columns:\s*minmax\(220px,\s*280px\) minmax\(0,\s*1fr\)/);
+  assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.compare-column\s*\{[\s\S]*?grid-template-columns:\s*minmax\(180px,\s*220px\) minmax\(0,\s*1fr\)/);
+  assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.compare-plan-select select\s*\{[\s\S]*?line-height:\s*1\.22/);
   assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?grid-auto-flow:\s*column/);
   assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-x:\s*visible/);
   assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-y:\s*visible/);
@@ -2874,7 +2875,8 @@ test("medium viewport stacks compare plans while floor thumbnails scroll horizon
 test("narrow viewport keeps each thumbnail group horizontal above the main floorplan", () => {
   const css = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
 
-  assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.compare-column\s*\{[\s\S]*?grid-template-columns:\s*minmax\(180px,\s*240px\) minmax\(0,\s*1fr\)/);
+  assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.compare-column\s*\{[\s\S]*?grid-template-columns:\s*minmax\(150px,\s*190px\) minmax\(0,\s*1fr\)/);
+  assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.compare-plan-select select\s*\{[\s\S]*?line-height:\s*1\.22/);
   assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.compare-columns\s*\{[\s\S]*?overflow-x:\s*auto/);
   assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?grid-auto-flow:\s*column/);
   assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-x:\s*visible/);
