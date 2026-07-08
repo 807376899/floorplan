@@ -553,7 +553,8 @@ function createDatasetService(db, config, audit) {
         null;
       return {
         ...building,
-        campus_code: configured?.campus_code || building.campus_code || campusCodeForBuilding(building),
+        campus_code: configured?.campus_code || building.campus_code || "",
+        campus_zone: configured?.campus_name || building.campus_zone || "",
         campus_sort_order: configured ? Number(configured.sort_order || 0) : 9999,
       };
     });

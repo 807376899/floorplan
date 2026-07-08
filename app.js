@@ -2696,10 +2696,12 @@ function nextBuildingNumber() {
 
 function nextGeneratedBuildingDraft() {
   const buildingNumber = nextBuildingNumber();
+  const campus = (state.data.campuses || []).find((row) => String(row.status || "active") === "active") || null;
   const draft = {
     building_code: "",
     building_name: "新增教学楼",
-    campus_zone: "",
+    campus_code: campus?.campus_code || "",
+    campus_zone: campus?.campus_name || "",
     building_number: buildingNumber,
     notes: "",
   };

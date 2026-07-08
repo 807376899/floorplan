@@ -61,7 +61,7 @@
       updateStatus,
     } = deps;
     const RAW_MAINTENANCE_KEYS = (typeof window !== "undefined" && window.FloorplanApp?.RawMaintenanceActions?.RAW_MAINTENANCE_KEYS)
-      || new Set(["buildings", "floor_segments", "colleges", "majors", "lab_types"]);
+      || new Set(["campuses", "buildings", "floor_segments", "colleges", "majors", "lab_types"]);
     const SERVER_READONLY_KEYS = new Set(["plan_assignments", "plans"]);
 
     function renderEditor() {
@@ -84,7 +84,7 @@
       const inputDisabled = canEditEditorKey(state.editorKey) ? "" : "disabled";
       const canDeleteRows = canDeleteEditorRows(state.editorKey);
       const actionHeader = canDeleteRows ? `<th>操作</th>` : "";
-      els.dataEditor.innerHTML = `${numberingToolbarHtml()}${rawEditorNoticeHtml()}<table><thead><tr>${definition.columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}${actionHeader}</tr></thead><tbody>${rows.map((row, rowIndex) => `<tr data-row-id="${escapeHtml(row.id || "")}" class="${highlightRowId && row.id === highlightRowId ? "is-highlight" : ""}">${definition.columns.map(([key]) => `<td data-key="${key}"><input data-row="${rowIndex}" data-key="${key}" value="${escapeHtml(row[key] ?? "")}" ${inputDisabled}></td>`).join("")}${canDeleteRows ? `<td class="row-actions"><button type="button" class="row-delete-button" data-delete-row="${rowIndex}">删除</button></td>` : ""}</tr>`).join("")}</tbody></table>`;
+      els.dataEditor.innerHTML = `${numberingToolbarHtml()}${rawEditorNoticeHtml()}<table><thead><tr>${definition.columns.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join("")}${actionHeader}</tr></thead><tbody>${rows.map((row, rowIndex) => `<tr data-row-id="${escapeHtml(row.id || "")}" class="${highlightRowId && row.id === highlightRowId ? "is-highlight" : ""}">${definition.columns.map(([key]) => editorCellHtml(key, row, rowIndex, inputDisabled)).join("")}${canDeleteRows ? `<td class="row-actions"><button type="button" class="row-delete-button" data-delete-row="${rowIndex}">删除</button></td>` : ""}</tr>`).join("")}</tbody></table>`;
       enhanceCollegeColorInputs(inputDisabled);
       bindRawEditorTools();
       els.dataEditor.querySelectorAll("[data-delete-row]").forEach((button) => {
@@ -145,6 +145,38 @@
       notice.hidden = !message;
       notice.classList.toggle("is-error", type === "error");
       notice.classList.toggle("is-info", type !== "error");
+    }
+
+    function editorCellHtml(key, row, rowIndex, inputDisabled) {
+      if (state.editorKey === "buildings" && key === "campus_code") {
+        const selectedCode = row.campus_code || campusCodeForName(row.campus_zone);
+        return `<td data-key="${key}"><select data-row="${rowIndex}" data-key="${key}" ${inputDisabled}>${campusSelectOptionsHtml(selectedCode)}</select></td>`;
+      }
+      return `<td data-key="${key}"><input data-row="${rowIndex}" data-key="${key}" value="${escapeHtml(row[key] ?? "")}" ${inputDisabled}></td>`;
+    }
+
+    function campusCodeForName(name) {
+      const target = String(name || "").trim();
+      return (state.data.campuses || []).find((campus) => String(campus.campus_name || "").trim() === target)?.campus_code || "";
+    }
+
+    function campusSelectOptionsHtml(selectedCode) {
+      const selected = String(selectedCode || "").trim();
+      const campuses = [...(state.data.campuses || [])].sort((a, b) =>
+        Number(a.sort_order || 0) - Number(b.sort_order || 0) ||
+        String(a.campus_code || "").localeCompare(String(b.campus_code || ""), "zh-CN", { numeric: true })
+      );
+      const options = [`<option value=""${selected ? "" : " selected"}>未设置校区</option>`];
+      for (const campus of campuses) {
+        const code = String(campus.campus_code || "").trim();
+        if (!code) continue;
+        const label = `${campus.campus_name || code}${code ? ` (${code})` : ""}`;
+        options.push(`<option value="${escapeHtml(code)}"${selected === code ? " selected" : ""}>${escapeHtml(label)}</option>`);
+      }
+      if (selected && !campuses.some((campus) => String(campus.campus_code || "").trim() === selected)) {
+        options.push(`<option value="${escapeHtml(selected)}" selected>${escapeHtml(selected)}</option>`);
+      }
+      return options.join("");
     }
 
     function serverReadonlyMessage(key) {
@@ -221,7 +253,7 @@
     }
     
     function setEditorInputValue(rowIndex, key, value) {
-      const input = els.dataEditor.querySelector(`input[data-row="${rowIndex}"][data-key="${key}"]`);
+      const input = els.dataEditor.querySelector(`input[data-row="${rowIndex}"][data-key="${key}"], select[data-row="${rowIndex}"][data-key="${key}"]`);
       if (input) input.value = value;
     }
     
@@ -257,7 +289,7 @@
     
     function collectEditorInputRows() {
       const rows = editorRows().map((row) => ({ ...row, __original: { ...row } }));
-      els.dataEditor.querySelectorAll("input[data-row][data-key]").forEach((input) => {
+      els.dataEditor.querySelectorAll("input[data-row][data-key], select[data-row][data-key]").forEach((input) => {
         rows[Number(input.dataset.row)][input.dataset.key] = input.value;
       });
       return rows;
@@ -274,7 +306,7 @@
     }
     
     function applyBuildingEditorRows(rows) {
-      const normalizedRows = rows.map((row) => normalizeBuilding(row));
+      const normalizedRows = rows.map((row) => normalizeBuilding(withCampusZone(row)));
       const nextCodes = new Set();
       for (const building of normalizedRows) {
         const code = String(building.building_code || "").trim();
@@ -299,6 +331,39 @@
       });
       state.data.buildings = normalizedRows;
       return { ok: true };
+    }
+
+    function applyCampusEditorRows(rows) {
+      const normalizedRows = rows.map((row) => normalizeCampus(row));
+      const nextCodes = new Set();
+      for (const campus of normalizedRows) {
+        const code = String(campus.campus_code || "").trim();
+        if (!code) return { ok: false, message: "校区编码不能为空。" };
+        if (nextCodes.has(code)) return { ok: false, message: `校区编码“${code}”重复，请修改后再保存。` };
+        nextCodes.add(code);
+      }
+      rows.forEach((row, index) => {
+        const original = row.__original || row;
+        const originalCode = String(original.campus_code || "").trim();
+        const originalName = String(original.campus_name || "").trim();
+        const nextCode = String(normalizedRows[index].campus_code || "").trim();
+        const nextName = String(normalizedRows[index].campus_name || "").trim();
+        state.data.buildings = state.data.buildings.map((building) => {
+          const matchesCode = originalCode && String(building.campus_code || "").trim() === originalCode;
+          const matchesName = originalName && String(building.campus_zone || "").trim() === originalName;
+          return matchesCode || matchesName ? normalizeBuilding({ ...building, campus_code: nextCode, campus_zone: nextName }) : building;
+        });
+      });
+      state.data.campuses = normalizedRows;
+      return { ok: true };
+    }
+
+    function withCampusZone(row) {
+      const campus = (state.data.campuses || []).find((item) => String(item.campus_code || "").trim() === String(row.campus_code || "").trim());
+      return {
+        ...row,
+        campus_zone: campus?.campus_name || row.campus_zone || "",
+      };
     }
     
     function applyPlanEditorRows(rows) {
@@ -418,6 +483,13 @@
         const name = String(row.major_name || "").trim();
         if (state.data.labs.some((item) => item.major === name || item.major === code)) {
           return "该专业仍被实验室引用，不能删除。";
+        }
+      }
+      if (key === "campuses") {
+        const code = String(row.campus_code || "").trim();
+        const name = String(row.campus_name || "").trim();
+        if (state.data.buildings.some((item) => String(item.campus_code || "").trim() === code || String(item.campus_zone || "").trim() === name)) {
+          return "该校区仍被教学楼引用，不能删除。";
         }
       }
       if (key === "lab_types") {
@@ -655,7 +727,14 @@
           return;
         }
       }
-      if (state.editorKey === "campuses") state.data.campuses = rows.map((row) => normalizeCampus(row));
+      if (state.editorKey === "campuses") {
+        const result = applyCampusEditorRows(rows);
+        if (!result.ok) {
+          setRawEditorNotice(result.message);
+          updateStatus(result.message);
+          return;
+        }
+      }
       if (state.editorKey === "labs") state.data.labs = rows.map((row) => normalizeLab(row));
       if (state.editorKey === "colleges") state.data.colleges = rows.map((row) => normalizeCollege(row));
       if (state.editorKey === "majors") state.data.majors = rows.map((row) => normalizeMajor(row));
@@ -742,6 +821,7 @@
       collectEditorInputRows,
       normalizeEditorRowsForKey,
       applyBuildingEditorRows,
+      applyCampusEditorRows,
       applyPlanEditorRows,
       normalizeLabTypeEditorRows,
       applyFloorSegmentEditorRows,

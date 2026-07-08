@@ -46,7 +46,7 @@
       columns: [
         ["building_code", "教学楼编码"],
         ["building_name", "教学楼名称"],
-        ["campus_zone", "所属校区"],
+        ["campus_code", "所属校区"],
         ["building_number", "楼号"],
         ["sort_order", "排列顺序"],
         ["notes", "备注"],
@@ -183,6 +183,7 @@
     buildings: {
       building_code: ["building_code", "教学楼编码"],
       building_name: ["building_name", "教学楼名称"],
+      campus_code: ["campus_code", "校区编码", "所属校区编码"],
       campus_zone: ["campus_zone", "所属校区"],
       building_number: ["building_number", "教学楼编号", "楼号"],
       sort_order: ["sort_order", "排列顺序", "排序"],
@@ -943,19 +944,22 @@
 
   function applyCampusConfig(buildings, campuses) {
     const activeCampuses = (campuses || []).filter((campus) => String(campus.status || "active") === "active");
+    const byCode = new Map(activeCampuses.map((campus) => [String(campus.campus_code || "").trim(), campus]));
     const byName = new Map(activeCampuses.map((campus) => [String(campus.campus_name || "").trim(), campus]));
     return (buildings || []).map((building) => {
-      const configured = byName.get(String(building.campus_zone || "").trim());
+      const configured = byCode.get(String(building.campus_code || "").trim()) ||
+        byName.get(String(building.campus_zone || "").trim());
       if (!configured) {
         return {
           ...building,
-          campus_code: building.campus_code || campusCodeForBuilding(building),
+          campus_code: building.campus_code || "",
           campus_sort_order: 9999,
         };
       }
       return {
         ...building,
         campus_code: configured.campus_code,
+        campus_zone: configured.campus_name || building.campus_zone,
         campus_sort_order: numberValue(configured.sort_order, 9999),
       };
     }).sort(compareBuildings);
@@ -1097,7 +1101,7 @@
   function templateRows(key) {
     return {
       campuses: [{ campus_code: "01", campus_name: "示例校区", sort_order: 1, status: "active", notes: "示例校区，可按学校实际情况维护" }],
-      buildings: [{ building_code: "B01", building_name: "第一教学楼", campus_zone: "本部", building_number: 1, notes: "示例楼" }],
+      buildings: [{ building_code: "B01", building_name: "第一教学楼", campus_code: "01", building_number: 1, notes: "示例楼" }],
       floor_segments: [
         { building_code: "B01", floor_code: "1", segment_code: "main", segment_name: "主走廊", start_x_m: 0, start_y_m: 0, end_x_m: 28, end_y_m: 0, width_m: 2.4, element_type: "corridor", notes: "" },
         { building_code: "B01", floor_code: "1", segment_code: "stairs-east", segment_name: "东侧楼梯", start_x_m: 28, start_y_m: 4, end_x_m: 28, end_y_m: 10, width_m: 4, element_type: "stairs", notes: "" },

@@ -31,6 +31,7 @@
       id: text(row.id) || code,
       building_code: code,
       building_name: text(row.building_name) || code,
+      campus_code: text(row.campus_code),
       campus_zone: text(row.campus_zone),
       building_number: numberValue(row.building_number, 0),
       sort_order: numberValue(row.sort_order, 0),
@@ -184,6 +185,9 @@
     const normalizedRows = normalizeRows("buildings", rows);
     const duplicate = validateUnique(normalizedRows, "building_code", "教学楼编码");
     if (duplicate) return { ok: false, message: duplicate };
+    const campusCodes = new Set((dataset.campuses || []).map((campus) => text(campus.campus_code)).filter(Boolean));
+    const invalidCampus = normalizedRows.find((building) => text(building.campus_code) && !campusCodes.has(text(building.campus_code)));
+    if (invalidCampus) return { ok: false, message: `教学楼“${invalidCampus.building_name || invalidCampus.building_code}”引用的校区编码不存在。` };
     rows.forEach((row, index) => {
       const originalCode = text(row.__original?.building_code || row.building_code);
       const nextCode = text(normalizedRows[index].building_code);
@@ -196,6 +200,28 @@
       );
     });
     dataset.buildings = normalizedRows;
+    return { ok: true };
+  }
+
+  function applyCampusRows(dataset, rows) {
+    const normalizedRows = normalizeRows("campuses", rows);
+    const duplicate = validateUnique(normalizedRows, "campus_code", "校区编码");
+    if (duplicate) return { ok: false, message: duplicate };
+    rows.forEach((row, index) => {
+      const original = row.__original || row;
+      const originalCode = text(original.campus_code);
+      const originalName = text(original.campus_name);
+      const nextCode = text(normalizedRows[index].campus_code);
+      const nextName = text(normalizedRows[index].campus_name);
+      if (!nextCode) return;
+      dataset.buildings = (dataset.buildings || []).map((building) => {
+        const matchesCode = originalCode && text(building.campus_code) === originalCode;
+        const matchesName = originalName && text(building.campus_zone) === originalName;
+        if (!matchesCode && !matchesName) return building;
+        return normalizeBuilding({ ...building, campus_code: nextCode, campus_zone: nextName });
+      });
+    });
+    dataset.campuses = normalizedRows;
     return { ok: true };
   }
 
@@ -324,6 +350,7 @@
   function applyAction(dataset, key, body) {
     if (!RAW_MAINTENANCE_KEYS.has(key)) return { ok: false, message: "未知维护表。" };
     if (body.action === "replaceRows") {
+      if (key === "campuses") return applyCampusRows(dataset, body.rows || []);
       if (key === "buildings") return applyBuildingRows(dataset, body.rows || []);
       if (key === "floor_segments") return applyFloorSegmentRows(dataset, body.rows || []);
       return applySimpleRows(dataset, key, body.rows || []);

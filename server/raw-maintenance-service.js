@@ -52,10 +52,11 @@ function upsertBuilding(db, row, now) {
   const code = text(row.building_code || row.id);
   if (!code) return;
   db.prepare(`
-    INSERT INTO buildings (id, building_code, building_name, campus_zone, building_number, sort_order, notes, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO buildings (id, building_code, building_name, campus_code, campus_zone, building_number, sort_order, notes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(building_code) DO UPDATE SET
       building_name = excluded.building_name,
+      campus_code = excluded.campus_code,
       campus_zone = excluded.campus_zone,
       building_number = excluded.building_number,
       sort_order = excluded.sort_order,
@@ -65,6 +66,7 @@ function upsertBuilding(db, row, now) {
     code,
     code,
     text(row.building_name) || code,
+    text(row.campus_code),
     text(row.campus_zone),
     numberValue(row.building_number, 0),
     numberValue(row.sort_order, 0),
@@ -232,6 +234,29 @@ function applyBuildingReplace(db, rows, now) {
   }
 }
 
+function replaceCampuses(db, rows, now) {
+  for (const row of rows || []) upsertCampus(db, row, now);
+  for (const row of rows || []) {
+    const original = row.__original || row;
+    const originalCode = text(original.campus_code);
+    const originalName = text(original.campus_name);
+    const nextCode = text(row.campus_code);
+    const nextName = text(row.campus_name);
+    if (!nextCode || (!originalCode && !originalName)) continue;
+    db.prepare(`
+      UPDATE buildings
+      SET campus_code = ?, campus_zone = ?, updated_at = ?
+      WHERE campus_code = ?
+        OR (campus_code = '' AND campus_zone = ?)
+        OR campus_zone = ?
+    `).run(nextCode, nextName, now, originalCode, originalName, originalName);
+  }
+  const keep = new Set((rows || []).map((row) => text(row.campus_code)).filter(Boolean));
+  for (const row of db.prepare("SELECT campus_code AS code FROM campuses").all()) {
+    if (!keep.has(text(row.code))) db.prepare("DELETE FROM campuses WHERE campus_code = ?").run(row.code);
+  }
+}
+
 function deleteBuilding(db, row) {
   const code = text(row.__original?.building_code || row.building_code);
   if (!code) return;
@@ -283,11 +308,7 @@ function deleteFloorSegment(db, row) {
 
 function replaceDictionary(db, key, rows, now) {
   if (key === "campuses") {
-    const keep = new Set((rows || []).map((row) => text(row.campus_code)).filter(Boolean));
-    for (const row of db.prepare("SELECT campus_code AS code FROM campuses").all()) {
-      if (!keep.has(row.code)) db.prepare("DELETE FROM campuses WHERE campus_code = ?").run(row.code);
-    }
-    for (const row of rows || []) upsertCampus(db, row, now);
+    replaceCampuses(db, rows, now);
     return;
   }
   const table = key === "colleges" ? "colleges" : key === "majors" ? "majors" : "lab_types";
@@ -313,6 +334,7 @@ function deleteDictionaryRow(db, key, row) {
 function applyRelationWrite(db, key, body, now) {
   if (body.action === "replaceRows") {
     const rows = RawMaintenanceActions.normalizeRows(key, body.rows || []);
+    if (key === "campuses") return replaceDictionary(db, key, rows.map((row, index) => ({ ...row, __original: body.rows?.[index]?.__original })), now);
     if (key === "buildings") return applyBuildingReplace(db, rows.map((row, index) => ({ ...row, __original: body.rows?.[index]?.__original })), now);
     if (key === "floor_segments") return applyFloorSegmentReplace(db, rows.map((row, index) => ({ ...row, __original: body.rows?.[index]?.__original })), now);
     return replaceDictionary(db, key, rows, now);

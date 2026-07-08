@@ -4,6 +4,7 @@ function ensureRelationalSchema(db) {
       id TEXT PRIMARY KEY,
       building_code TEXT NOT NULL UNIQUE,
       building_name TEXT NOT NULL DEFAULT '',
+      campus_code TEXT NOT NULL DEFAULT '',
       campus_zone TEXT NOT NULL DEFAULT '',
       building_number INTEGER NOT NULL DEFAULT 0,
       sort_order INTEGER NOT NULL DEFAULT 0,
@@ -181,7 +182,70 @@ function ensureRelationalSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_plan_space_overrides_plan ON plan_space_overrides(plan_id);
     CREATE INDEX IF NOT EXISTS idx_plan_lab_overrides_plan ON plan_lab_overrides(plan_id);
   `);
+  ensureColumn(db, "buildings", "campus_code", "TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, "floor_segments", "segment_name", "TEXT NOT NULL DEFAULT ''");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_buildings_campus_code ON buildings(campus_code)");
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_buildings_campus_insert
+    BEFORE INSERT ON buildings
+    WHEN NEW.campus_code <> '' AND NOT EXISTS (SELECT 1 FROM campuses WHERE campus_code = NEW.campus_code)
+    BEGIN
+      SELECT RAISE(ABORT, 'campus_code_not_found');
+    END;
+    CREATE TRIGGER IF NOT EXISTS trg_buildings_campus_update
+    BEFORE UPDATE OF campus_code ON buildings
+    WHEN NEW.campus_code <> '' AND NOT EXISTS (SELECT 1 FROM campuses WHERE campus_code = NEW.campus_code)
+    BEGIN
+      SELECT RAISE(ABORT, 'campus_code_not_found');
+    END;
+    CREATE TRIGGER IF NOT EXISTS trg_campuses_delete_referenced
+    BEFORE DELETE ON campuses
+    WHEN EXISTS (SELECT 1 FROM buildings WHERE campus_code = OLD.campus_code)
+    BEGIN
+      SELECT RAISE(ABORT, 'campus_referenced_by_buildings');
+    END;
+  `);
+  backfillCampusRelationsFromLegacy(db);
+}
+
+function tableExists(db, table) {
+  return Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
+}
+
+function readLegacyActiveDataset(db) {
+  if (!tableExists(db, "active_dataset")) return null;
+  const row = db.prepare("SELECT dataset_json FROM active_dataset WHERE id = 1").get();
+  if (!row?.dataset_json) return null;
+  try {
+    return JSON.parse(row.dataset_json);
+  } catch {
+    return null;
+  }
+}
+
+function backfillCampusRelationsFromLegacy(db) {
+  const now = new Date().toISOString();
+  if (db.prepare("SELECT COUNT(*) AS count FROM campuses").get().count === 0) {
+    const dataset = readLegacyActiveDataset(db);
+    for (const campus of dataset?.campuses || []) upsertCampus(db, campus, now);
+  }
+  db.prepare(`
+    UPDATE buildings
+    SET campus_code = (
+      SELECT campuses.campus_code
+      FROM campuses
+      WHERE campuses.campus_name = buildings.campus_zone
+      LIMIT 1
+    ),
+    updated_at = ?
+    WHERE campus_code = ''
+      AND campus_zone <> ''
+      AND EXISTS (
+        SELECT 1
+        FROM campuses
+        WHERE campuses.campus_name = buildings.campus_zone
+      )
+  `).run(now);
 }
 
 function syncFromVisibleDataset(db, dataset, copies = []) {
@@ -345,14 +409,24 @@ function upsertCampus(db, row, now) {
   `).run(id, code || id, name || id, integer(row.sort_order), text(row.status) || "active", text(row.notes), text(row.created_at) || now, now);
 }
 
+function persistedCampusCode(db, row) {
+  const code = text(row.campus_code);
+  if (code && db.prepare("SELECT 1 FROM campuses WHERE campus_code = ?").get(code)) return code;
+  const name = text(row.campus_zone);
+  if (!name) return "";
+  const campus = db.prepare("SELECT campus_code FROM campuses WHERE campus_name = ?").get(name);
+  return text(campus?.campus_code);
+}
+
 function upsertBuilding(db, row, now) {
   const code = text(row.building_code) || text(row.id);
   if (!code) return;
   db.prepare(`
-    INSERT INTO buildings (id, building_code, building_name, campus_zone, building_number, sort_order, notes, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO buildings (id, building_code, building_name, campus_code, campus_zone, building_number, sort_order, notes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(building_code) DO UPDATE SET
       building_name = excluded.building_name,
+      campus_code = excluded.campus_code,
       campus_zone = excluded.campus_zone,
       building_number = excluded.building_number,
       sort_order = excluded.sort_order,
@@ -362,6 +436,7 @@ function upsertBuilding(db, row, now) {
     code,
     code,
     text(row.building_name),
+    persistedCampusCode(db, row),
     text(row.campus_zone),
     integer(row.building_number),
     integer(row.sort_order),

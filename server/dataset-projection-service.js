@@ -144,7 +144,7 @@ function loadGlobalRows(db) {
       ORDER BY sort_order ASC, campus_code ASC
     `).all().map(stripEmpty),
     buildings: db.prepare(`
-      SELECT building_code, building_name, campus_zone, building_number, sort_order, notes, created_at, updated_at
+      SELECT building_code, building_name, campus_code, campus_zone, building_number, sort_order, notes, created_at, updated_at
       FROM buildings
       ORDER BY sort_order ASC, building_code ASC
     `).all().map(stripEmpty),

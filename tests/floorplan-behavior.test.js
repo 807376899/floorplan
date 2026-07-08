@@ -389,11 +389,15 @@ test("campus configuration is generic and not preseeded for a specific school", 
     campuses: [{ campus_code: "88", campus_name: "主校区", sort_order: 1, status: "active" }],
     buildings: [{ building_code: "B8803", building_name: "综合楼", campus_zone: "主校区", building_number: 3 }],
   });
+  const noCampusDictionary = FloorplanDomain.normalizeDataset({
+    buildings: [{ building_code: "B0103", building_name: "无字典楼", campus_zone: "杭州校区", building_number: 3 }],
+  });
 
   assert.deepEqual(Array.from(empty.campuses), []);
   assert.ok(FloorplanDomain.DATASETS.some((item) => item.key === "campuses"));
   assert.equal(normalized.campuses[0].campus_code, "88");
   assert.equal(FloorplanDomain.generateBuildingCode(normalized.buildings[0]), "B8803");
+  assert.equal(noCampusDictionary.buildings[0].campus_code, "");
 });
 
 test("classroom spaces render gray even when assigned to a college", () => {
@@ -2068,6 +2072,57 @@ test("raw maintenance replace buildings writes relation tables and projected dat
   assert.ok(result.dataset.buildings.some((building) => building.building_name === "关系楼-已维护"));
 });
 
+test("raw maintenance campus edits migrate relational building campus codes", () => {
+  const db = createActiveDatasetTestDb(activeApplyDataset({
+    campuses: [{ campus_code: "C01", campus_name: "旧校区", sort_order: 1, status: "active" }],
+    buildings: [{ id: "B0101", building_code: "B0101", building_name: "一号楼", campus_code: "C01", campus_zone: "旧校区", building_number: 1, sort_order: 1 }],
+  }));
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["campuses", "buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  RelationalStore.syncFromVisibleDataset(db, datasetService.getActiveDataset().dataset, []);
+  const service = createRawMaintenanceService(db, datasetService);
+
+  service.submitActiveRawMaintenanceAction("campuses", {
+    action: "replaceRows",
+    expectedRevision: 1,
+    rows: [{
+      id: "C01",
+      campus_code: "C02",
+      campus_name: "新校区",
+      sort_order: 1,
+      status: "active",
+      notes: "",
+      __original: { campus_code: "C01", campus_name: "旧校区" },
+    }],
+  }, { id: 1, username: "admin", role: "admin" });
+
+  const building = db.prepare("SELECT campus_code, campus_zone FROM buildings WHERE building_code = 'B0101'").get();
+  assert.equal(building.campus_code, "C02");
+  assert.equal(building.campus_zone, "新校区");
+  const projected = DatasetProjection.projectVisibleDataset(db, { id: 1, username: "admin", role: "admin" });
+  const projectedBuilding = projected.buildings.find((row) => row.building_code === "B0101");
+  assert.equal(projectedBuilding.campus_code, "C02");
+  assert.equal(projectedBuilding.campus_zone, "新校区");
+});
+
+test("relational schema blocks deleting a campus referenced by buildings", () => {
+  const db = createActiveDatasetTestDb(activeApplyDataset({
+    campuses: [{ campus_code: "C01", campus_name: "主校区", sort_order: 1, status: "active" }],
+    buildings: [{ id: "B0101", building_code: "B0101", building_name: "一号楼", campus_code: "C01", campus_zone: "主校区", building_number: 1, sort_order: 1 }],
+  }));
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["campuses", "buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  RelationalStore.syncFromVisibleDataset(db, datasetService.getActiveDataset().dataset, []);
+
+  assert.throws(() => {
+    db.prepare("DELETE FROM campuses WHERE campus_code = 'C01'").run();
+  }, /campus_referenced_by_buildings/);
+});
+
 test("raw maintenance delete building cascades structure rows and invalidates assignments", () => {
   const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
   seedRelationalProjectionFixture(db);
@@ -2814,6 +2869,15 @@ test("medium viewport stacks compare plans while floor thumbnails scroll horizon
   assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-x:\s*auto/);
 });
 
+test("narrow viewport keeps each thumbnail group horizontal above the main floorplan", () => {
+  const css = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
+
+  assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.compare-column\s*\{[\s\S]*?grid-template-columns:\s*minmax\(180px,\s*240px\) minmax\(0,\s*1fr\)/);
+  assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?grid-auto-flow:\s*column/);
+  assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-x:\s*auto/);
+  assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-y:\s*hidden/);
+});
+
 test("data editor no longer exposes the business edit tab or script", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
@@ -2829,6 +2893,16 @@ test("data editor no longer exposes the business edit tab or script", () => {
   assert.match(rawEditorSource, /els\.addRowBtn\.textContent = "新增行"/);
   assert.match(rawEditorSource, /els\.applyTableBtn\.textContent = "应用修改"/);
   assert.match(rawEditorSource, /els\.downloadSheetBtn\.hidden = false/);
+});
+
+test("raw building editor links campus field to campus dictionary options", () => {
+  const rawEditorSource = fs.readFileSync(path.join(__dirname, "..", "js", "app", "raw-editor.js"), "utf8");
+
+  assert.match(rawEditorSource, /RAW_MAINTENANCE_KEYS[\s\S]*campuses/);
+  assert.match(rawEditorSource, /campusSelectOptionsHtml/);
+  assert.match(rawEditorSource, /select\[data-row\]\[data-key\]/);
+  assert.match(rawEditorSource, /key === "campus_code"/);
+  assert.match(rawEditorSource, /state\.data\.campuses/);
 });
 
 test("floor segment names persist and appear in room segment selectors", () => {
