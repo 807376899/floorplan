@@ -463,6 +463,58 @@ test("relational projection exposes only campus_code for building campus linkage
   assert.equal(Object.hasOwn(projected.buildings[0], "campus_zone"), false);
 });
 
+test("relational schema can bootstrap repeatedly after campus_zone column removal", () => {
+  const db = new DatabaseSync(":memory:");
+  RelationalStore.ensureRelationalSchema(db);
+  RelationalStore.ensureRelationalSchema(db);
+  db.prepare(`
+    INSERT INTO buildings (id, building_code, building_name, campus_code, building_number, sort_order)
+    VALUES ('B0101', 'B0101', '一号楼', '', 1, 1)
+  `).run();
+
+  assert.doesNotThrow(() => RelationalStore.ensureRelationalSchema(db));
+  assert.doesNotThrow(() => DatasetProjection.projectVisibleDataset(db, { id: 1, username: "admin", role: "admin" }, {
+    fallbackDataset: { buildings: [], campuses: [] },
+  }));
+  assert.deepEqual(db.prepare("PRAGMA table_info(buildings)").all().map((row) => row.name).includes("campus_zone"), false);
+});
+
+test("legacy campus_zone column is migrated before it is removed", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(`
+    CREATE TABLE buildings (
+      id TEXT PRIMARY KEY,
+      building_code TEXT NOT NULL UNIQUE,
+      building_name TEXT NOT NULL DEFAULT '',
+      campus_code TEXT NOT NULL DEFAULT '',
+      campus_zone TEXT NOT NULL DEFAULT '',
+      building_number INTEGER NOT NULL DEFAULT 0,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      notes TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT ''
+    );
+    CREATE TABLE campuses (
+      id TEXT PRIMARY KEY,
+      campus_code TEXT NOT NULL UNIQUE,
+      campus_name TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'active',
+      notes TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT ''
+    );
+  `);
+  db.prepare("INSERT INTO campuses (id, campus_code, campus_name) VALUES ('C02', 'C02', '新增校区')").run();
+  db.prepare("INSERT INTO buildings (id, building_code, building_name, campus_zone) VALUES ('B0201', 'B0201', '新增楼', '新增校区')").run();
+
+  RelationalStore.ensureRelationalSchema(db);
+  const building = db.prepare("SELECT campus_code FROM buildings WHERE building_code = 'B0201'").get();
+
+  assert.equal(building.campus_code, "C02");
+  assert.equal(db.prepare("PRAGMA table_info(buildings)").all().some((row) => row.name === "campus_zone"), false);
+});
+
 test("classroom spaces render gray even when assigned to a college", () => {
   const { FloorplanRender } = loadBrowserModules();
   const floorplanEl = new StubElement();

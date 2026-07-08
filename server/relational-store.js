@@ -230,23 +230,21 @@ function backfillCampusRelationsFromLegacy(db) {
     for (const campus of dataset?.campuses || []) upsertCampus(db, campus, now);
   }
   if (!hasColumn(db, "buildings", "campus_zone")) return;
-  db.prepare(`
-    UPDATE buildings
-    SET campus_code = (
-      SELECT campuses.campus_code
-      FROM campuses
-      WHERE campuses.campus_name = buildings.campus_zone
-      LIMIT 1
-    ),
-    updated_at = ?
-    WHERE campus_code = ''
-      AND campus_zone <> ''
-      AND EXISTS (
-        SELECT 1
-        FROM campuses
-        WHERE campuses.campus_name = buildings.campus_zone
-      )
-  `).run(now);
+  let legacyRows = [];
+  try {
+    legacyRows = db.prepare("SELECT building_code, campus_zone FROM buildings WHERE campus_code = '' AND campus_zone <> ''").all();
+  } catch (error) {
+    if (!String(error?.message || "").includes("campus_zone")) throw error;
+    return;
+  }
+  const campusByName = new Map(db.prepare("SELECT campus_code, campus_name FROM campuses").all()
+    .map((campus) => [text(campus.campus_name), text(campus.campus_code)])
+    .filter(([name, code]) => name && code));
+  const update = db.prepare("UPDATE buildings SET campus_code = ?, updated_at = ? WHERE building_code = ?");
+  for (const row of legacyRows) {
+    const campusCode = campusByName.get(text(row.campus_zone));
+    if (campusCode) update.run(campusCode, now, row.building_code);
+  }
 }
 
 function syncFromVisibleDataset(db, dataset, copies = []) {
