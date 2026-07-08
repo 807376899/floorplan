@@ -2621,12 +2621,16 @@ button,
   .compare-columns {
     grid-template-columns: 1fr;
     gap: 10px;
+    overflow-x: auto;
+    overflow-y: visible;
+    scrollbar-gutter: stable;
   }
 
   .compare-column {
     grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
     align-items: stretch;
-    min-width: 0;
+    width: max-content;
+    min-width: 100%;
   }
 
   .floor-thumbs {
@@ -2634,9 +2638,9 @@ button,
     grid-auto-columns: minmax(150px, 180px);
     grid-template-columns: none;
     align-items: stretch;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-gutter: stable;
+    width: max-content;
+    overflow-x: visible;
+    overflow-y: visible;
   }
 
   .floor-thumb {
@@ -2684,12 +2688,16 @@ button,
 
   .compare-columns {
     grid-template-columns: 1fr;
+    overflow-x: auto;
+    overflow-y: visible;
+    scrollbar-gutter: stable;
   }
 
   .compare-column {
     grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
     align-items: stretch;
-    min-width: 0;
+    width: max-content;
+    min-width: 100%;
   }
 
   .floor-thumbs {
@@ -2697,9 +2705,9 @@ button,
     grid-auto-columns: minmax(145px, 170px);
     grid-template-columns: none;
     align-items: stretch;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-gutter: stable;
+    width: max-content;
+    overflow-x: visible;
+    overflow-y: visible;
   }
 
   .floor-thumb {

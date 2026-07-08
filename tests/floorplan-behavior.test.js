@@ -2864,18 +2864,21 @@ test("medium viewport stacks compare plans while floor thumbnails scroll horizon
   const css = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
 
   assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.compare-columns\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
+  assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.compare-columns\s*\{[\s\S]*?overflow-x:\s*auto/);
   assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.compare-column\s*\{[\s\S]*?grid-template-columns:\s*minmax\(220px,\s*280px\) minmax\(0,\s*1fr\)/);
   assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?grid-auto-flow:\s*column/);
-  assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-x:\s*auto/);
+  assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-x:\s*visible/);
+  assert.match(css, /@media \(min-width: 1121px\) and \(max-width: 1360px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-y:\s*visible/);
 });
 
 test("narrow viewport keeps each thumbnail group horizontal above the main floorplan", () => {
   const css = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
 
   assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.compare-column\s*\{[\s\S]*?grid-template-columns:\s*minmax\(180px,\s*240px\) minmax\(0,\s*1fr\)/);
+  assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.compare-columns\s*\{[\s\S]*?overflow-x:\s*auto/);
   assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?grid-auto-flow:\s*column/);
-  assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-x:\s*auto/);
-  assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-y:\s*hidden/);
+  assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-x:\s*visible/);
+  assert.match(css, /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.floor-thumbs\s*\{[\s\S]*?overflow-y:\s*visible/);
 });
 
 test("data editor no longer exposes the business edit tab or script", () => {
