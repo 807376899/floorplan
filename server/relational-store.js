@@ -5,7 +5,6 @@ function ensureRelationalSchema(db) {
       building_code TEXT NOT NULL UNIQUE,
       building_name TEXT NOT NULL DEFAULT '',
       campus_code TEXT NOT NULL DEFAULT '',
-      campus_zone TEXT NOT NULL DEFAULT '',
       building_number INTEGER NOT NULL DEFAULT 0,
       sort_order INTEGER NOT NULL DEFAULT 0,
       notes TEXT NOT NULL DEFAULT '',
@@ -206,6 +205,7 @@ function ensureRelationalSchema(db) {
     END;
   `);
   backfillCampusRelationsFromLegacy(db);
+  dropColumnIfExists(db, "buildings", "campus_zone");
 }
 
 function tableExists(db, table) {
@@ -229,6 +229,7 @@ function backfillCampusRelationsFromLegacy(db) {
     const dataset = readLegacyActiveDataset(db);
     for (const campus of dataset?.campuses || []) upsertCampus(db, campus, now);
   }
+  if (!hasColumn(db, "buildings", "campus_zone")) return;
   db.prepare(`
     UPDATE buildings
     SET campus_code = (
@@ -331,7 +332,11 @@ function projectGlobalReferenceRows(db, dataset) {
   ensureRelationalSchema(db);
   const next = { ...(dataset || {}) };
   const campuses = selectRows(db, "campuses", "sort_order ASC, campus_code ASC");
-  const buildings = selectRows(db, "buildings", "sort_order ASC, building_code ASC");
+  const buildings = db.prepare(`
+    SELECT id, building_code, building_name, campus_code, building_number, sort_order, notes, created_at, updated_at
+    FROM buildings
+    ORDER BY sort_order ASC, building_code ASC
+  `).all();
   const floorSegments = selectRows(db, "floor_segments", "building_code ASC, floor_code ASC, segment_code ASC");
   const colleges = selectRows(db, "colleges", "sort_order ASC, college_code ASC");
   const majors = selectRows(db, "majors", "sort_order ASC, major_code ASC");
@@ -392,6 +397,19 @@ function ensureColumn(db, table, column, definition) {
   if (!columns.has(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 
+function hasColumn(db, table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+
+function dropColumnIfExists(db, table, column) {
+  if (!hasColumn(db, table, column)) return;
+  try {
+    db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+  } catch {
+    // Older SQLite files may keep the legacy column physically; projections and writes no longer use it.
+  }
+}
+
 function upsertCampus(db, row, now) {
   const code = text(row.campus_code) || text(row.id);
   const name = text(row.campus_name) || code;
@@ -422,12 +440,11 @@ function upsertBuilding(db, row, now) {
   const code = text(row.building_code) || text(row.id);
   if (!code) return;
   db.prepare(`
-    INSERT INTO buildings (id, building_code, building_name, campus_code, campus_zone, building_number, sort_order, notes, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO buildings (id, building_code, building_name, campus_code, building_number, sort_order, notes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(building_code) DO UPDATE SET
       building_name = excluded.building_name,
       campus_code = excluded.campus_code,
-      campus_zone = excluded.campus_zone,
       building_number = excluded.building_number,
       sort_order = excluded.sort_order,
       notes = excluded.notes,
@@ -437,7 +454,6 @@ function upsertBuilding(db, row, now) {
     code,
     text(row.building_name),
     persistedCampusCode(db, row),
-    text(row.campus_zone),
     integer(row.building_number),
     integer(row.sort_order),
     text(row.notes),

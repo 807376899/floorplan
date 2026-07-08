@@ -10,7 +10,7 @@ const COLLEGE_COLORS = [
 ];
 
 const repairFieldMap = {
-  buildings: ["building_name", "campus_zone", "notes"],
+  buildings: ["building_name", "notes"],
   floor_segments: ["notes"],
   spaces: ["network_segment", "notes"],
   labs: ["lab_name", "college", "major", "lab_type", "director", "notes"],
@@ -541,20 +541,20 @@ function createDatasetService(db, config, audit) {
 
   function applyCampusConfig(buildings, campuses) {
     const activeCampuses = (campuses || []).filter((campus) => activeStatus(campus.status) === "active");
-    const byName = new Map(activeCampuses
-      .map((campus) => [String(campus.campus_name || "").trim(), campus])
-      .filter(([name]) => name));
     const byCode = new Map(activeCampuses
       .map((campus) => [String(campus.campus_code || "").trim(), campus])
       .filter(([code]) => code));
+    const byName = new Map(activeCampuses
+      .map((campus) => [String(campus.campus_name || "").trim(), campus])
+      .filter(([name]) => name));
     return (buildings || []).map((building) => {
-      const configured = byName.get(String(building.campus_zone || "").trim()) ||
-        byCode.get(String(building.campus_code || "").trim()) ||
+      const configured = byCode.get(String(building.campus_code || "").trim()) ||
+        byName.get(String(building.campus_zone || "").trim()) ||
         null;
+      const { campus_zone: _legacyCampusZone, ...rest } = building;
       return {
-        ...building,
-        campus_code: configured?.campus_code || building.campus_code || "",
-        campus_zone: configured?.campus_name || building.campus_zone || "",
+        ...rest,
+        campus_code: configured?.campus_code || "",
         campus_sort_order: configured ? Number(configured.sort_order || 0) : 9999,
       };
     });
@@ -587,7 +587,7 @@ function createDatasetService(db, config, audit) {
       if (existing) {
         Object.assign(existing, {
           building_name: existing.building_name || next.building_name,
-          campus_zone: existing.campus_zone === "未分区" ? next.campus_zone : existing.campus_zone,
+          campus_code: existing.campus_code || next.campus_code,
           building_number: existing.building_number || next.building_number,
           notes: existing.notes || next.notes,
         });

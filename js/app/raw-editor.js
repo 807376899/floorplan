@@ -149,15 +149,10 @@
 
     function editorCellHtml(key, row, rowIndex, inputDisabled) {
       if (state.editorKey === "buildings" && key === "campus_code") {
-        const selectedCode = row.campus_code || campusCodeForName(row.campus_zone);
+        const selectedCode = row.campus_code || "";
         return `<td data-key="${key}"><select data-row="${rowIndex}" data-key="${key}" ${inputDisabled}>${campusSelectOptionsHtml(selectedCode)}</select></td>`;
       }
       return `<td data-key="${key}"><input data-row="${rowIndex}" data-key="${key}" value="${escapeHtml(row[key] ?? "")}" ${inputDisabled}></td>`;
-    }
-
-    function campusCodeForName(name) {
-      const target = String(name || "").trim();
-      return (state.data.campuses || []).find((campus) => String(campus.campus_name || "").trim() === target)?.campus_code || "";
     }
 
     function campusSelectOptionsHtml(selectedCode) {
@@ -306,7 +301,7 @@
     }
     
     function applyBuildingEditorRows(rows) {
-      const normalizedRows = rows.map((row) => normalizeBuilding(withCampusZone(row)));
+      const normalizedRows = rows.map((row) => normalizeBuilding(row));
       const nextCodes = new Set();
       for (const building of normalizedRows) {
         const code = String(building.building_code || "").trim();
@@ -345,25 +340,14 @@
       rows.forEach((row, index) => {
         const original = row.__original || row;
         const originalCode = String(original.campus_code || "").trim();
-        const originalName = String(original.campus_name || "").trim();
         const nextCode = String(normalizedRows[index].campus_code || "").trim();
-        const nextName = String(normalizedRows[index].campus_name || "").trim();
         state.data.buildings = state.data.buildings.map((building) => {
           const matchesCode = originalCode && String(building.campus_code || "").trim() === originalCode;
-          const matchesName = originalName && String(building.campus_zone || "").trim() === originalName;
-          return matchesCode || matchesName ? normalizeBuilding({ ...building, campus_code: nextCode, campus_zone: nextName }) : building;
+          return matchesCode ? normalizeBuilding({ ...building, campus_code: nextCode }) : building;
         });
       });
       state.data.campuses = normalizedRows;
       return { ok: true };
-    }
-
-    function withCampusZone(row) {
-      const campus = (state.data.campuses || []).find((item) => String(item.campus_code || "").trim() === String(row.campus_code || "").trim());
-      return {
-        ...row,
-        campus_zone: campus?.campus_name || row.campus_zone || "",
-      };
     }
     
     function applyPlanEditorRows(rows) {
@@ -487,8 +471,7 @@
       }
       if (key === "campuses") {
         const code = String(row.campus_code || "").trim();
-        const name = String(row.campus_name || "").trim();
-        if (state.data.buildings.some((item) => String(item.campus_code || "").trim() === code || String(item.campus_zone || "").trim() === name)) {
+        if (state.data.buildings.some((item) => String(item.campus_code || "").trim() === code)) {
           return "该校区仍被教学楼引用，不能删除。";
         }
       }

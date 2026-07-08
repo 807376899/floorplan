@@ -32,7 +32,6 @@
       building_code: code,
       building_name: text(row.building_name) || code,
       campus_code: text(row.campus_code),
-      campus_zone: text(row.campus_zone),
       building_number: numberValue(row.building_number, 0),
       sort_order: numberValue(row.sort_order, 0),
       notes: text(row.notes),
@@ -182,10 +181,14 @@
   }
 
   function applyBuildingRows(dataset, rows) {
-    const normalizedRows = normalizeRows("buildings", rows);
+    const campusCodes = new Set((dataset.campuses || []).map((campus) => text(campus.campus_code)).filter(Boolean));
+    const campusByName = new Map((dataset.campuses || []).map((campus) => [text(campus.campus_name), text(campus.campus_code)]).filter(([name, code]) => name && code));
+    const normalizedRows = (rows || []).map((row) => normalizeBuilding({
+      ...row,
+      campus_code: text(row.campus_code) || campusByName.get(text(row.campus_zone)) || "",
+    }));
     const duplicate = validateUnique(normalizedRows, "building_code", "教学楼编码");
     if (duplicate) return { ok: false, message: duplicate };
-    const campusCodes = new Set((dataset.campuses || []).map((campus) => text(campus.campus_code)).filter(Boolean));
     const invalidCampus = normalizedRows.find((building) => text(building.campus_code) && !campusCodes.has(text(building.campus_code)));
     if (invalidCampus) return { ok: false, message: `教学楼“${invalidCampus.building_name || invalidCampus.building_code}”引用的校区编码不存在。` };
     rows.forEach((row, index) => {
@@ -210,15 +213,12 @@
     rows.forEach((row, index) => {
       const original = row.__original || row;
       const originalCode = text(original.campus_code);
-      const originalName = text(original.campus_name);
       const nextCode = text(normalizedRows[index].campus_code);
-      const nextName = text(normalizedRows[index].campus_name);
       if (!nextCode) return;
       dataset.buildings = (dataset.buildings || []).map((building) => {
         const matchesCode = originalCode && text(building.campus_code) === originalCode;
-        const matchesName = originalName && text(building.campus_zone) === originalName;
-        if (!matchesCode && !matchesName) return building;
-        return normalizeBuilding({ ...building, campus_code: nextCode, campus_zone: nextName });
+        if (!matchesCode) return building;
+        return normalizeBuilding({ ...building, campus_code: nextCode });
       });
     });
     dataset.campuses = normalizedRows;
@@ -281,8 +281,7 @@
   function deleteBlocker(dataset, key, row) {
     if (key === "campuses") {
       const code = text(row.campus_code);
-      const name = text(row.campus_name);
-      if ((dataset.buildings || []).some((item) => text(item.campus_zone) === name || text(item.campus_code) === code)) {
+      if ((dataset.buildings || []).some((item) => text(item.campus_code) === code)) {
         return "该校区仍被教学楼引用，不能删除。";
       }
     }

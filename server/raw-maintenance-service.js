@@ -52,12 +52,11 @@ function upsertBuilding(db, row, now) {
   const code = text(row.building_code || row.id);
   if (!code) return;
   db.prepare(`
-    INSERT INTO buildings (id, building_code, building_name, campus_code, campus_zone, building_number, sort_order, notes, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO buildings (id, building_code, building_name, campus_code, building_number, sort_order, notes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(building_code) DO UPDATE SET
       building_name = excluded.building_name,
       campus_code = excluded.campus_code,
-      campus_zone = excluded.campus_zone,
       building_number = excluded.building_number,
       sort_order = excluded.sort_order,
       notes = excluded.notes,
@@ -67,7 +66,6 @@ function upsertBuilding(db, row, now) {
     code,
     text(row.building_name) || code,
     text(row.campus_code),
-    text(row.campus_zone),
     numberValue(row.building_number, 0),
     numberValue(row.sort_order, 0),
     text(row.notes),
@@ -239,17 +237,13 @@ function replaceCampuses(db, rows, now) {
   for (const row of rows || []) {
     const original = row.__original || row;
     const originalCode = text(original.campus_code);
-    const originalName = text(original.campus_name);
     const nextCode = text(row.campus_code);
-    const nextName = text(row.campus_name);
-    if (!nextCode || (!originalCode && !originalName)) continue;
+    if (!nextCode || !originalCode) continue;
     db.prepare(`
       UPDATE buildings
-      SET campus_code = ?, campus_zone = ?, updated_at = ?
+      SET campus_code = ?, updated_at = ?
       WHERE campus_code = ?
-        OR (campus_code = '' AND campus_zone = ?)
-        OR campus_zone = ?
-    `).run(nextCode, nextName, now, originalCode, originalName, originalName);
+    `).run(nextCode, now, originalCode);
   }
   const keep = new Set((rows || []).map((row) => text(row.campus_code)).filter(Boolean));
   for (const row of db.prepare("SELECT campus_code AS code FROM campuses").all()) {

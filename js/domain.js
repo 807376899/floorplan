@@ -481,7 +481,7 @@
 
   function compareBuildings(a, b) {
     return numberValue(a.campus_sort_order, 9999) - numberValue(b.campus_sort_order, 9999)
-      || compare(a.campus_zone, b.campus_zone)
+      || compare(a.campus_code, b.campus_code)
       || numberValue(a.sort_order, 0) - numberValue(b.sort_order, 0)
       || numberValue(a.building_number, 0) - numberValue(b.building_number, 0)
       || compare(a.building_name, b.building_name);
@@ -520,7 +520,7 @@
       copy_id: row.copy_id || row.copyId || "",
       building_code: code,
       building_name: row.building_name || code,
-      campus_zone: row.campus_zone || "未分区",
+      _legacy_campus_zone: row._legacy_campus_zone || row.campus_zone || "",
       campus_code: row.campus_code || row.campusCode || "",
       campus_sort_order: numberValue(row.campus_sort_order ?? row.campusSortOrder, 9999),
       building_number: numberValue(row.building_number, 0),
@@ -936,7 +936,7 @@
       const code = row.building_code;
       const key = scopedBuildingKey(row);
       if (code && !byCode.has(key)) {
-        byCode.set(key, normalizeBuilding({ copy_id: row.copy_id || row.copyId || "", building_code: code, building_name: code, campus_zone: "未分区", building_number: 0, notes: "" }));
+        byCode.set(key, normalizeBuilding({ copy_id: row.copy_id || row.copyId || "", building_code: code, building_name: code, building_number: 0, notes: "" }));
       }
     }
     return [...byCode.values()].sort(compareBuildings);
@@ -948,18 +948,19 @@
     const byName = new Map(activeCampuses.map((campus) => [String(campus.campus_name || "").trim(), campus]));
     return (buildings || []).map((building) => {
       const configured = byCode.get(String(building.campus_code || "").trim()) ||
-        byName.get(String(building.campus_zone || "").trim());
+        byName.get(String(building._legacy_campus_zone || building.campus_zone || "").trim());
       if (!configured) {
+        const { campus_zone: _legacyCampusZone, _legacy_campus_zone: _legacyCampusName, ...rest } = building;
         return {
-          ...building,
-          campus_code: building.campus_code || "",
+          ...rest,
+          campus_code: "",
           campus_sort_order: 9999,
         };
       }
+      const { campus_zone: _legacyCampusZone, _legacy_campus_zone: _legacyCampusName, ...rest } = building;
       return {
-        ...building,
+        ...rest,
         campus_code: configured.campus_code,
-        campus_zone: configured.campus_name || building.campus_zone,
         campus_sort_order: numberValue(configured.sort_order, 9999),
       };
     }).sort(compareBuildings);
@@ -1015,9 +1016,13 @@
 
   function sampleDataset() {
     return {
+      campuses: [
+        { campus_code: "01", campus_name: "本部", sort_order: 1, status: "active", notes: "" },
+        { campus_code: "02", campus_name: "西校区", sort_order: 2, status: "active", notes: "" },
+      ],
       buildings: [
-        { building_code: "B01", building_name: "明理楼", campus_zone: "本部", building_number: 1, notes: "" },
-        { building_code: "B02", building_name: "博学楼", campus_zone: "西校区", building_number: 2, notes: "" },
+        { building_code: "B01", building_name: "明理楼", campus_code: "01", building_number: 1, notes: "" },
+        { building_code: "B02", building_name: "博学楼", campus_code: "02", building_number: 2, notes: "" },
       ],
       floor_segments: [
         { building_code: "B01", floor_code: "1", segment_code: "main", start_x_m: 0, start_y_m: 0, end_x_m: 28, end_y_m: 0, width_m: 2.4, element_type: "corridor", notes: "主走廊" },

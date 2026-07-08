@@ -268,8 +268,8 @@ function copiedReferenceDataset(copyId, overrides = {}) {
 function seedRelationalProjectionFixture(db) {
   RelationalStore.ensureRelationalSchema(db);
   db.prepare(`
-    INSERT INTO buildings (id, building_code, building_name, campus_zone, building_number, sort_order)
-    VALUES ('B0101', 'B0101', '关系楼', '下沙校区', 1, 1)
+    INSERT INTO buildings (id, building_code, building_name, building_number, sort_order)
+    VALUES ('B0101', 'B0101', '关系楼', 1, 1)
   `).run();
   db.prepare(`
     INSERT INTO floor_segments (id, building_code, floor_code, segment_code, start_x_m, start_y_m, end_x_m, end_y_m, width_m, element_type)
@@ -398,6 +398,69 @@ test("campus configuration is generic and not preseeded for a specific school", 
   assert.equal(normalized.campuses[0].campus_code, "88");
   assert.equal(FloorplanDomain.generateBuildingCode(normalized.buildings[0]), "B8803");
   assert.equal(noCampusDictionary.buildings[0].campus_code, "");
+});
+
+test("campus_code is authoritative over stale legacy campus_zone", () => {
+  const datasetService = createDatasetService({}, {
+    datasetKeys: ["campuses", "buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, {});
+  const normalized = datasetService.normalizeIncomingDataset({
+    campuses: [
+      { campus_code: "01", campus_name: "旧校区", sort_order: 1, status: "active" },
+      { campus_code: "02", campus_name: "新增校区", sort_order: 2, status: "active" },
+    ],
+    buildings: [
+      { building_code: "B0201", building_name: "新增楼", campus_code: "02", campus_zone: "旧校区", building_number: 1 },
+    ],
+  });
+
+  assert.equal(normalized.buildings[0].campus_code, "02");
+  assert.equal(Object.hasOwn(normalized.buildings[0], "campus_zone"), false);
+});
+
+test("raw maintenance building rows strip stale campus_zone and keep selected campus_code", () => {
+  const dataset = {
+    campuses: [
+      { campus_code: "01", campus_name: "旧校区", sort_order: 1, status: "active" },
+      { campus_code: "02", campus_name: "新增校区", sort_order: 2, status: "active" },
+    ],
+    buildings: [],
+    floor_segments: [],
+    spaces: [],
+    plan_assignments: [],
+  };
+  const actions = require("../js/app/raw-maintenance-actions");
+  const applied = actions.applyAction(dataset, "buildings", {
+    action: "replaceRows",
+    rows: [
+      { building_code: "B0201", building_name: "新增楼", campus_code: "02", campus_zone: "旧校区", building_number: 1 },
+    ],
+  });
+
+  assert.equal(applied.ok, true);
+  assert.equal(dataset.buildings[0].campus_code, "02");
+  assert.equal(Object.hasOwn(dataset.buildings[0], "campus_zone"), false);
+});
+
+test("relational projection exposes only campus_code for building campus linkage", () => {
+  const db = new DatabaseSync(":memory:");
+  RelationalStore.ensureRelationalSchema(db);
+  RelationalStore.syncFromVisibleDataset(db, {
+    campuses: [
+      { campus_code: "01", campus_name: "旧校区", sort_order: 1, status: "active" },
+      { campus_code: "02", campus_name: "新增校区", sort_order: 2, status: "active" },
+    ],
+    buildings: [
+      { building_code: "B0201", building_name: "新增楼", campus_code: "02", campus_zone: "旧校区", building_number: 1 },
+    ],
+  }, []);
+
+  const stored = db.prepare("SELECT campus_code FROM buildings WHERE building_code = 'B0201'").get();
+  const projected = RelationalStore.projectGlobalReferenceRows(db, {});
+
+  assert.equal(stored.campus_code, "02");
+  assert.equal(projected.buildings[0].campus_code, "02");
+  assert.equal(Object.hasOwn(projected.buildings[0], "campus_zone"), false);
 });
 
 test("classroom spaces render gray even when assigned to a college", () => {
@@ -2098,13 +2161,12 @@ test("raw maintenance campus edits migrate relational building campus codes", ()
     }],
   }, { id: 1, username: "admin", role: "admin" });
 
-  const building = db.prepare("SELECT campus_code, campus_zone FROM buildings WHERE building_code = 'B0101'").get();
+  const building = db.prepare("SELECT campus_code FROM buildings WHERE building_code = 'B0101'").get();
   assert.equal(building.campus_code, "C02");
-  assert.equal(building.campus_zone, "新校区");
   const projected = DatasetProjection.projectVisibleDataset(db, { id: 1, username: "admin", role: "admin" });
   const projectedBuilding = projected.buildings.find((row) => row.building_code === "B0101");
   assert.equal(projectedBuilding.campus_code, "C02");
-  assert.equal(projectedBuilding.campus_zone, "新校区");
+  assert.equal(Object.hasOwn(projectedBuilding, "campus_zone"), false);
 });
 
 test("relational schema blocks deleting a campus referenced by buildings", () => {

@@ -2701,7 +2701,6 @@ function nextGeneratedBuildingDraft() {
     building_code: "",
     building_name: "新增教学楼",
     campus_code: campus?.campus_code || "",
-    campus_zone: campus?.campus_name || "",
     building_number: buildingNumber,
     notes: "",
   };
@@ -3203,10 +3202,15 @@ function buildingNumberLabel(building) {
 }
 
 function buildingOptionLabel(building) {
-  const campus = cleanCampusLabel(building?.campus_zone);
+  const campus = cleanCampusLabel(campusNameForBuilding(building));
   const name = building?.building_name || building?.building_code || "";
   const number = buildingNumberLabel(building);
   return `${campus} - ${name}${number ? `（${number}）` : ""}`;
+}
+
+function campusNameForBuilding(building) {
+  const code = String(building?.campus_code || "").trim();
+  return state.data.campuses.find((campus) => String(campus.campus_code || "").trim() === code)?.campus_name || "未分区";
 }
 
 function planById(id) {
