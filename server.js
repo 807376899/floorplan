@@ -44,7 +44,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    serveStatic(res, pathname);
+    serveStatic(req, res, pathname);
   } catch (error) {
     const statusCode = error.statusCode || 500;
     if (statusCode >= 500) console.error(error);

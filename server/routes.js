@@ -180,7 +180,7 @@ function createRouteApi(services) {
         action: String(body.action || ""),
         revision: result.copyRevision,
       });
-      return sendVisibleDataset(res, context, services, 200, { ok: true, copyRevision: result.copyRevision });
+      return sendActionResult(res, result);
     }
 
     const copyDetailActionMatch = pathname.match(/^\/api\/plan-copies\/(\d+)\/detail-actions$/);
@@ -193,7 +193,7 @@ function createRouteApi(services) {
         action: String(body.action || ""),
         revision: result.copyRevision,
       });
-      return sendVisibleDataset(res, context, services, 200, { ok: true, copyRevision: result.copyRevision });
+      return sendActionResult(res, result);
     }
 
     const copyDatasetMatch = pathname.match(/^\/api\/plan-copies\/(\d+)\/dataset$/);
@@ -218,7 +218,7 @@ function createRouteApi(services) {
         action: String(body.action || ""),
         revision: result.revision,
       });
-      return sendVisibleDataset(res, context, services, 200, { ok: true, revision: result.revision });
+      return sendActionResult(res, result);
     }
 
     if (req.method === "POST" && pathname === "/api/dataset/active/assignment-actions") {
@@ -229,7 +229,7 @@ function createRouteApi(services) {
         action: String(body.action || ""),
         revision: result.revision,
       });
-      return sendVisibleDataset(res, context, services, 200, { ok: true, revision: result.revision });
+      return sendActionResult(res, result);
     }
 
     const rawMaintenanceActionMatch = pathname.match(/^\/api\/dataset\/active\/raw-maintenance\/([^/]+)\/actions$/);
@@ -243,7 +243,9 @@ function createRouteApi(services) {
         action: String(body.action || ""),
         revision: result.revision,
       });
-      return sendVisibleDataset(res, context, services, 200, { ok: true, revision: result.revision });
+      return sendActionResult(res, result, {
+        maintenance: services.dataset.buildMaintenance(result.dataset),
+      });
     }
 
     if (req.method === "POST" && pathname === "/api/dataset/repair-text") {
@@ -328,6 +330,15 @@ function sendVisibleDataset(res, context, services, statusCode = 200, extra = {}
     planCopies: active.copies,
     maintenance: services.dataset.buildMaintenance(active.dataset),
   });
+}
+
+function sendActionResult(res, result, extra = {}) {
+  const payload = { ok: true, ...extra };
+  if (result.revision !== undefined) payload.revision = result.revision;
+  if (result.copyRevision !== undefined) payload.copyRevision = result.copyRevision;
+  if (result.dataset) payload.dataset = result.dataset;
+  if (result.planCopies) payload.planCopies = result.planCopies;
+  return sendJson(res, 200, payload);
 }
 
 async function handleSaveDataset(req, res, context, services) {

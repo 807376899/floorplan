@@ -577,6 +577,58 @@
       return true;
     }
 
+    async function deleteBasketLabAction(itemId) {
+      if (!canEditActivePlan()) {
+        updateStatus("当前账号没有编辑此方案的权限。");
+        return false;
+      }
+      const item = state.moveBasket.items.find((row) => row.id === itemId) || null;
+      if (!item) {
+        updateStatus("未找到待删除的待安置用途。");
+        return false;
+      }
+      if (!item.isSavedUnplaced) {
+        updateStatus("只能删除已保存的待安置用途。");
+        return false;
+      }
+      const label = item.labName || item.labCode || "待安置用途";
+      if (!window.confirm(`确认删除待安置用途“${label}”？此操作只删除该用途信息，不删除任何房间。`)) return false;
+      const itemKey = MoveBasket.basketItemKey(item);
+      const previousData = cloneDataset(state.data);
+      const previousRevision = state.serverRevision;
+      const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
+      const previousBasket = JSON.parse(JSON.stringify(state.moveBasket));
+      state.data.plan_assignments = state.data.plan_assignments.filter((row) => row.id !== item.assignmentId);
+      state.data.labs = state.data.labs.filter((row) =>
+        !(row.id === item.labId || (item.labCode && row.lab_code === item.labCode))
+      );
+      state.data = normalizeDataset(state.data);
+      state.moveBasket = {
+        ...state.moveBasket,
+        items: MoveBasket.removeBasketItemsByKey(state.moveBasket.items, itemKey),
+        editingItemId: state.moveBasket.editingItemId === itemId ? "" : state.moveBasket.editingItemId,
+        editDraft: state.moveBasket.editingItemId === itemId ? null : state.moveBasket.editDraft,
+        editErrors: state.moveBasket.editingItemId === itemId ? {} : state.moveBasket.editErrors,
+      };
+      if (!state.moveBasket.items.length) state.moveBasket.isOpen = false;
+      renderEditor();
+      renderApp();
+      try {
+        if (state.serverMode) {
+          await saveMoveBasketAssignmentsToServer("deleteUnplacedUnit", assignmentPayloadFromItem(item));
+        }
+      } catch (error) {
+        state.data = normalizeDataset(previousData);
+        state.serverRevision = previousRevision;
+        state.planCopies = previousCopies;
+        state.moveBasket = previousBasket;
+        refreshStateAndRender(`删除待安置用途失败：${error.message}`, { stamp: false, forceMoveReset: true });
+        return false;
+      }
+      refreshStateAndRender(`已删除待安置用途 ${label}。`, { stamp: false, forceMoveReset: true });
+      return true;
+    }
+
 
     return {
       moveBasketNormalizeAssignment,
@@ -608,6 +660,7 @@
       markRoomDirectDropTargets,
       setRoomDirectTarget,
       setMoveBasketTarget,
+      deleteBasketLabAction,
     };
   }
 

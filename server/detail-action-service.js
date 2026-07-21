@@ -173,7 +173,7 @@ function buildContext(dataset, body, copyId = 0) {
   }
   const space = selectedSpaceFrom(dataset, activePlan, body.selectedSpace || {});
   if (body.action !== "createSpace" && !space) throw httpError(400, "space_not_found", "未找到当前房间");
-  if (copyId && ["editSpace"].includes(body.action)) {
+  if (copyId && ["editSpace", "mergeSpace", "splitSpace"].includes(body.action)) {
     const scoped = ensureScopedRow(dataset, "spaces", space, copyId);
     return buildContextWithSpace(dataset, activePlan, scoped);
   }
@@ -217,6 +217,8 @@ function applyAction(dataset, context, body, copyId = 0) {
   if (body.action === "createSpace") return DetailActions.applyDetailCreateSpace(dataset, context, body.form || {}, deps);
   if (body.action === "editSpace") return DetailActions.applyDetailSpaceEdit(dataset, context, body.form || {}, deps);
   if (body.action === "deleteSpace") return DetailActions.applyDetailDeleteSpace(dataset, context, deps);
+  if (body.action === "mergeSpace") return DetailActions.applyDetailMergeSpace(dataset, context, body.form || {}, deps);
+  if (body.action === "splitSpace") return DetailActions.applyDetailSplitSpace(dataset, context, body.form || {}, deps);
   return { ok: false, message: "未知详情操作。" };
 }
 

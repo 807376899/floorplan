@@ -2,8 +2,12 @@ const fs = require("fs");
 const path = require("path");
 
 function sendJson(res, statusCode, payload) {
-  res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
-  res.end(JSON.stringify(payload));
+  const body = JSON.stringify(payload);
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    "X-Floorplan-Payload-Bytes": String(Buffer.byteLength(body)),
+  });
+  res.end(body);
 }
 
 function httpError(statusCode, code, message) {
@@ -62,7 +66,7 @@ function serializeCookie(name, value, options = {}) {
 }
 
 function createStaticHandler(config) {
-  return function serveStatic(res, pathname) {
+  return function serveStatic(req, res, pathname) {
     const resolvedPath = decodeURIComponent(pathname === "/" ? "/index.html" : pathname);
     const target = path.normalize(path.join(config.root, resolvedPath));
     // 静态服务只暴露项目资源，明确禁止浏览数据库、上传包和备份目录。
@@ -72,17 +76,41 @@ function createStaticHandler(config) {
       return;
     }
 
-    fs.readFile(target, (error, data) => {
+    fs.stat(target, (error, stats) => {
       if (error) {
         res.writeHead(error.code === "ENOENT" ? 404 : 500, { "Content-Type": "text/plain; charset=utf-8" });
         res.end(error.code === "ENOENT" ? "Not found" : "Server error");
         return;
       }
       const ext = path.extname(target).toLowerCase();
-      res.writeHead(200, { "Content-Type": config.contentTypes[ext] || "application/octet-stream" });
-      res.end(data);
+      const etag = staticEtag(stats);
+      const headers = {
+        "Content-Type": config.contentTypes[ext] || "application/octet-stream",
+        "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=3600, must-revalidate",
+        ETag: etag,
+      };
+      if (req.headers?.["if-none-match"] === etag) {
+        res.writeHead(304, headers);
+        res.end();
+        return;
+      }
+      const stream = fs.createReadStream(target);
+      stream.on("error", (readError) => {
+        if (res.headersSent) {
+          res.destroy(readError);
+          return;
+        }
+        res.writeHead(readError.code === "ENOENT" ? 404 : 500, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end(readError.code === "ENOENT" ? "Not found" : "Server error");
+      });
+      res.writeHead(200, headers);
+      stream.pipe(res);
     });
   };
+}
+
+function staticEtag(stats) {
+  return `W/"${stats.size.toString(16)}-${Math.trunc(stats.mtimeMs).toString(16)}"`;
 }
 
 module.exports = {

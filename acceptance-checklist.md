@@ -89,11 +89,13 @@
 - [ ] 右侧表单先展示前门牌、后门牌、骨架段和物理状态；已有空间的前门牌、后门牌、骨架段不可编辑，新增空间除外。
 - [ ] 在详情栏选中空间后，可在同一上下文中维护空间资料和实验室资料，并由系统同步底层关系。
 - [ ] 除教学楼和楼层骨架信息维护之外，详情栏日常编辑可替代物理空间、实验室、方案分配三张原始表的日常编辑；这三张原始表不再作为可见编辑入口。
-- [ ] admin/editor 在可编辑且自己可管理的方案中可从详情栏内联编辑已有实验室、改建当前房间、新增房间，并可在“更多”面板中编辑或删除当前房间资料。
+- [ ] admin/editor 在可编辑且自己可管理的方案中可从详情栏内联编辑已有实验室、改建当前房间、新增房间，并可在“更多”面板中编辑、合并、拆分或删除当前房间资料；“更多”面板按钮和详情栏其他操作按钮风格一致。
 - [ ] 详情栏操作按钮位于详细信息卡片下方且独立于详情卡片滚动区；编辑实验室和改建房间表单显示当前房间门牌、楼栋楼层和空间编码，所属学院和所属专业使用下拉单选，专业按学院联动过滤。
 - [ ] 详情栏“编辑房间”可维护门牌、骨架、所在侧、偏移、长宽、面积、网段和物理状态；修改门牌后空间编码引用同步迁移，已有房间长宽不可清空，长宽有效时面积按乘积计算。
 - [ ] 详情栏“新增房间”可维护门牌、骨架、所在侧、偏移、长宽、面积、网段和物理状态；保存后创建未规划物理房间，不创建用途单元或分配；无可绑定走廊骨架或无法生成空间编码时阻止保存并提示。
-- [ ] 详情栏“更多”点击后在按钮区原位展开操作面板，不通过详情滚动轮或浮层菜单查看；点击面板外或按 `Esc` 可关闭；合并房间和拆分房间入口在功能实现前保持禁用并标注暂未开放，删除房间入口可从当前方案视角删除空间并将相关分配标记为 `Invalid`，实验室资料保留。
+- [ ] 详情栏“更多”点击后在按钮区原位展开操作面板，不通过详情滚动轮或浮层菜单查看；点击面板外或按 `Esc` 可关闭；合并房间和拆分房间入口可打开内联表单，删除房间入口可从当前方案视角删除空间并将相关分配标记为 `Invalid`，实验室资料保留。
+- [ ] 详情栏“合并房间”进入主图点选模式，不再显示目标房间下拉框；只允许点选当前方案下同一楼栋、楼层、走廊骨架、侧向且可用的房间，连续性按同走廊同侧排序区间判断，中间没有未选房间即可，不要求 `offset_m + length_m` 几何无缝；表单显示当前房间、已选数量、已选目标编码和合并后门牌范围，默认前后门牌为所选空间中的最小门牌和最大门牌，实验室名称可编辑；保存后保留当前房间身份，移除目标房间，原当前房间和目标房间的原用途单元进入待安置区，合并后的新用途单元落位到合并房间，其他方案不受影响。
+- [ ] 详情栏“拆分房间”当前只支持沿走廊长度方向拆分，表单明确显示“沿走廊方向”及由骨架推导出的东西向或南北向提示，并提交 `splitAxis = length`；拆分数量默认 2 个且可调整，数量变化后立即渲染对应数量的房间信息输入组；每个拆出房间必须输入前门牌、可不填后门牌，并输入沿走廊长度；拆分出的房间都继承拆分前学院并创建对应落位用途单元，长度合计不等于原房间长度、生成空间编码冲突或收到非 `length` 拆分轴时必须阻止保存并提示。
 - [ ] admin 通过数据编辑中的学院、专业和实验室类型原始表维护基础信息，顶部不再显示重复的“基础信息”独立弹窗入口；详情栏专业按学院联动过滤，停用项不出现在详情栏下拉候选中。
 - [ ] admin 可在教学楼、楼层骨架、学院、专业、实验室类型原始表删除行；删除教学楼级联删除该楼骨架和空间，删除楼层骨架级联删除绑定空间，相关方案分配变为 `Invalid` 且实验室资料保留；非 admin 不显示删除入口，学院/专业/实验室类型被引用时在当前表格附近给出明确阻止提示。
 - [ ] admin 修改楼层骨架的教学楼编码、楼层编码或走廊段编码时，绑定空间同步迁移，分配引用刷新；目标骨架键已存在时保存被阻止，不会把原骨架复制成另一楼层的重复数据。
@@ -119,7 +121,8 @@
 - [ ] 待安置区卡片提供“归位”，也可拖回原位；原空间可用且未被其他 `assigned` 分配占用时自动保存回原空间并移出待安置区，否则给出明确阻止提示。
 - [ ] 从待安置区拖到目标未规划空间后立即保存落位，成功后条目从待安置区移除；仍未落位的实验室保持待安置条目，可继续拖到其他未规划空间。
 - [ ] 主图房间 hover/focus 时显示轻量详情浮层；已落位空间显示实验室详情，未规划空间显示空间摘要；拖拽搬迁或画布平移时浮层不显示。
-- [ ] admin 可删除任意非基线方案中安全可删的实验室，editor 只能删除自己创建且非基线方案中安全可删的实验室；基线方案、被其他空间占用或被其他方案引用的实验室不可删除。
+- [ ] 详情栏不显示“删除用途单元”，服务端也不接受 `deleteLab` 详情动作；用途单元资料只能在待安置区删除。
+- [ ] 待安置区卡片提供“删除”；删除只作用于当前方案未落位 `Invalid` 条目，不删除物理房间。copy-only 用途单元删除后移除当前 copy 的 lab override 和 assignment；继承自全局基准的用途单元删除后写入当前 copy 的 `plan_lab_overrides.operation = 'deleted'`，刷新后不会复活；其他方案分配不受影响，当前方案内仍有 `assigned` 占用时必须阻止删除。
 - [ ] 保存详情栏编辑后，主图、详情和原始表格中的方案分配同步更新。
 - [ ] 保存详情栏编辑或原始表格后，重新拉取服务端数据能读回刚保存的空间资料、实验室资料和落位安排；多个可见方案副本有同 ID 资料时，最新/刚保存的副本不被旧副本覆盖。
 - [ ] 详情栏编辑实验室或房间资料后，保存目标必须是当前方案副本中的同一行；多个可见副本存在相同 `id` 或编码时，不会误改其他副本，也不会因保存过滤导致界面提示成功但刷新后丢失。
@@ -172,16 +175,18 @@
 - [ ] 编号规范化同步 active/global 关系表和非删除 plan copy 关系行；方案分配写入优先使用规范化后的 `plan_code`，不会因旧 `plan_id` 复活中文或旧方案编号。
 - [ ] 创建方案副本、导入生成方案副本、重命名、公开/私有切换、设为/取消基线和软删除方案会同步更新关系表 `plans`，并由关系表投影刷新主界面和管理方案列表。
 - [ ] 方案副本生命周期写入在事务中完成；`plan_copies`、关系表 `plans` 和当前方案 `plan_assignments` 不会出现一边成功一边失败的半更新。
-- [ ] 详情栏编辑实验室、改建房间、新增房间、编辑房间和删除房间通过动作级 API 保存，不从前端回传整包可见 dataset 覆盖保存。
-- [ ] 详情栏 copy 方案写入优先更新 `plan_space_overrides`、`plan_lab_overrides`、`plan_assignments` 和 `plan_deleted_spaces`；新增 copy 房间不写入全局 `spaces` 基准表。
+- [ ] 详情栏编辑实验室、改建房间、新增房间、编辑房间、删除房间、合并房间和拆分房间通过动作级 API 保存，不从前端回传整包可见 dataset 覆盖保存；`deleteLab` 不作为详情动作暴露。
+- [ ] 详情栏和分配动作 API 保存成功后复用 action service 返回的关系表投影，不在路由层再次调用 `buildVisibleDataset` 重建可见 dataset。
+- [ ] 详情栏 copy 方案写入优先更新 `plan_space_overrides`、`plan_lab_overrides`、`plan_assignments` 和 `plan_deleted_spaces`；新增 copy 房间不写入全局 `spaces` 基准表；合并/拆分继承自全局基准的房间时先写当前 copy 的 space override，合并移除的目标房间写当前 copy tombstone；待安置区删除继承自全局基准的用途单元写入 `plan_lab_overrides.operation = 'deleted'`，删除 copy-only 用途单元移除对应 override。
 - [ ] 详情栏保存成功后由关系表投影刷新可见 dataset；保存失败或 revision 冲突时不更新关系表，也不更新 legacy JSON 快照。
-- [ ] 主图规划未规划空间、加入待安置区、待安置区归位、待安置区落位、同层直接搬迁和新增待安置用途单元通过动作级 assignment API 保存，不从前端回传整包可见 dataset 或批量 assignment 覆盖作为权威保存路径。
-- [ ] Assignment action 写入 copy 方案时，新建待安置用途单元进入当前方案 `plan_lab_overrides`，不写入全局 `labs`；搬迁、归位和待安置状态只更新当前方案 `plan_assignments`，不影响其他方案。
+- [ ] 主图规划未规划空间、加入待安置区、待安置区归位、待安置区落位、同层直接搬迁、新增待安置用途单元和删除待安置用途单元通过动作级 assignment API 保存，不从前端回传整包可见 dataset 或批量 assignment 覆盖作为权威保存路径。
+- [ ] Assignment action 写入 copy 方案时，新建待安置用途单元进入当前方案 `plan_lab_overrides`，不写入全局 `labs`；搬迁、归位、待安置状态和待安置区删除只更新当前方案 `plan_assignments` 与必要的当前方案 lab override/tombstone，不影响其他方案。
 - [ ] 普通 UI 不调用 copy 方案遗留整包写接口；`PUT /api/plan-copies/:id/dataset` 和 `PUT /api/plan-copies/:id/assignments` 返回 `legacy_write_disabled` 且不更新任何业务数据。
 - [ ] server mode 下 `plan_assignments` 原始表为只读诊断视图，批量保存被阻止并提示通过主图、详情栏或待安置区维护分配。
 - [ ] server mode 下普通业务 UI 不把 `/api/dataset/active` 作为日常保存兜底；该整包入口仅 admin 可调用，并记录为兼容覆盖写审计。
 - [ ] server mode 下 `plans` 原始表为只读诊断视图，方案创建、公开/私有、删除、重命名和设为/取消基线通过方案生命周期 API 或管理方案入口完成。
 - [ ] 高级原始维护表中的校区、教学楼、楼层骨架、学院、专业和用途类型通过动作级 raw-maintenance API 保存，服务端优先写关系表并通过关系表投影刷新前端，不以整包可见 dataset 作为权威保存载荷。
+- [ ] 前端动作保存响应合并支持轻量响应；有 `dataset` 时刷新本地数据，只有 `revision` 或 `copyRevision` 时只更新对应版本号且不清空本地 dataset。
 - [ ] 删除教学楼或楼层骨架会在关系表事务中级联删除相关骨架或空间，并将受影响方案分配标记为 `Invalid`；删除被引用的学院、专业或用途类型会被阻止，失败时不更新关系表或 legacy JSON 快照。
 - [ ] 删除教学楼或楼层骨架同时删除绑定到该楼栋或骨架的 `plan_space_overrides`，并且旧副本 JSON 不会在保存响应、登录或刷新时把已删除空间重新写回关系表。
 - [ ] Admin viewing multiple plans sees each teaching building only once in the raw teaching-building table, even when several visible plan copies contain that building in legacy JSON payloads.
@@ -193,6 +198,11 @@
 
 - [ ] First paint, login, `/api/bootstrap`, and ordinary refresh do not wait for external SheetJS/CDN scripts.
 - [ ] SheetJS loads on demand only for `.xlsx` import/export; if it cannot load, the floorplan remains usable and the UI gives JSON import/export fallback guidance.
+- [ ] JSON API responses include `X-Floorplan-Payload-Bytes` so large bootstrap, active dataset, or action-save payloads can be measured from browser devtools.
+- [ ] Browser Performance entries include `bootstrap`, `floorplan:renderApp`, and `floorplan:renderFloorplan` marks/measures for local performance profiling.
+- [ ] Building floor render data uses indexed assignment lookup, so rendering a floor does not scan every assignment for every room.
+- [ ] In server mode, bootstrap, refresh, compatibility saves, and action saves do not write the full server dataset into `localStorage`; localStorage persistence remains available for offline/sample mode.
+- [ ] Static JS/CSS assets include short-lived `Cache-Control` plus ETag revalidation and can return 304 on matching `If-None-Match` without reading the full file body; normal 200 static responses stream file contents without `fs.readFile`; `index.html` remains `no-cache`.
 
 ## Admin Correction Acceptance
 

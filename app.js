@@ -213,6 +213,24 @@ const RawEditorController = RawEditor.createRawEditor({
   updateStatus,
 });
 
+function markPerformance(name) {
+  if (!window.performance?.mark) return;
+  window.performance.mark(name);
+}
+
+function measurePerformance(name, action) {
+  if (!window.performance?.mark || !window.performance?.measure) return action();
+  const start = `${name}:start`;
+  const end = `${name}:end`;
+  markPerformance(start);
+  try {
+    return action();
+  } finally {
+    markPerformance(end);
+    window.performance.measure(name, start, end);
+  }
+}
+
 bindEvents();
 renderEditorTabs();
 bootstrap();
@@ -329,6 +347,7 @@ function handleDocumentKeydown(event) {
 }
 
 async function bootstrap() {
+  markPerformance("bootstrap:start");
   try {
     // 优先连接服务端；开发或离线打开页面失败时，再降级到 localStorage 示例模式。
     const payload = await fetchJson("/api/bootstrap");
@@ -344,6 +363,8 @@ async function bootstrap() {
     return;
   } catch (error) {
     console.warn("bootstrap from server failed", error);
+  } finally {
+    markPerformance("bootstrap:end");
   }
   bootstrapLocal();
 }
@@ -485,7 +506,7 @@ async function saveDatasetToServer(changeNote, options = {}) {
   state.planCopies = payload.planCopies || [];
   state.data = normalizeDataset(payload.dataset);
   if (payload.maintenance) state.maintenance = payload.maintenance;
-  persistDataset();
+  persistLocalDataset();
   return true;
 }
 
@@ -500,7 +521,27 @@ function detailActionName(mode) {
   if (mode === "createSpace") return "createSpace";
   if (mode === "editSpace") return "editSpace";
   if (mode === "deleteSpace") return "deleteSpace";
+  if (mode === "mergeSpace") return "mergeSpace";
+  if (mode === "splitSpace") return "splitSpace";
   return mode;
+}
+
+function applyActionResponse(payload) {
+  if (payload.revision !== undefined) state.serverRevision = payload.revision;
+  if (payload.planCopies) {
+    state.planCopies = payload.planCopies;
+  } else if (payload.copyRevision !== undefined) {
+    const activeCopy = activePlanCopyMeta();
+    if (activeCopy) {
+      state.planCopies = state.planCopies.map((copy) => {
+        if (Number(copy.id) !== Number(activeCopy.id)) return copy;
+        return { ...copy, revision: payload.copyRevision };
+      });
+    }
+  }
+  if (payload.dataset) state.data = normalizeDataset(payload.dataset);
+  if (payload.maintenance) state.maintenance = payload.maintenance;
+  persistLocalDataset();
 }
 
 async function submitDetailActionToServer(mode, formData, selectedSpace, changeNote, extraPayload = {}) {
@@ -524,11 +565,7 @@ async function submitDetailActionToServer(mode, formData, selectedSpace, changeN
       changeNote,
     }),
   });
-  state.serverRevision = payload.revision;
-  state.planCopies = payload.planCopies || [];
-  state.data = normalizeDataset(payload.dataset);
-  if (payload.maintenance) state.maintenance = payload.maintenance;
-  persistDataset();
+  applyActionResponse(payload);
   return payload;
 }
 
@@ -550,11 +587,7 @@ async function submitAssignmentActionToServer(action, payload = {}) {
       planCode: activePlanValue?.plan_code || activePlanValue?.id || "",
     }),
   });
-  state.serverRevision = response.revision;
-  state.planCopies = response.planCopies || [];
-  state.data = normalizeDataset(response.dataset);
-  if (response.maintenance) state.maintenance = response.maintenance;
-  persistDataset();
+  applyActionResponse(response);
   return response;
 }
 
@@ -568,11 +601,7 @@ async function submitRawMaintenanceActionToServer(key, action, payload = {}) {
       expectedRevision: state.serverRevision,
     }),
   });
-  state.serverRevision = response.revision;
-  state.planCopies = response.planCopies || [];
-  state.data = normalizeDataset(response.dataset);
-  if (response.maintenance) state.maintenance = response.maintenance;
-  persistDataset();
+  applyActionResponse(response);
   return response;
 }
 
@@ -1133,7 +1162,7 @@ function refreshStateAndRender(message, options = {}) {
   const { stamp = false, forceMoveReset = false } = options;
   // 统一入口：任何数据变更后都经过这里同步控件、权限、编辑表、主图和状态栏。
   if (stamp) stampMetadata(message);
-  persistDataset();
+  persistLocalDataset();
   syncPlanViewMode();
   populateBuildingOptions();
   populateFloorOptions();
@@ -1187,7 +1216,8 @@ function stampMetadata(message) {
   ].slice(-10);
 }
 
-function persistDataset() {
+function persistLocalDataset() {
+  if (state.serverMode) return;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.data));
 }
 
@@ -1512,6 +1542,7 @@ function restoreThumbnailScroll(snapshot) {
 }
 
 function renderApp() {
+  return measurePerformance("floorplan:renderApp", () => {
   const building = buildingByCode(els.buildingSelect.value);
   const currentPlan = planById(els.currentPlanSelect.value);
   const beforePlan = planById(els.beforePlanSelect.value);
@@ -1558,7 +1589,7 @@ function renderApp() {
 
   restoreThumbnailScroll(thumbScroll);
 
-  renderFloorplan({
+  measurePerformance("floorplan:renderFloorplan", () => renderFloorplan({
     floorplanEl: els.floorplan,
     activePlanBadgeEl: els.activePlanBadge,
     data: activeData,
@@ -1569,10 +1600,11 @@ function renderApp() {
     selectedSpaceId: state.selectedSpaceId,
     mutedColleges: state.mutedColleges,
     moveBasket: state.moveBasket,
-    canMoveLabs: canEditActivePlan(),
+    canMoveLabs: canEditActivePlan() && state.detailEditor?.mode !== "mergeSpace",
+    mergeSelection: mergeSelectionForRender(context),
     onSelectSpace: handleSpaceSelect,
     onRoomPointerDown: beginRoomMoveDrag,
-  });
+  }));
 
   renderDetailsPanel({
     detailsEl: els.roomDetails,
@@ -1594,6 +1626,8 @@ function renderApp() {
     onOpenMove: openMoveMode,
     onDetailAction: handleDetailAction,
     onSubmitDetailEdit: submitDetailEditAction,
+    onDetailDraftChange: updateDetailDraft,
+    onToggleMergeTarget: toggleMergeTargetSpace,
     onCancelDetailEdit: cancelDetailEdit,
     onPlanSpace: planSelectedSpaceAction,
     onRenovateLab: renovateSelectedLabAction,
@@ -1611,10 +1645,12 @@ function renderApp() {
     onEditBasketLab: openBasketLabEdit,
     onSubmitBasketLabEdit: submitBasketLabEditAction,
     onCancelBasketLabEdit: cancelBasketLabEdit,
+    onDeleteBasketLab: deleteBasketLabAction,
   });
   renderPlanDiffPanel(beforePlan, afterPlan);
 
   Canvas.applyCanvasMode(state, els);
+  });
 }
 
 function activeLegendColleges() {
@@ -1773,9 +1809,51 @@ function handleThumbSelect(planId, floorCode) {
   });
 }
 
+function mergeSelectionForRender(context) {
+  if (state.detailEditor?.mode !== "mergeSpace" || !context.space) return null;
+  return {
+    sourceSpaceId: context.space.id,
+    targetSpaceIds: state.detailEditor.mergeTargetSpaceIds || [],
+  };
+}
+
+function mergeCandidateError(source, target) {
+  if (!source || !target) return "请先选择要合并的房间。";
+  if (source.id === target.id || source.space_code === target.space_code) return "";
+  if (target.building_code !== source.building_code || target.floor_code !== source.floor_code) return "只能合并同一楼层的房间。";
+  if (target.segment_code !== source.segment_code || target.side !== source.side) return "只能合并同一走廊同一侧的房间。";
+  if (String(target.current_status || "active") !== "active") return "只能合并可用房间。";
+  return "";
+}
+
+function toggleMergeTargetSpace(spaceId) {
+  const context = getSelectedContext();
+  const source = context.space;
+  const target = spacesForActivePlan().find((space) => space.id === spaceId) || null;
+  const error = mergeCandidateError(source, target);
+  if (error) {
+    updateStatus(error);
+    return;
+  }
+  if (!target || target.id === source.id) return;
+  const ids = new Set(state.detailEditor.mergeTargetSpaceIds || []);
+  if (ids.has(target.id)) ids.delete(target.id);
+  else ids.add(target.id);
+  state.detailEditor = {
+    ...state.detailEditor,
+    mergeTargetSpaceIds: Array.from(ids),
+    errors: {},
+  };
+  renderApp();
+}
+
 function handleSpaceSelect(spaceId) {
   if (state.suppressNextSpaceClick) {
     state.suppressNextSpaceClick = false;
+    return;
+  }
+  if (state.detailEditor?.mode === "mergeSpace") {
+    toggleMergeTargetSpace(spaceId);
     return;
   }
   if (spaceId === state.selectedSpaceId && state.inspectorMode === "details") return;
@@ -1842,12 +1920,55 @@ function buildDetailEditOptions(context) {
     network_segment: "",
     current_status: "active",
   };
+  const currentSpace = context.space || {};
+  const splitSegment = currentSpace.segment_code
+    ? copySegments.find((segment) => segment.segment_code === currentSpace.segment_code)
+    : null;
+  const splitDirectionLabel = splitSegment
+    ? Number(splitSegment.start_y_m) === Number(splitSegment.end_y_m)
+      ? "东西向（沿走廊）"
+      : Number(splitSegment.start_x_m) === Number(splitSegment.end_x_m)
+        ? "南北向（沿走廊）"
+        : "沿走廊方向"
+    : "沿走廊方向";
+  const mergeSpaceOptions = currentSpace.space_code ? spacesForActivePlan()
+    .filter((space) =>
+      space.space_code !== currentSpace.space_code &&
+      space.id !== currentSpace.id &&
+      space.building_code === currentSpace.building_code &&
+      space.floor_code === currentSpace.floor_code &&
+      space.segment_code === currentSpace.segment_code &&
+      space.side === currentSpace.side &&
+      String(space.current_status || "active") === "active"
+    )
+    .slice()
+    .sort((a, b) => compare(Number(a.offset_m) || 0, Number(b.offset_m) || 0) || compare(a.space_code, b.space_code))
+    .map((space) => ({
+      value: space.space_code,
+      label: `${doorRangeLabel(space) || space.space_code} · ${space.space_code}`,
+    }))
+    : [];
+  const mergeSelectedSpaces = (state.detailEditor?.mergeTargetSpaceIds || [])
+    .map((id) => spacesForActivePlan().find((space) => space.id === id))
+    .filter(Boolean);
+  const mergeAllSpaces = currentSpace.id ? [currentSpace, ...mergeSelectedSpaces] : mergeSelectedSpaces;
+  const mergeDoorValues = mergeAllSpaces
+    .flatMap((space) => [space.front_door, space.rear_door])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .sort((a, b) => compare(Number(a) || a, Number(b) || b));
   return {
     segmentOptions,
     renovationMonth,
     collegeOptions,
     labTypeOptions,
     majorOptionsByCollege,
+    mergeSpaceOptions,
+    mergeSelectedSpaces,
+    mergeDefaultFrontDoor: mergeDoorValues[0] || currentSpace.front_door || "",
+    mergeDefaultRearDoor: mergeDoorValues[mergeDoorValues.length - 1] || currentSpace.rear_door || "",
+    mergeDefaultLabName: context.lab?.lab_name || "",
+    splitDirectionLabel,
     createSpaceDraft,
     spaceCodePreview: context.space ? generateSpaceCode(context.space, context.building) || context.space.space_code : "",
   };
@@ -1882,6 +2003,16 @@ function handleDetailAction(action) {
     renderApp();
     return;
   }
+  if (action === "merge-space") {
+    state.detailEditor = { mode: "mergeSpace", moreOpen: false, errors: {} };
+    renderApp();
+    return;
+  }
+  if (action === "split-space") {
+    state.detailEditor = { mode: "splitSpace", moreOpen: false, errors: {} };
+    renderApp();
+    return;
+  }
   if (action === "edit-lab") {
     if (!context.lab || !context.assignment) {
       updateStatus("当前房间没有可编辑的实验室。");
@@ -1904,8 +2035,6 @@ function handleDetailAction(action) {
     renderApp();
     return;
   }
-  if (action === "merge-space") updateStatus("合并房间将在后续迭代开放。");
-  if (action === "split-space") updateStatus("拆分房间将在后续迭代开放。");
 }
 
 async function deleteDetailSpaceAction() {
@@ -1961,6 +2090,16 @@ function cancelDetailEdit() {
   renderApp();
 }
 
+function updateDetailDraft(mode, formData) {
+  state.detailEditor = {
+    ...state.detailEditor,
+    mode,
+    draft: DetailActions.formDataToDraft(formData),
+    errors: {},
+  };
+  renderApp();
+}
+
 async function submitDetailEditAction(mode, formData) {
   if (!canEditDetailPanel()) {
     updateStatus("当前账号没有编辑此方案的权限。");
@@ -1975,7 +2114,17 @@ async function submitDetailEditAction(mode, formData) {
   const previousRevision = state.serverRevision;
   const previousCopies = JSON.parse(JSON.stringify(state.planCopies));
   const draft = DetailActions.formDataToDraft(formData);
-  const changeNote = mode === "editLab" ? "编辑实验室详情" : mode === "renovateRoom" ? "改建房间" : mode === "createSpace" ? "新增房间" : "编辑房间详情";
+  const changeNote = mode === "editLab"
+    ? "编辑实验室详情"
+    : mode === "renovateRoom"
+      ? "改建房间"
+      : mode === "createSpace"
+        ? "新增房间"
+        : mode === "mergeSpace"
+          ? "合并房间"
+          : mode === "splitSpace"
+            ? "拆分房间"
+            : "编辑房间详情";
   if (state.serverMode) {
     try {
       await submitDetailActionToServer(mode, formData, context.space, changeNote);
@@ -1992,7 +2141,7 @@ async function submitDetailEditAction(mode, formData) {
         space.building_code === (getSelectedContext().building?.building_code || space.building_code)
       );
       if (created?.id) state.selectedSpaceId = created.id;
-    } else if ((mode === "editSpace" || mode === "createSpace") && context.space?.id) {
+    } else if ((mode === "editSpace" || mode === "createSpace" || mode === "mergeSpace" || mode === "splitSpace") && context.space?.id) {
       state.selectedSpaceId = context.space.id;
     }
     resetDetailEditorState();
@@ -2017,7 +2166,11 @@ async function submitDetailEditAction(mode, formData) {
       ? DetailActions.applyDetailRenovation(state.data, context, formData, deps)
       : mode === "createSpace"
         ? DetailActions.applyDetailCreateSpace(state.data, context, formData, deps)
-        : DetailActions.applyDetailSpaceEdit(state.data, context, formData, deps);
+        : mode === "mergeSpace"
+          ? DetailActions.applyDetailMergeSpace(state.data, context, formData, deps)
+          : mode === "splitSpace"
+            ? DetailActions.applyDetailSplitSpace(state.data, context, formData, deps)
+            : DetailActions.applyDetailSpaceEdit(state.data, context, formData, deps);
   if (!result.ok) {
     state.detailEditor = { ...state.detailEditor, draft, errors: { form: result.message || "保存失败，请检查表单。" } };
     renderApp();
@@ -2025,7 +2178,7 @@ async function submitDetailEditAction(mode, formData) {
     return;
   }
   state.data = normalizeDataset(state.data);
-  if ((mode === "editSpace" || mode === "createSpace") && result.space?.id) {
+  if ((mode === "editSpace" || mode === "createSpace" || mode === "mergeSpace" || mode === "splitSpace") && result.space?.id) {
     state.selectedSpaceId = result.space.id;
   }
   try {
@@ -2074,6 +2227,10 @@ function locateMoveBasketSource(...args) {
 
 function returnMoveBasketItemAction(...args) {
   return MoveController.returnMoveBasketItemAction(...args);
+}
+
+function deleteBasketLabAction(...args) {
+  return MoveController.deleteBasketLabAction(...args);
 }
 
 function contextForSpace(...args) {

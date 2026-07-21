@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { Readable } = require("node:stream");
 const test = require("node:test");
 const vm = require("node:vm");
 const { DatabaseSync } = require("node:sqlite");
@@ -12,6 +13,7 @@ const DatasetProjection = require("../server/dataset-projection-service");
 const { createDetailActionService } = require("../server/detail-action-service");
 const { createAssignmentActionService } = require("../server/assignment-action-service");
 const { createRawMaintenanceService } = require("../server/raw-maintenance-service");
+const { createRouteApi } = require("../server/routes");
 const RelationalStore = require("../server/relational-store");
 const { colorMap: buildLegendColorMap, renderLegend: renderLegendOnly } = require("../js/app/legend-colors");
 const { createRenderThumbList } = require("../js/app/thumbnails");
@@ -35,6 +37,27 @@ function loadBrowserModules() {
     vm.runInContext(source, context, { filename: file });
   }
   return context.window;
+}
+
+function jsonRequest(body) {
+  const req = Readable.from([Buffer.from(JSON.stringify(body || {}), "utf8")]);
+  req.method = "POST";
+  return req;
+}
+
+function captureJsonResponse() {
+  return {
+    statusCode: null,
+    headers: null,
+    body: "",
+    writeHead(statusCode, headers) {
+      this.statusCode = statusCode;
+      this.headers = headers;
+    },
+    end(body) {
+      this.body = body || "";
+    },
+  };
 }
 
 class StubElement {
@@ -1758,6 +1781,381 @@ test("copy detail delete writes tombstones and invalidates only the current plan
   assert.ok(result.dataset.deleted_space_ids.includes("copy:8::00101010202"));
 });
 
+test("detail merge space merges same-corridor rooms and invalidates target assignments", () => {
+  const dataset = activeApplyDataset({
+    plans: [{ id: "copy-8", plan_code: "copy-8", plan_name: "副本方案", plan_type: "copy", is_locked: false }],
+    spaces: [
+      { id: "SPACE-101", space_code: "00101010101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "101", rear_door: "", side: "north", offset_m: 0, length_m: 8, width_m: 6, area_m2: 48, current_status: "active" },
+      { id: "SPACE-102", space_code: "00101010202", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "102", rear_door: "103", side: "north", offset_m: 8, length_m: 7, width_m: 6, area_m2: 42, current_status: "active" },
+    ],
+    labs: [
+      { id: "lab-1", lab_code: "UNIT000001", lab_name: "一号用途", status: "active" },
+      { id: "lab-2", lab_code: "UNIT000002", lab_name: "二号用途", status: "active" },
+    ],
+    plan_assignments: [
+      { id: "copy-8__UNIT000001", plan_id: "copy-8", plan_code: "copy-8", lab_code: "UNIT000001", space_id: "SPACE-101", space_code: "00101010101", assignment_status: "assigned" },
+      { id: "copy-8__UNIT000002", plan_id: "copy-8", plan_code: "copy-8", lab_code: "UNIT000002", space_id: "SPACE-102", space_code: "00101010202", assignment_status: "assigned" },
+      { id: "copy-9__UNIT000002", plan_id: "copy-9", plan_code: "copy-9", lab_code: "UNIT000002", space_id: "SPACE-102", space_code: "00101010202", assignment_status: "assigned" },
+    ],
+  });
+
+  const result = DetailActions.applyDetailMergeSpace(dataset, {
+    activePlan: dataset.plans[0],
+    building: dataset.buildings[0],
+    space: dataset.spaces[0],
+  }, { targetSpaceCode: "00101010202" });
+
+  assert.equal(result.ok, true);
+  assert.equal(dataset.spaces.some((row) => row.space_code === "00101010202"), false);
+  const merged = dataset.spaces.find((row) => row.space_code === "00101010101");
+  assert.equal(merged.rear_door, "103");
+  assert.equal(merged.length_m, 15);
+  assert.equal(merged.area_m2, 90);
+  const targetAssignment = dataset.plan_assignments.find((row) => row.id === "copy-8__UNIT000002");
+  assert.equal(targetAssignment.assignment_status, "Invalid");
+  assert.equal(targetAssignment.space_code, "");
+  assert.equal(targetAssignment.previous_space_code, "00101010202");
+  assert.equal(dataset.plan_assignments.find((row) => row.id === "copy-9__UNIT000002").assignment_status, "assigned");
+});
+
+test("detail merge space can merge multiple selected rooms and moves old labs to basket", () => {
+  const dataset = activeApplyDataset({
+    plans: [{ id: "copy-8", plan_code: "copy-8", plan_name: "副本方案", plan_type: "copy", is_locked: false }],
+    spaces: [
+      { id: "SPACE-101", space_code: "S101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "101", rear_door: "", side: "north", offset_m: 0, length_m: 4, width_m: 6, area_m2: 24, current_status: "active" },
+      { id: "SPACE-102", space_code: "S102", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "102", rear_door: "", side: "north", offset_m: 4, length_m: 4, width_m: 6, area_m2: 24, current_status: "active" },
+      { id: "SPACE-103", space_code: "S103", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "103", rear_door: "", side: "north", offset_m: 8, length_m: 4, width_m: 6, area_m2: 24, current_status: "active" },
+    ],
+    labs: [
+      { id: "lab-1", lab_code: "UNIT000001", lab_name: "一号用途", college: "信息学院", major: "软件", lab_type: "实验室", status: "active" },
+      { id: "lab-2", lab_code: "UNIT000002", lab_name: "二号用途", college: "信息学院", major: "软件", lab_type: "实验室", status: "active" },
+      { id: "lab-3", lab_code: "UNIT000003", lab_name: "三号用途", college: "信息学院", major: "软件", lab_type: "实验室", status: "active" },
+    ],
+    plan_assignments: [
+      { id: "copy-8__UNIT000001", plan_id: "copy-8", plan_code: "copy-8", lab_id: "lab-1", lab_code: "UNIT000001", space_id: "SPACE-101", space_code: "S101", assignment_status: "assigned" },
+      { id: "copy-8__UNIT000002", plan_id: "copy-8", plan_code: "copy-8", lab_id: "lab-2", lab_code: "UNIT000002", space_id: "SPACE-102", space_code: "S102", assignment_status: "assigned" },
+      { id: "copy-8__UNIT000003", plan_id: "copy-8", plan_code: "copy-8", lab_id: "lab-3", lab_code: "UNIT000003", space_id: "SPACE-103", space_code: "S103", assignment_status: "assigned" },
+    ],
+  });
+
+  const result = DetailActions.applyDetailMergeSpace(dataset, {
+    activePlan: dataset.plans[0],
+    building: dataset.buildings[0],
+    space: dataset.spaces[0],
+  }, {
+    targetSpaceCodes: "S102,S103",
+    frontDoor: "101",
+    rearDoor: "103",
+    labName: "合并后用途",
+  }, {
+    generateSpaceCode: (space) => `S${space.front_door}${space.rear_door || space.front_door}`,
+    generateUnitCode: () => "UNIT000099",
+    isoNow: () => "2026-07-22T00:00:00Z",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(dataset.spaces.some((row) => row.space_code === "S102"), false);
+  assert.equal(dataset.spaces.some((row) => row.space_code === "S103"), false);
+  const merged = dataset.spaces.find((row) => row.id === "SPACE-101");
+  assert.equal(merged.space_code, "S101103");
+  assert.equal(merged.front_door, "101");
+  assert.equal(merged.rear_door, "103");
+  assert.equal(merged.length_m, 12);
+  const newLab = dataset.labs.find((row) => row.lab_code === "UNIT000099");
+  assert.equal(newLab.lab_name, "合并后用途");
+  assert.equal(newLab.college, "信息学院");
+  const assigned = dataset.plan_assignments.find((row) => row.lab_code === "UNIT000099");
+  assert.equal(assigned.assignment_status, "assigned");
+  assert.equal(assigned.space_code, "S101103");
+  for (const labCode of ["UNIT000001", "UNIT000002", "UNIT000003"]) {
+    const row = dataset.plan_assignments.find((assignment) => assignment.lab_code === labCode);
+    assert.equal(row.assignment_status, "Invalid");
+    assert.equal(row.space_code, "");
+    assert.ok(row.previous_space_code);
+  }
+});
+
+test("detail merge space allows visually adjacent rooms with offset gaps when no middle room exists", () => {
+  const dataset = activeApplyDataset({
+    plans: [{ id: "copy-8", plan_code: "copy-8", plan_name: "副本方案", plan_type: "copy", is_locked: false }],
+    spaces: [
+      { id: "SPACE-101", space_code: "S101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "101", rear_door: "", side: "north", offset_m: 0, length_m: 4, width_m: 6, area_m2: 24, current_status: "active" },
+      { id: "SPACE-102", space_code: "S102", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "102", rear_door: "", side: "north", offset_m: 5, length_m: 4, width_m: 6, area_m2: 24, current_status: "active" },
+    ],
+    labs: [
+      { id: "lab-1", lab_code: "UNIT000001", lab_name: "一号用途", college: "信息学院", status: "active" },
+      { id: "lab-2", lab_code: "UNIT000002", lab_name: "二号用途", college: "信息学院", status: "active" },
+    ],
+    plan_assignments: [
+      { id: "copy-8__UNIT000001", plan_id: "copy-8", plan_code: "copy-8", lab_id: "lab-1", lab_code: "UNIT000001", space_id: "SPACE-101", space_code: "S101", assignment_status: "assigned" },
+      { id: "copy-8__UNIT000002", plan_id: "copy-8", plan_code: "copy-8", lab_id: "lab-2", lab_code: "UNIT000002", space_id: "SPACE-102", space_code: "S102", assignment_status: "assigned" },
+    ],
+  });
+
+  const result = DetailActions.applyDetailMergeSpace(dataset, {
+    activePlan: dataset.plans[0],
+    building: dataset.buildings[0],
+    space: dataset.spaces[0],
+  }, {
+    targetSpaceCodes: "S102",
+    frontDoor: "101",
+    rearDoor: "102",
+  }, {
+    generateSpaceCode: (space) => `S${space.front_door}${space.rear_door || space.front_door}`,
+    generateUnitCode: () => "UNIT000099",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(dataset.spaces.some((row) => row.space_code === "S102"), false);
+  assert.equal(dataset.spaces.find((row) => row.id === "SPACE-101").space_code, "S101102");
+});
+
+test("detail merge space rejects non-contiguous selected rooms", () => {
+  const dataset = activeApplyDataset({
+    plans: [{ id: "copy-8", plan_code: "copy-8", plan_name: "副本方案", plan_type: "copy", is_locked: false }],
+    spaces: [
+      { id: "SPACE-101", space_code: "S101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "101", side: "north", offset_m: 0, length_m: 4, width_m: 6, area_m2: 24, current_status: "active" },
+      { id: "SPACE-102", space_code: "S102", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "102", side: "north", offset_m: 4, length_m: 4, width_m: 6, area_m2: 24, current_status: "active" },
+      { id: "SPACE-103", space_code: "S103", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "103", side: "north", offset_m: 8, length_m: 4, width_m: 6, area_m2: 24, current_status: "active" },
+    ],
+  });
+
+  const result = DetailActions.applyDetailMergeSpace(dataset, {
+    activePlan: dataset.plans[0],
+    building: dataset.buildings[0],
+    space: dataset.spaces[0],
+  }, { targetSpaceCodes: "S103" });
+
+  assert.equal(result.ok, false);
+  assert.match(result.message, /中间房间/);
+});
+
+test("detail merge space rejects rooms outside the same corridor side", () => {
+  const dataset = activeApplyDataset({
+    plans: [{ id: "copy-8", plan_code: "copy-8", plan_name: "副本方案", plan_type: "copy", is_locked: false }],
+    spaces: [
+      { id: "SPACE-101", space_code: "00101010101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "101", side: "north", offset_m: 0, length_m: 8, width_m: 6, area_m2: 48, current_status: "active" },
+      { id: "SPACE-201", space_code: "00101020101", building_code: "B0101", floor_code: "2", segment_code: "EW01010101", front_door: "201", side: "north", offset_m: 0, length_m: 7, width_m: 6, area_m2: 42, current_status: "active" },
+    ],
+    plan_assignments: [],
+  });
+
+  const result = DetailActions.applyDetailMergeSpace(dataset, {
+    activePlan: dataset.plans[0],
+    space: dataset.spaces[0],
+  }, { targetSpaceCode: "00101020101" });
+
+  assert.equal(result.ok, false);
+  assert.match(result.message, /同一楼栋、楼层、走廊和侧向/);
+});
+
+test("detail split space keeps the selected room and creates a second room", () => {
+  const dataset = activeApplyDataset({
+    plans: [{ id: "copy-8", plan_code: "copy-8", plan_name: "副本方案", plan_type: "copy", is_locked: false }],
+    spaces: [{ id: "SPACE-101", space_code: "00101010101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "101", rear_door: "", side: "north", offset_m: 0, length_m: 10, width_m: 6, area_m2: 60, current_status: "active" }],
+    plan_assignments: [{ id: "copy-8__UNIT000001", plan_id: "copy-8", plan_code: "copy-8", lab_code: "UNIT000001", space_id: "SPACE-101", space_code: "00101010101", assignment_status: "assigned" }],
+  });
+
+  const result = DetailActions.applyDetailSplitSpace(dataset, {
+    activePlan: dataset.plans[0],
+    building: dataset.buildings[0],
+    space: dataset.spaces[0],
+  }, { firstLengthM: "4", secondFrontDoor: "102", secondRearDoor: "", splitAxis: "length" }, {
+    generateSpaceCode: (space) => `S${space.front_door}`,
+    isoNow: () => "2026-07-21T00:00:00Z",
+  });
+
+  assert.equal(result.ok, true);
+  const first = dataset.spaces.find((row) => row.id === "SPACE-101");
+  const second = dataset.spaces.find((row) => row.space_code === "S102");
+  assert.equal(first.length_m, 4);
+  assert.equal(first.area_m2, 24);
+  assert.equal(second.offset_m, 4);
+  assert.equal(second.length_m, 6);
+  assert.equal(second.area_m2, 36);
+  assert.equal(dataset.plan_assignments[0].space_code, "00101010101");
+});
+
+test("detail split space can create multiple rooms and assigned labs inheriting college", () => {
+  const dataset = activeApplyDataset({
+    plans: [{ id: "copy-8", plan_code: "copy-8", plan_name: "副本方案", plan_type: "copy", is_locked: false }],
+    spaces: [{ id: "SPACE-101", space_code: "S101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "101", rear_door: "", side: "north", offset_m: 0, length_m: 12, width_m: 6, area_m2: 72, current_status: "active" }],
+    labs: [{ id: "lab-1", lab_code: "UNIT000001", lab_name: "原用途", college: "信息学院", major: "软件", lab_type: "实验室", status: "active" }],
+    plan_assignments: [{ id: "copy-8__UNIT000001", plan_id: "copy-8", plan_code: "copy-8", lab_id: "lab-1", lab_code: "UNIT000001", space_id: "SPACE-101", space_code: "S101", assignment_status: "assigned" }],
+  });
+  const codes = ["UNIT000101", "UNIT000102", "UNIT000103"];
+
+  const result = DetailActions.applyDetailSplitSpace(dataset, {
+    activePlan: dataset.plans[0],
+    building: dataset.buildings[0],
+    lab: dataset.labs[0],
+    assignment: dataset.plan_assignments[0],
+    space: dataset.spaces[0],
+  }, {
+    splitAxis: "length",
+    splitCount: "3",
+    splitFrontDoor0: "101",
+    splitLengthM0: "4",
+    splitFrontDoor1: "102",
+    splitLengthM1: "4",
+    splitFrontDoor2: "103",
+    splitLengthM2: "4",
+  }, {
+    generateSpaceCode: (space) => `S${space.front_door}`,
+    generateUnitCode: () => codes.shift(),
+    isoNow: () => "2026-07-22T00:00:00Z",
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(dataset.spaces.map((row) => row.space_code).sort(), ["S101", "S102", "S103"]);
+  for (const labCode of ["UNIT000101", "UNIT000102", "UNIT000103"]) {
+    const lab = dataset.labs.find((row) => row.lab_code === labCode);
+    assert.equal(lab.college, "信息学院");
+    assert.equal(lab.major, "软件");
+    const assignment = dataset.plan_assignments.find((row) => row.lab_code === labCode);
+    assert.equal(assignment.assignment_status, "assigned");
+    assert.ok(assignment.space_code);
+  }
+  const oldAssignment = dataset.plan_assignments.find((row) => row.lab_code === "UNIT000001");
+  assert.equal(oldAssignment.assignment_status, "Invalid");
+  assert.equal(oldAssignment.space_code, "S101");
+});
+
+test("detail split space rejects invalid length and duplicate generated codes", () => {
+  const dataset = activeApplyDataset({
+    spaces: [
+      { id: "SPACE-101", space_code: "S101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "101", side: "north", offset_m: 0, length_m: 10, width_m: 6, area_m2: 60, current_status: "active" },
+      { id: "SPACE-102", space_code: "S102", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "102", side: "north", offset_m: 10, length_m: 8, width_m: 6, area_m2: 48, current_status: "active" },
+    ],
+  });
+
+  const invalidLength = DetailActions.applyDetailSplitSpace(dataset, {
+    activePlan: dataset.plans[0],
+    building: dataset.buildings[0],
+    space: dataset.spaces[0],
+  }, { firstLengthM: "10", secondFrontDoor: "103" }, { generateSpaceCode: (space) => `S${space.front_door}` });
+  const duplicate = DetailActions.applyDetailSplitSpace(dataset, {
+    activePlan: dataset.plans[0],
+    building: dataset.buildings[0],
+    space: dataset.spaces[0],
+  }, { firstLengthM: "4", secondFrontDoor: "102" }, { generateSpaceCode: (space) => `S${space.front_door}` });
+
+  assert.equal(invalidLength.ok, false);
+  assert.match(invalidLength.message, /大于 0 且小于原房间长度/);
+  assert.equal(duplicate.ok, false);
+  assert.match(duplicate.message, /已存在/);
+});
+
+test("detail split space rejects unsupported split axis", () => {
+  const dataset = activeApplyDataset({
+    spaces: [
+      { id: "SPACE-101", space_code: "S101", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", front_door: "101", side: "north", offset_m: 0, length_m: 10, width_m: 6, area_m2: 60, current_status: "active" },
+    ],
+  });
+
+  const result = DetailActions.applyDetailSplitSpace(dataset, {
+    activePlan: dataset.plans[0],
+    building: dataset.buildings[0],
+    space: dataset.spaces[0],
+  }, { firstLengthM: "4", secondFrontDoor: "102", splitAxis: "width" }, {
+    generateSpaceCode: (space) => `S${space.front_door}`,
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.message, /仅支持沿走廊方向拆分/);
+  assert.equal(dataset.spaces.length, 1);
+});
+
+test("copy detail merge writes current override, target tombstone and only current assignment changes", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  db.prepare("UPDATE spaces SET length_m = 9, area_m2 = 54 WHERE space_code = '00101010101'").run();
+  db.prepare(`
+    INSERT INTO labs (
+      id, lab_code, lab_name, college_code, college, major_code, major, lab_type_code,
+      lab_type, director, seat_count, computer_count, status
+    ) VALUES ('UNIT000002', 'UNIT000002', '目标用途', 'COL-A', '关系学院', 'MAJ-A', '关系专业', 'USE0001', '实验室', '王五', 20, 10, 'active')
+  `).run();
+  db.prepare(`
+    INSERT INTO plan_assignments (id, plan_id, plan_code, lab_code, space_code, assignment_status)
+    VALUES ('copy-8__UNIT000002', 'copy-8', 'copy-8', 'UNIT000002', '00101010101', 'assigned')
+  `).run();
+  db.prepare(`
+    INSERT INTO plan_assignments (id, plan_id, plan_code, lab_code, space_code, assignment_status)
+    VALUES ('copy-2__UNIT000002', 'copy-2', 'copy-2', 'UNIT000002', '00101010101', 'assigned')
+  `).run();
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: null,
+    assignments: [],
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const detailService = createDetailActionService(db, datasetService);
+
+  const result = detailService.submitCopyDetailAction(8, {
+    expectedRevision: 1,
+    planCode: "copy-8",
+    action: "mergeSpace",
+    selectedSpace: { space_code: "00101010202" },
+    form: { targetSpaceCodes: "00101010101" },
+  }, { id: 2, username: "editor", role: "editor" });
+
+  const override = db.prepare("SELECT payload_json FROM plan_space_overrides WHERE plan_id = 'copy-8' AND space_code = '00101010202'").get();
+  assert.equal(Number(JSON.parse(override.payload_json).copy_id), 8);
+  const tombstones = db.prepare("SELECT space_code FROM plan_deleted_spaces WHERE plan_id = 'copy-8' ORDER BY space_code").all().map((row) => row.space_code);
+  assert.ok(tombstones.includes("00101010101"));
+  const targetAssignment = db.prepare("SELECT assignment_status, previous_space_code FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000002'").get();
+  assert.equal(targetAssignment.assignment_status, "Invalid");
+  assert.equal(targetAssignment.previous_space_code, "00101010101");
+  assert.equal(db.prepare("SELECT assignment_status FROM plan_assignments WHERE plan_id = 'copy-2' AND lab_code = 'UNIT000002'").get().assignment_status, "assigned");
+  assert.equal(result.dataset.spaces.some((row) => Number(row.copy_id) === 8 && row.space_code === "00101010101"), false);
+});
+
+test("copy detail split writes copy-scoped space overrides without touching global spaces", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: null,
+    assignments: [],
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const detailService = createDetailActionService(db, datasetService);
+
+  const result = detailService.submitCopyDetailAction(8, {
+    expectedRevision: 1,
+    planCode: "copy-8",
+    action: "splitSpace",
+    selectedSpace: { space_code: "00101010202" },
+    form: { splitCount: "2", splitFrontDoor0: "102", splitRearDoor0: "", splitLengthM0: "4", splitFrontDoor1: "104", splitRearDoor1: "", splitLengthM1: "4" },
+  }, { id: 2, username: "editor", role: "editor" });
+
+  const currentOverride = db.prepare("SELECT payload_json FROM plan_space_overrides WHERE plan_id = 'copy-8' AND space_code = '00101010202'").get();
+  assert.equal(JSON.parse(currentOverride.payload_json).length_m, 4);
+  const createdOverride = db.prepare("SELECT payload_json FROM plan_space_overrides WHERE plan_id = 'copy-8' AND space_code = '00101010404'").get();
+  const createdPayload = JSON.parse(createdOverride.payload_json);
+  assert.equal(Number(createdPayload.copy_id), 8);
+  assert.equal(createdPayload.front_door, "104");
+  assert.equal(createdPayload.assignment_status, undefined);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM spaces WHERE space_code = '00101010404'").get().count, 0);
+  assert.equal(db.prepare("SELECT space_code FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'").get().space_code, "00101010202");
+  assert.ok(result.dataset.spaces.some((row) => Number(row.copy_id) === 8 && row.space_code === "00101010404"));
+});
+
 test("copy detail create room writes only a plan space override", () => {
   const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
   seedRelationalProjectionFixture(db);
@@ -2127,6 +2525,111 @@ test("copy detail action edits any unplaced basket lab through a plan lab overri
   const assignment = db.prepare("SELECT space_code, assignment_status FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'").get();
   assert.equal(assignment.space_code, "");
   assert.equal(assignment.assignment_status, "Invalid");
+});
+
+test("copy assignment action deletes an unplaced copy-only use unit", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: {
+      labs: [{ id: "copy:8::UNIT000099", copy_id: 8, lab_code: "UNIT000099", lab_name: "待删除用途", college: "关系学院", lab_type: "实验室" }],
+      spaces: [],
+      deleted_space_ids: [],
+    },
+    assignments: [{ id: "copy-8__UNIT000099", plan_id: "copy-8", plan_code: "copy-8", lab_code: "UNIT000099", space_code: "", previous_space_code: "00101010101", assignment_status: "Invalid" }],
+  });
+  db.prepare(`
+    INSERT INTO plan_lab_overrides (id, plan_id, lab_code, operation, payload_json)
+    VALUES ('copy-8__UNIT000099', 'copy-8', 'UNIT000099', 'upsert', ?)
+  `).run(JSON.stringify({ id: "copy:8::UNIT000099", copy_id: 8, lab_code: "UNIT000099", lab_name: "待删除用途", college: "关系学院" }));
+  db.prepare(`
+    INSERT INTO plan_assignments (id, plan_id, plan_code, lab_code, space_code, previous_space_code, assignment_status)
+    VALUES ('copy-8__UNIT000099', 'copy-8', 'copy-8', 'UNIT000099', '', '00101010101', 'Invalid')
+  `).run();
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const assignmentService = createAssignmentActionService(db, datasetService);
+
+  assignmentService.submitCopyAssignmentAction(8, {
+    expectedRevision: 1,
+    planCode: "copy-8",
+    action: "deleteUnplacedUnit",
+    lab: { lab_code: "UNIT000099" },
+  }, { id: 2, username: "editor", role: "editor" });
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000099'").get().count, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_lab_overrides WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000099'").get().count, 0);
+});
+
+test("copy assignment action tombstones a global unplaced use unit on delete", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: null,
+    assignments: [],
+  });
+  db.prepare(`
+    UPDATE plan_assignments
+    SET space_code = '', previous_space_code = '00101010202', assignment_status = 'Invalid'
+    WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'
+  `).run();
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const assignmentService = createAssignmentActionService(db, datasetService);
+
+  assignmentService.submitCopyAssignmentAction(8, {
+    expectedRevision: 1,
+    planCode: "copy-8",
+    action: "deleteUnplacedUnit",
+    lab: { lab_code: "UNIT000001" },
+  }, { id: 2, username: "editor", role: "editor" });
+
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'").get().count, 0);
+  const override = db.prepare("SELECT operation FROM plan_lab_overrides WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'").get();
+  assert.equal(override.operation, "deleted");
+  assert.equal(db.prepare("SELECT assignment_status FROM plan_assignments WHERE plan_id = 'copy-1' AND lab_code = 'UNIT000001'").get().assignment_status, "assigned");
+});
+
+test("detail delete lab action is no longer available from detail action service", () => {
+  const db = createActiveDatasetTestDb(createDatasetServiceStubWithNormalizer().getActiveDataset().dataset);
+  seedRelationalProjectionFixture(db);
+  insertPlanCopyRow(db, {
+    id: 8,
+    ownerUserId: 2,
+    planCode: "copy-8",
+    planName: "编辑私有副本",
+    visibility: "private",
+    dataset: null,
+    assignments: [],
+  });
+  const datasetService = createDatasetService(db, {
+    root: __dirname,
+    datasetKeys: ["buildings", "floor_segments", "spaces", "labs", "colleges", "majors", "lab_types", "plans", "plan_assignments", "file_assets", "imports", "deleted_space_ids"],
+  }, { writeAudit() {} });
+  const detailService = createDetailActionService(db, datasetService);
+
+  assert.throws(() => detailService.submitCopyDetailAction(8, {
+    expectedRevision: 1,
+    planCode: "copy-8",
+    action: "deleteLab",
+    selectedSpace: { space_code: "00101010202" },
+    form: {},
+  }, { id: 2, username: "editor", role: "editor" }), /未知详情操作|不支持/);
+  assert.equal(db.prepare("SELECT assignment_status FROM plan_assignments WHERE plan_id = 'copy-8' AND lab_code = 'UNIT000001'").get().assignment_status, "assigned");
 });
 
 test("copy assignment action revision conflicts do not write relation rows or legacy snapshots", () => {
@@ -3089,6 +3592,189 @@ test("rooms with the same dimensions render with equal SVG size across plans and
   assert.equal(horizontal.width * horizontal.height, vertical.width * vertical.height);
 });
 
+test("floor render data indexes assignments by space instead of scanning per room", () => {
+  const { FloorplanRender } = loadBrowserModules();
+  const data = {
+    floor_segments: [{ id: "seg-1", building_code: "B0101", floor_code: "1", segment_code: "EW01010101", start_x_m: 0, start_y_m: 0, end_x_m: 100, end_y_m: 0, width_m: 2.4, element_type: "corridor" }],
+    spaces: Array.from({ length: 40 }, (_, index) => ({
+      id: `space-${index}`,
+      building_code: "B0101",
+      floor_code: "1",
+      segment_code: "EW01010101",
+      space_code: `10${index}`,
+      front_door: `10${index}`,
+      side: "north",
+      offset_m: index,
+      length_m: 8,
+      width_m: 6,
+      area_m2: 48,
+      current_status: "active",
+    })),
+    labs: Array.from({ length: 40 }, (_, index) => ({
+      id: `lab-${index}`,
+      lab_name: `Lab ${index}`,
+      college: "学院A",
+      lab_type: "实验室",
+    })),
+    plan_assignments: Array.from({ length: 40 }, (_, index) => {
+      let spaceIdReads = 0;
+      return {
+        id: `assign-${index}`,
+        plan_id: "PLAN-A",
+        lab_id: `lab-${index}`,
+        assignment_status: "assigned",
+        get space_id() {
+          spaceIdReads += 1;
+          if (spaceIdReads > 3) throw new Error("space_id was scanned too many times");
+          return `space-${index}`;
+        },
+      };
+    }),
+  };
+
+  const rendered = FloorplanRender.floorRenderData(data, "B0101", "1", "PLAN-A");
+
+  assert.equal(rendered.spaces.length, 40);
+  assert.equal(rendered.spaces[39].lab.lab_name, "Lab 39");
+});
+
+test("app instrumentation marks bootstrap and render phases", () => {
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+
+  assert.match(appSource, /markPerformance\("bootstrap:start"\)/);
+  assert.match(appSource, /markPerformance\("bootstrap:end"\)/);
+  assert.match(appSource, /measurePerformance\("floorplan:renderApp"/);
+  assert.match(appSource, /measurePerformance\("floorplan:renderFloorplan"/);
+});
+
+test("copy detail action route reuses service projection instead of rebuilding visible dataset", async () => {
+  let visibleDatasetCalls = 0;
+  const services = {
+    auth: { requireRole() {} },
+    audit: { writeAudit() {} },
+    dataset: { buildMaintenance() { throw new Error("maintenance should not rebuild for action response"); } },
+    planCopies: {
+      buildVisibleDataset() {
+        visibleDatasetCalls += 1;
+        throw new Error("visible dataset should not be rebuilt after action save");
+      },
+    },
+    detailActions: {
+      submitCopyDetailAction(copyId, body) {
+        assert.equal(copyId, 7);
+        assert.equal(body.action, "editSpace");
+        return {
+          copyRevision: 12,
+          dataset: {
+            buildings: [],
+            floor_segments: [],
+            spaces: [{ id: "space-1", space_code: "101" }],
+            labs: [],
+            colleges: [],
+            majors: [],
+            lab_types: [],
+            plans: [],
+            plan_assignments: [],
+            file_assets: [],
+            imports: [],
+            deleted_space_ids: [],
+          },
+        };
+      },
+    },
+  };
+  const routeApi = createRouteApi(services);
+  const res = captureJsonResponse();
+
+  await routeApi(
+    jsonRequest({ action: "editSpace" }),
+    res,
+    new URL("http://localhost/api/plan-copies/7/detail-actions"),
+    "/api/plan-copies/7/detail-actions",
+    { user: { username: "editor", role: "editor" }, ip: "127.0.0.1" },
+  );
+
+  const payload = JSON.parse(res.body);
+  assert.equal(res.statusCode, 200);
+  assert.equal(visibleDatasetCalls, 0);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.copyRevision, 12);
+  assert.deepEqual(payload.dataset.spaces.map((space) => space.id), ["space-1"]);
+});
+
+test("active assignment action route reuses service projection instead of rebuilding visible dataset", async () => {
+  let visibleDatasetCalls = 0;
+  const services = {
+    auth: { requireRole() {} },
+    audit: { writeAudit() {} },
+    dataset: { buildMaintenance() { throw new Error("maintenance should not rebuild for action response"); } },
+    planCopies: {
+      buildVisibleDataset() {
+        visibleDatasetCalls += 1;
+        throw new Error("visible dataset should not be rebuilt after action save");
+      },
+    },
+    assignmentActions: {
+      submitActiveAssignmentAction(body) {
+        assert.equal(body.action, "planSpace");
+        return {
+          revision: 9,
+          dataset: {
+            buildings: [],
+            floor_segments: [],
+            spaces: [],
+            labs: [{ id: "lab-1", lab_name: "Lab 1" }],
+            colleges: [],
+            majors: [],
+            lab_types: [],
+            plans: [],
+            plan_assignments: [{ id: "assignment-1", lab_id: "lab-1", space_id: "space-1" }],
+            file_assets: [],
+            imports: [],
+            deleted_space_ids: [],
+          },
+        };
+      },
+    },
+  };
+  const routeApi = createRouteApi(services);
+  const res = captureJsonResponse();
+
+  await routeApi(
+    jsonRequest({ action: "planSpace" }),
+    res,
+    new URL("http://localhost/api/dataset/active/assignment-actions"),
+    "/api/dataset/active/assignment-actions",
+    { user: { username: "admin", role: "admin" }, ip: "127.0.0.1" },
+  );
+
+  const payload = JSON.parse(res.body);
+  assert.equal(res.statusCode, 200);
+  assert.equal(visibleDatasetCalls, 0);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.revision, 9);
+  assert.deepEqual(payload.dataset.labs.map((lab) => lab.id), ["lab-1"]);
+});
+
+test("action responses update revisions without requiring a full dataset payload", () => {
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+
+  assert.match(appSource, /function applyActionResponse\(payload\)/);
+  assert.match(appSource, /if \(payload\.dataset\)/);
+  assert.match(appSource, /copyRevision/);
+  assert.match(appSource, /state\.planCopies = state\.planCopies\.map/);
+});
+
+test("server mode avoids persisting large datasets back into localStorage", () => {
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+
+  assert.match(appSource, /function persistLocalDataset\(\)/);
+  assert.match(appSource, /if \(state\.serverMode\) return/);
+  assert.match(appSource, /localStorage\.setItem\(STORAGE_KEY, JSON\.stringify\(state\.data\)\)/);
+  assert.doesNotMatch(appSource, /persistDataset\(\)/);
+  assert.match(appSource, /persistLocalDataset\(\)/);
+});
+
 test("startup does not block on the SheetJS CDN and Excel loading is on demand", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   const importExportSource = fs.readFileSync(path.join(__dirname, "..", "js", "app", "import-export.js"), "utf8");
@@ -3115,6 +3801,69 @@ test("detail actions submit through action endpoints instead of full dataset sav
   assert.match(appSource, /submitDetailActionToServer/);
   assert.match(appSource, /\/detail-actions/);
   assert.doesNotMatch(appSource, /await saveDatasetToServer\(changeNote\);\s*\n\s*}\s*catch \(error\) \{\s*\n\s*state\.data = normalizeDataset\(previousData\);/);
+});
+
+test("detail delete lab action is removed and basket delete submits assignment action", () => {
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const renderSource = fs.readFileSync(path.join(__dirname, "..", "js", "render.js"), "utf8");
+  const moveControllerSource = fs.readFileSync(path.join(__dirname, "..", "js", "app", "move-controller.js"), "utf8");
+
+  assert.doesNotMatch(renderSource, /data-detail-action="delete-lab"/);
+  assert.doesNotMatch(renderSource, /删除用途单元|删除当前用途/);
+  assert.doesNotMatch(appSource, /if \(mode === "deleteLab"\) return "deleteLab"/);
+  assert.doesNotMatch(appSource, /deleteDetailLabAction/);
+  assert.match(renderSource, /data-action="delete-basket-lab"/);
+  assert.match(moveControllerSource, /deleteUnplacedUnit/);
+});
+
+test("placement basket renders delete action for editable unplaced units", () => {
+  const { FloorplanRender } = loadBrowserModules();
+  const detailsEl = new StubElement();
+
+  FloorplanRender.renderDetailsPanel({
+    detailsEl,
+    context: {},
+    mode: "view",
+    canEdit: true,
+    canAdmin: false,
+    canEditDetails: true,
+    inspectorMode: "placement",
+    detailsEdit: { mode: "view", errors: {} },
+    detailEditOptions: { collegeOptions: [], labTypeOptions: [], majorOptionsByCollege: {} },
+    moveBasket: {
+      items: [{
+        id: "item-1",
+        assignmentId: "copy-1__UNIT000001",
+        labName: "待安置用途",
+        labCode: "UNIT000001",
+        college: "信息学院",
+        sourceSpaceLabel: "101",
+        seatCount: 20,
+        computerCount: 10,
+        color: "#0f766e",
+        isSavedUnplaced: true,
+      }],
+      isOpen: true,
+    },
+  });
+
+  assert.match(detailsEl.innerHTML, /data-action="delete-basket-lab"/);
+  assert.match(detailsEl.innerHTML, />删除</);
+});
+
+test("detail merge and split actions submit through detail endpoints", () => {
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const renderSource = fs.readFileSync(path.join(__dirname, "..", "js", "render.js"), "utf8");
+  const serviceSource = fs.readFileSync(path.join(__dirname, "..", "server", "detail-action-service.js"), "utf8");
+
+  assert.match(renderSource, /data-detail-action="merge-space">合并房间/);
+  assert.match(renderSource, /data-detail-action="split-space">拆分房间/);
+  assert.match(appSource, /if \(mode === "mergeSpace"\) return "mergeSpace"/);
+  assert.match(appSource, /if \(mode === "splitSpace"\) return "splitSpace"/);
+  assert.match(appSource, /submitDetailActionToServer\(mode, formData, context\.space, changeNote\)/);
+  assert.match(serviceSource, /body\.action === "mergeSpace"/);
+  assert.match(serviceSource, /body\.action === "splitSpace"/);
+  assert.match(appSource, /splitDirectionLabel/);
 });
 
 test("assignment moves submit through action endpoints instead of assignment batch save", () => {
@@ -3175,7 +3924,7 @@ test("active dataset compatibility write endpoint is admin only", () => {
   assert.match(routeSource, /active_dataset_compatibility_saved/);
 });
 
-test("admin details render inline edit actions and disabled split merge menu", () => {
+test("admin details render inline edit actions and enabled split merge menu", () => {
   const { FloorplanRender } = loadBrowserModules();
   const detailsEl = new StubElement();
   const context = {
@@ -3201,9 +3950,11 @@ test("admin details render inline edit actions and disabled split merge menu", (
   assert.match(detailsEl.innerHTML, /data-detail-action="create-space"[^>]*>新增房间</);
   assert.match(detailsEl.innerHTML, /data-detail-action="edit-space"/);
   assert.match(detailsEl.innerHTML, /data-detail-action="delete-space"[^>]*>删除房间</);
-  assert.match(detailsEl.innerHTML, /data-detail-action="merge-space"[^>]*disabled/);
-  assert.match(detailsEl.innerHTML, /data-detail-action="split-space"[^>]*disabled/);
-  assert.match(detailsEl.innerHTML, /暂未开放/);
+  assert.match(detailsEl.innerHTML, /data-detail-action="merge-space"[^>]*>合并房间</);
+  assert.match(detailsEl.innerHTML, /data-detail-action="split-space"[^>]*>拆分房间</);
+  assert.doesNotMatch(detailsEl.innerHTML, /data-detail-action="delete-lab"/);
+  assert.doesNotMatch(detailsEl.innerHTML, /删除用途单元|删除当前用途/);
+  assert.doesNotMatch(detailsEl.innerHTML, /暂未开放/);
   assert.ok(
     detailsEl.innerHTML.indexOf("details-card details-card-compact") < detailsEl.innerHTML.indexOf("detail-admin-actions"),
     "detail actions should render below the details card"
@@ -3214,6 +3965,7 @@ test("admin details render inline edit actions and disabled split merge menu", (
   const scrollHtml = detailsEl.innerHTML.slice(scrollStart, scrollEnd);
   assert.doesNotMatch(scrollHtml, /detail-admin-actions/);
   assert.match(detailsEl.innerHTML, /class="detail-more-panel"/);
+  assert.match(detailsEl.innerHTML, /secondary-button compact-button/);
   assert.doesNotMatch(detailsEl.innerHTML, /class="detail-more-menu"/);
 
   FloorplanRender.renderDetailsPanel({
@@ -3229,6 +3981,92 @@ test("admin details render inline edit actions and disabled split merge menu", (
 
   assert.doesNotMatch(detailsEl.innerHTML, /data-detail-action="edit-lab"/);
   assert.doesNotMatch(detailsEl.innerHTML, /data-detail-action="edit-space"/);
+});
+
+test("detail merge and split edit forms render expected controls", () => {
+  const { FloorplanRender } = loadBrowserModules();
+  const detailsEl = new StubElement();
+  const context = {
+    building: { building_code: "B0101", building_name: "测试楼" },
+    activePlan: { id: "copy-1", plan_code: "copy-1", plan_name: "我的方案" },
+    space: { id: "space-1", building_code: "B0101", floor_code: "1", space_code: "00101010101", front_door: "101", rear_door: "", length_m: 8, width_m: 6, area_m2: 48, network_segment: "", current_status: "active" },
+    assignment: null,
+    lab: null,
+  };
+
+  FloorplanRender.renderDetailsPanel({
+    detailsEl,
+    context,
+    mode: "view",
+    canEdit: true,
+    canAdmin: false,
+    canEditDetails: true,
+    detailsEdit: { mode: "mergeSpace", errors: {} },
+    detailEditOptions: {
+      mergeSelectedSpaces: [
+        { id: "space-2", space_code: "00101010202", front_door: "102", rear_door: "" },
+        { id: "space-3", space_code: "00101010303", front_door: "103", rear_door: "" },
+      ],
+      mergeDefaultFrontDoor: "101",
+      mergeDefaultRearDoor: "103",
+      mergeDefaultLabName: "合并实验室",
+    },
+    moveBasket: { items: [] },
+  });
+  assert.match(detailsEl.innerHTML, /id="detailMergeSpaceForm"/);
+  assert.doesNotMatch(detailsEl.innerHTML, /name="targetSpaceCode"/);
+  assert.match(detailsEl.innerHTML, /在主图点击房间加入合并/);
+  assert.match(detailsEl.innerHTML, /当前房间/);
+  assert.match(detailsEl.innerHTML, /已选 2 间/);
+  assert.match(detailsEl.innerHTML, /101 - 103/);
+  assert.match(detailsEl.innerHTML, /00101010202/);
+  assert.match(detailsEl.innerHTML, /00101010303/);
+  assert.match(detailsEl.innerHTML, /name="labName"/);
+
+  FloorplanRender.renderDetailsPanel({
+    detailsEl,
+    context,
+    mode: "view",
+    canEdit: true,
+    canAdmin: false,
+    canEditDetails: true,
+    detailsEdit: { mode: "splitSpace", errors: {} },
+    detailEditOptions: { splitDirectionLabel: "东西向（沿走廊）" },
+    moveBasket: { items: [] },
+  });
+  assert.match(detailsEl.innerHTML, /沿走廊方向拆分房间/);
+  assert.match(detailsEl.innerHTML, /id="detailSplitSpaceForm"/);
+  assert.match(detailsEl.innerHTML, /name="splitCount"/);
+  assert.match(detailsEl.innerHTML, /name="splitAxis" type="hidden" value="length"/);
+  assert.match(detailsEl.innerHTML, /东西向（沿走廊）/);
+  assert.match(detailsEl.innerHTML, /name="splitFrontDoor0"/);
+  assert.match(detailsEl.innerHTML, /name="splitFrontDoor1"/);
+
+  FloorplanRender.renderDetailsPanel({
+    detailsEl,
+    context,
+    mode: "view",
+    canEdit: true,
+    canAdmin: false,
+    canEditDetails: true,
+    detailsEdit: { mode: "splitSpace", errors: {}, draft: { splitCount: "3", splitFrontDoor0: "101", splitLengthM0: "2.7" } },
+    detailEditOptions: { splitDirectionLabel: "东西向（沿走廊）" },
+    moveBasket: { items: [] },
+  });
+  assert.match(detailsEl.innerHTML, /name="splitFrontDoor0"/);
+  assert.match(detailsEl.innerHTML, /name="splitFrontDoor1"/);
+  assert.match(detailsEl.innerHTML, /name="splitFrontDoor2"/);
+  assert.match(detailsEl.innerHTML, /name="splitRearDoor2"/);
+  assert.match(detailsEl.innerHTML, /name="splitLengthM2"/);
+});
+
+test("split detail form draft changes are wired for normal edit modes", () => {
+  const renderSource = fs.readFileSync(path.join(__dirname, "..", "js", "render.js"), "utf8");
+
+  assert.match(
+    renderSource,
+    /if \(detailsEdit\?\.mode && detailsEdit\.mode !== "view"\)[\s\S]*?onDetailDraftChange[\s\S]*?renderDetailEditPanel/
+  );
 });
 
 test("editor-owned editable plan renders detail actions without admin role", () => {

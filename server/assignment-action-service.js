@@ -260,6 +260,31 @@ function applyPlanSpace(dataset, plan, body, copyId) {
   applyPlaceBasketItem(dataset, plan, { lab: { lab_code: labCode }, targetSpace });
 }
 
+function applyDeleteUnplacedUnit(dataset, plan, body, copyId) {
+  const lab = findLab(dataset, plan, body.lab || {});
+  const assignment = findAssignment(dataset, plan, body.lab || {});
+  if (!lab || !assignment) throw httpError(400, "assignment_not_found", "未找到待删除用途单元");
+  if (text(assignment.assignment_status) !== "Invalid" || text(assignment.space_code) || text(assignment.space_id)) {
+    throw httpError(400, "assignment_not_unplaced", "只能删除待安置区中的未落位用途单元");
+  }
+  const planCode = text(plan.plan_code || plan.id);
+  const labRefs = new Set([text(lab.id), text(lab.lab_code), text(assignment.lab_id), text(assignment.lab_code)].filter(Boolean));
+  for (const row of dataset.plan_assignments || []) {
+    const rowPlan = text(row.plan_id || row.plan_code);
+    const sameLab = labRefs.has(text(row.lab_id)) || labRefs.has(text(row.lab_code));
+    if (!sameLab || text(row.id) === text(assignment.id)) continue;
+    if (text(row.assignment_status) === "assigned") {
+      if (rowPlan === planCode) throw httpError(400, "lab_used_in_current_plan", "该用途单元仍被当前方案其他空间占用，不能删除");
+    }
+  }
+  dataset.plan_assignments = (dataset.plan_assignments || []).filter((row) => text(row.id) !== text(assignment.id));
+  dataset.labs = (dataset.labs || []).filter((row) => {
+    if (copyId && rowCopyId(row) && rowCopyId(row) !== copyId) return true;
+    return !labRefs.has(text(row.id)) && !labRefs.has(text(row.lab_code));
+  });
+  return { deletedLab: lab };
+}
+
 function applyAssignmentAction(dataset, plan, body, copyId) {
   if (body.action === "moveToBasket") applyMoveToBasket(dataset, plan, body);
   else if (body.action === "returnFromBasket") applyReturnFromBasket(dataset, plan, body);
@@ -267,7 +292,9 @@ function applyAssignmentAction(dataset, plan, body, copyId) {
   else if (body.action === "directMove") applyDirectMove(dataset, plan, body);
   else if (body.action === "createUnplacedUnit") applyCreateUnplacedUnit(dataset, plan, body, copyId);
   else if (body.action === "planSpace") applyPlanSpace(dataset, plan, body, copyId);
+  else if (body.action === "deleteUnplacedUnit") return applyDeleteUnplacedUnit(dataset, plan, body, copyId);
   else throw httpError(400, "unknown_assignment_action", "未知分配操作");
+  return {};
 }
 
 function upsertLabOverride(db, planCode, lab, now) {
@@ -281,6 +308,25 @@ function upsertLabOverride(db, planCode, lab, now) {
       payload_json = excluded.payload_json,
       updated_at = excluded.updated_at
   `).run(`${planCode}__${code}`, planCode, text(lab.id), code, JSON.stringify(lab), now, now);
+}
+
+function persistDeletedLabOverride(db, planCode, lab, now) {
+  const code = text(lab?.lab_code || lab?.id);
+  if (!code) return;
+  const globalRow = db.prepare("SELECT id FROM labs WHERE lab_code = ?").get(code);
+  if (!globalRow) {
+    db.prepare("DELETE FROM plan_lab_overrides WHERE plan_id = ? AND lab_code = ?").run(planCode, code);
+    return;
+  }
+  db.prepare(`
+    INSERT INTO plan_lab_overrides (id, plan_id, base_lab_id, lab_code, operation, payload_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 'deleted', ?, ?, ?)
+    ON CONFLICT(plan_id, lab_code) DO UPDATE SET
+      operation = excluded.operation,
+      base_lab_id = excluded.base_lab_id,
+      payload_json = excluded.payload_json,
+      updated_at = excluded.updated_at
+  `).run(`${planCode}__${code}`, planCode, text(globalRow.id || lab.id), code, JSON.stringify(lab || { lab_code: code }), now, now);
 }
 
 function replaceAssignments(db, planCode, assignments, now) {
@@ -351,13 +397,14 @@ function createAssignmentActionService(db, datasetService) {
     const nextRevision = row.revision + 1;
     const dataset = datasetService.normalizeIncomingDataset(DatasetProjection.projectVisibleDataset(db, user));
     const plan = activePlanFrom(dataset, row.plan_code);
-    applyAssignmentAction(dataset, plan, { ...body, planCode: row.plan_code }, copyId);
+    const actionResult = applyAssignmentAction(dataset, plan, { ...body, planCode: row.plan_code }, copyId);
     const normalized = normalizeAssignmentRows(datasetService, dataset);
     const assignments = (normalized.plan_assignments || []).filter((assignment) => planMatches(assignment, row.plan_code));
     const snapshot = datasetService.normalizeIncomingDataset(copySnapshot(normalized, row.plan_code, copyId));
     db.exec("BEGIN");
     try {
       for (const lab of snapshot.labs) upsertLabOverride(db, row.plan_code, lab, now);
+      if (body.action === "deleteUnplacedUnit") persistDeletedLabOverride(db, row.plan_code, actionResult.deletedLab, now);
       replaceAssignments(db, row.plan_code, assignments, now);
       db.prepare(`
         UPDATE plan_copies

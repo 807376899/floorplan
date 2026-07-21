@@ -133,7 +133,7 @@
 - 详情栏不得提供实验室备注入口；保存实验室资料时不得依赖该隐藏字段，也不得因字段缺失清空历史实验室备注。
 - 详情栏日常编辑必须围绕当前楼栋、当前楼层、当前空间组织，不得要求业务用户像数据库管理员一样分别维护多个底层表并手动寻找编码关系。
 - 数据编辑栏必须清晰区分“切换视图”和“当前视图操作”：教学楼、楼层骨架、学院、专业、用途类型、方案等入口属于视图切换；新增行、应用修改、导出当前表等按钮属于当前视图操作。
-- admin 或 editor 在可编辑且自己可管理的方案中可在详情信息栏内联编辑已有实验室资料、改建当前房间、新增房间，以及通过“更多”操作面板编辑或删除当前空间资料。详情栏按钮必须位于详细信息卡片下方但独立于详情卡片滚动区；点击“更多”后，操作内容必须在按钮区原位展开，不得通过详情滚动轮或浮层菜单查看；点击 `.detail-more-wrap` 外任意位置或按 `Esc` 必须关闭该面板。详情栏编辑房间和新增房间可维护门牌、骨架、所在侧、偏移、长宽、面积、网段和物理状态；门牌修改必须预览并迁移空间编码引用，已有房间长宽不得被清空，长宽有效时面积按长宽乘积计算。“更多”操作面板中的合并房间和拆分房间入口在功能实现前必须保持禁用并标注暂未开放；“删除房间”从当前方案视角删除物理房间并将当前方案相关分配标记为 `Invalid`，不得删除实验室资料。
+- admin 或 editor 在可编辑且自己可管理的方案中可在详情信息栏内联编辑已有实验室资料、改建当前房间、新增房间，以及通过“更多”操作面板编辑、合并、拆分或删除当前空间资料。“更多”面板中的按钮必须与“编辑实验室”“改建房间”等详情栏按钮保持同一视觉风格。详情栏按钮必须位于详细信息卡片下方但独立于详情卡片滚动区；点击“更多”后，操作内容必须在按钮区原位展开，不得通过详情滚动轮或浮层菜单查看；点击 `.detail-more-wrap` 外任意位置或按 `Esc` 必须关闭该面板。详情栏编辑房间和新增房间可维护门牌、骨架、所在侧、偏移、长宽、面积、网段和物理状态；门牌修改必须预览并迁移空间编码引用，已有房间长宽不得被清空，长宽有效时面积按长宽乘积计算。点击“合并房间”后不得通过下拉框选择目标房间，而必须进入主图点选模式；用户在主图点击当前方案下同一楼栋、楼层、走廊骨架、侧向且可用的房间加入/移出合并集合，连续性按同走廊同侧排序区间判断，中间没有未选房间即可，不要求 `offset_m + length_m` 几何无缝；表单必须显示当前房间、已选数量、已选目标编码和合并后门牌范围，默认使用所选空间中的最小门牌和最大门牌作为合并后前后门牌，并允许修改合并后的实验室名称。合并后保留当前房间身份，移除目标房间，目标房间及原当前房间的原用途单元分配在当前方案中标记为未落位 `Invalid` 并进入待安置区，同时创建新的合并后用途单元落位到合并房间；其他方案不受影响。当前版本拆分房间只支持沿走廊长度方向拆分，表单必须明确显示“沿走廊方向”及由骨架推导出的东西向或南北向提示，并提交 `splitAxis = length`；拆分数量默认 2 个且可调整，数量变化后必须立即渲染对应数量的房间信息输入组，每个拆出房间必须输入前门牌、可不输入后门牌，并输入沿走廊长度；拆分出的每个房间都继承拆分前用途单元的学院等业务信息并创建对应落位用途单元，原用途单元分配保留历史房间引用且标记为 `Invalid`。“删除房间”从当前方案视角删除物理房间并将当前方案相关分配标记为 `Invalid`，不得删除实验室资料。
 - 详情栏“编辑实验室”和“改建房间”表单必须显示当前房间门牌、楼栋楼层和空间编码，避免误编辑；所属学院和所属专业必须使用下拉单选，专业按已选学院联动过滤，并保留历史专业值避免打开表单后被清空。详情栏编辑保存成功后才关闭表单；保存失败时必须回滚数据、保留表单和用户已填内容并显示错误。详情栏“新增房间”只创建未规划物理房间，不同步创建用途单元或方案分配；没有可绑定走廊骨架或无法生成空间编码时必须阻止保存并提示。
 - 详情栏实验室表单中的实验室类型、所属学院、所属专业必须使用下拉单选；所属专业按已选学院联动过滤。admin 必须通过数据编辑中的学院、专业和实验室类型原始表维护基础信息，顶部不再提供重复的“基础信息”独立弹窗入口，editor/viewer 只能使用已启用的基础信息选项。
 - 数据编辑中的学院和专业信息仅 admin 可见、可编辑；editor/viewer 不显示学院和专业原始表。
@@ -141,7 +141,7 @@
 - 落位实验室候选只应显示当前方案中未落位的实验室，以及当前空间已落位的实验室；已落位到其他空间的实验室不得作为可选项出现，也不显示“已隐藏”数量提示。若保存时检测到实验室已被其他空间占用，必须给出明确提示，不得无响应。
 - 详情信息栏点击“搬迁实验室”后，目标空间必须使用下拉单选；候选为当前方案下全校范围内 `active` 且无 `assigned` 实验室的未规划空间，标签显示楼栋、楼层、门牌、空间编码和面积。
 - 从未规划空间选择实验室后，若当前用户有实验室资料编辑权限，实验室名称、类型、学院、专业、负责人、座位数和电脑数必须立即可编辑；负责人字段宽度与专业字段一致。
-- 详情栏后续必须支持安全删除实验室：admin 可删除任意非基线方案中未被其他空间或其他方案引用的实验室，editor 可删除自己创建且非基线方案中满足同样安全条件的实验室；删除时同步移除当前方案中的相关落位关系，基线方案和被其他方案引用的实验室不得删除。
+- 详情栏不得提供“删除用途单元”入口，也不得支持 `deleteLab` 详情动作。用途单元资料只能从待安置区删除：删除仅作用于当前方案未落位 `Invalid` 条目，不删除任何物理房间；copy-only 用途单元删除时移除当前 copy 的 lab override 和 assignment，继承自全局基准的用途单元删除时写入当前 copy 的 `plan_lab_overrides.operation = 'deleted'`，防止刷新后由全局基准复活；其他方案分配不受影响，当前方案内仍有 `assigned` 占用时必须阻止删除。
 - 当存在多个可见方案副本且副本中包含同 ID 的楼栋、楼层骨架、空间或实验室资料时，服务端返回给前端的可见数据必须保证最新/刚保存的副本资料优先显示，不能让旧副本覆盖刚保存的详情栏编辑结果。
 - 保存详情栏编辑或原始表格后，重新拉取服务端数据必须能读回刚才保存的空间资料、实验室资料和落位安排；不得出现接口已写入但界面被其他副本同 ID 数据覆盖而看起来无法保存的情况。
 - 详情栏保存实验室或空间资料时，必须优先按当前方案副本的 `copy_id` 定位目标行；多个可见副本存在相同 `id` 或业务编码时，不得更新到其他副本的同名行，也不得让服务端保存过滤掉本次修改后仍提示成功。
@@ -191,16 +191,18 @@
 - 编号规范化必须同步 active/global 关系表、非删除 plan copy 关系行、copy assignments、copy overrides 和 legacy JSON；关系表写入分配时必须优先使用规范化后的 `plan_code`，不得让旧 `plan_id` 复活中文或旧方案编号。
 - 方案生命周期写入必须以关系表为权威：创建方案副本、导入生成方案副本、重命名、公开/私有切换、设为/取消基线和软删除方案时，必须同步更新关系表 `plans`；legacy `plan_copies` 和 active dataset JSON 仅作为兼容快照同步。
 - 方案副本生命周期写入必须在事务中完成：`plan_copies`、关系表 `plans` 和当前方案 `plan_assignments` 必须一起成功或一起回滚；删除方案只写软删除状态，不物理删除分配、override 或 legacy JSON。
-- 详情栏日常编辑必须使用动作级写接口而不是从前端回传整包可见 dataset 覆盖保存。`editLab`、`renovateRoom`、`createSpace`、`editSpace` 和 `deleteSpace` 在服务端优先写关系表，成功后通过关系表投影返回可见 dataset。
-- 详情栏写入 copy 方案时，新建或修改的空间与用途单元必须写入当前方案的 override 表；新建 copy 房间不得写入全局 `spaces` 基准表。删除房间必须写入当前方案 tombstone 并只使当前方案相关分配变为 `Invalid`。
+- 详情栏日常编辑必须使用动作级写接口而不是从前端回传整包可见 dataset 覆盖保存。`editLab`、`renovateRoom`、`createSpace`、`editSpace`、`deleteSpace`、`mergeSpace` 和 `splitSpace` 在服务端优先写关系表，成功后通过关系表投影返回可见 dataset；`deleteLab` 不得作为详情动作暴露。
+- 详情栏和分配动作接口已经从 action service 获得关系表投影时，路由层不得再次调用 `buildVisibleDataset` 重建可见 dataset；响应应复用 service 返回的 `dataset`、`revision` 或 `copyRevision`，避免一次保存触发两次全量投影。
+- 详情栏写入 copy 方案时，新建或修改的空间与用途单元必须写入当前方案的 override 表；新建 copy 房间不得写入全局 `spaces` 基准表。删除房间和合并房间移除的目标房间必须写入当前方案 tombstone，并只使当前方案相关分配变为 `Invalid`。合并或拆分继承自全局基准的房间时，当前房间必须先转为 copy-scoped override，刷新投影后不得污染全局基准或其他副本。待安置区删除继承自全局基准的用途单元必须写入 `plan_lab_overrides.operation = 'deleted'`，删除 copy-only 用途单元必须移除对应 override，且不得让旧 copy JSON 在刷新后复活已删除用途单元的当前方案落位。
 - 详情栏动作保存成功后可同步 legacy JSON 快照用于兼容、导出或回滚；保存失败或 revision 冲突时不得更新关系表或 legacy JSON 快照。
-- 主图规划未规划空间、加入待安置区、待安置区归位、待安置区落位、同层直接搬迁和新增待安置用途单元必须使用动作级分配写接口。`planSpace`、`moveToBasket`、`returnFromBasket`、`placeBasketItem`、`directMove` 和 `createUnplacedUnit` 在服务端优先写 `plan_assignments` 与当前方案用途单元 override，成功后通过关系表投影刷新前端；不得通过前端回传整包可见 dataset 或批量 assignment 覆盖来作为这些交互的权威保存路径。
-- 分配动作写入 copy 方案时，新建待安置用途单元必须写入当前方案的 `plan_lab_overrides`，不得写入全局 `labs` 基准表；搬迁、归位和待安置状态只影响当前方案的 `plan_assignments`，不得污染其他副本或基线。
+- 主图规划未规划空间、加入待安置区、待安置区归位、待安置区落位、同层直接搬迁、新增待安置用途单元和删除待安置用途单元必须使用动作级分配写接口。`planSpace`、`moveToBasket`、`returnFromBasket`、`placeBasketItem`、`directMove`、`createUnplacedUnit` 和 `deleteUnplacedUnit` 在服务端优先写 `plan_assignments` 与当前方案用途单元 override，成功后通过关系表投影刷新前端；不得通过前端回传整包可见 dataset 或批量 assignment 覆盖来作为这些交互的权威保存路径。
+- 分配动作写入 copy 方案时，新建待安置用途单元必须写入当前方案的 `plan_lab_overrides`，不得写入全局 `labs` 基准表；搬迁、归位、待安置状态和待安置区删除只影响当前方案的 `plan_assignments` 与必要的当前方案 lab override/tombstone，不得污染其他副本或基线。
 - 普通 UI 不得调用 copy 方案遗留整包写接口。`PUT /api/plan-copies/:id/dataset` 和 `PUT /api/plan-copies/:id/assignments` 必须返回 `legacy_write_disabled`，不得更新 `plan_copies`、关系表 `plans`、`plan_assignments`、override 或 legacy JSON。
 - server mode 下 `plan_assignments` 原始表只能作为只读诊断视图；分配维护必须通过主图、详情栏或待安置区动作接口完成。
 - server mode 下普通业务 UI 不得把 `/api/dataset/active` 作为日常保存兜底；该整包入口仅保留为 admin 兼容覆盖写，必须记录为兼容写审计，并继续以关系表为业务写入权威。
 - server mode 下 `plans` 原始表只能作为只读诊断视图；方案创建、公开/私有、删除、重命名和设为/取消基线必须通过方案生命周期 API 或管理方案入口完成。
 - 高级原始维护表中的 `campuses`、`buildings`、`floor_segments`、`colleges`、`majors` 和 `lab_types` 必须通过动作级 raw-maintenance API 保存。服务端应先写关系表并通过关系表投影返回可见 dataset；前端不得把整包可见 dataset 当作这些全局基础表的权威保存载荷。
+- 前端动作保存合并逻辑必须兼容轻量响应：当响应包含 `dataset` 时刷新本地数据；当响应只包含 `revision` 或 `copyRevision` 时仍要正确更新正式版本号或当前副本版本号，不能把本地 dataset 清空。
 - 高级原始维护表删除教学楼或楼层骨架时，服务端必须在关系表事务中级联删除相关骨架或空间，并将受影响方案分配标记为 `Invalid`；删除学院、专业或用途类型时，若仍被实验室、专业或用途单元引用，必须阻止保存且不得更新 legacy JSON 快照。
 - 高级原始维护表删除教学楼或楼层骨架时，除全局基准 `spaces` 外，还必须删除绑定到该楼栋或骨架的当前方案 `plan_space_overrides`，并将相关 `plan_assignments` 标记为 `Invalid`；旧副本 JSON 中的同骨架空间不得在下一次读取时重新出现。
 - Campuses, teaching buildings, floor skeletons, colleges, majors, and use types are global shared reference data. They must not be duplicated per plan copy in the visible raw editor; admin seeing multiple visible plans must still see one row for the same `campus_code`, one row for the same `building_code`, and one row for the same floor skeleton semantic key.
@@ -216,6 +218,11 @@
 
 - First paint, login, `/api/bootstrap`, and ordinary refresh must not depend on external CDN availability. Large optional browser libraries such as SheetJS must be loaded on demand only when the user imports or exports `.xlsx` files.
 - If the Excel component cannot be loaded, the app must keep the main floorplan usable and fall back to JSON import/export guidance instead of blocking startup or leaving the page on "正在加载服务器数据...".
+- 服务端 JSON 响应必须暴露 `X-Floorplan-Payload-Bytes`，用于定位 `/api/bootstrap`、`/api/dataset/active` 和动作保存响应的 payload 膨胀问题。
+- 前端必须为 `bootstrap`、`renderApp` 和主图 `renderFloorplan` 保留 Performance API 标记或度量，便于在浏览器性能面板中定位加载和渲染耗时。
+- 主图楼层渲染数据构建必须使用按空间索引的分配查找，避免随空间数和分配数增长出现每个房间线性扫描分配的渲染退化。
+- server mode 下服务端数据是权威来源，bootstrap、刷新和动作保存后的前端状态更新不得把整包 dataset 写回 `localStorage`；离线/localStorage 示例模式仍必须保留本地持久化能力。
+- 静态资源服务必须为 JS、CSS 等非 HTML 资源提供短期 `Cache-Control` 和 ETag 再验证，重复访问时可返回 304；匹配 ETag 的 304 快路径不得读取完整文件内容，只能通过文件元数据完成判断。普通 200 静态资源响应必须流式发送文件内容，不得用 `fs.readFile` 将完整 JS/CSS 文件一次性读入内存。`index.html` 必须保持 `no-cache`，避免发布后入口 HTML 被长期缓存。
 
 ## Admin Correction Usability
 

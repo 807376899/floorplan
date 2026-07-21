@@ -144,7 +144,7 @@
     return colors[space.lab.college] || "#64748b";
   }
 
-  function roomSvg(box, colors, compact, selectedSpaceId, mutedColleges = new Set(), moveBasket = {}, canMoveLabs = false) {
+  function roomSvg(box, colors, compact, selectedSpaceId, mutedColleges = new Set(), moveBasket = {}, canMoveLabs = false, mergeSelection = null) {
     const items = moveBasket.items || [];
     const previewItem = items.find((item) => item.targetSpaceId === box.space.id) || null;
     const sourceItem = items.find((item) => item.sourceSpaceId === box.space.id) || null;
@@ -154,6 +154,8 @@
     if (compact) return `<rect class="room ${muted && box.space.lab ? "is-muted" : ""}" x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="${fill}" rx="3"></rect>`;
 
     const selected = selectedSpaceId === box.space.id;
+    const mergeSource = mergeSelection?.sourceSpaceId === box.space.id;
+    const mergeTarget = (mergeSelection?.targetSpaceIds || []).includes(box.space.id);
     const doorLabel = box.space.front_door || box.space.space_code;
     const label = previewItem?.labName || box.space.lab?.lab_name || box.space.front_door || box.space.space_code;
     const subLabel = previewItem
@@ -161,8 +163,14 @@
       : box.space.lab?.college || box.space.network_segment || box.space.current_status;
     const movable = Boolean(canMoveLabs && box.space.assignment && box.space.lab && !sourceItem);
     const tooltip = roomTooltipText(box.space);
-    return `<g class="room ${muted && box.space.lab ? "is-muted" : ""} ${selected ? "is-selected" : ""} ${movable ? "is-move-source" : ""} ${sourceItem ? "is-basket-source" : ""} ${previewItem ? "is-basket-target" : ""}" tabindex="0" data-space-id="${box.space.id}" data-assignment-id="${box.space.assignment?.id || ""}" data-lab-id="${box.space.lab?.id || ""}" data-room-tooltip="${escapeHtml(tooltip)}" data-room-x="${box.x}" data-room-y="${box.y}" data-room-width="${box.width}" data-room-height="${box.height}">
+    const mergeBadge = mergeSource
+      ? `<text class="room-merge-badge" x="${box.x + box.width - 8}" y="${box.y + 18}" text-anchor="end" fill="#ffffff" font-size="11" font-weight="800">当前</text>`
+      : mergeTarget
+        ? `<text class="room-merge-badge" x="${box.x + box.width - 8}" y="${box.y + 18}" text-anchor="end" fill="#ffffff" font-size="11" font-weight="800">已选</text>`
+        : "";
+    return `<g class="room ${muted && box.space.lab ? "is-muted" : ""} ${selected ? "is-selected" : ""} ${movable ? "is-move-source" : ""} ${sourceItem ? "is-basket-source" : ""} ${previewItem ? "is-basket-target" : ""} ${mergeSource ? "is-merge-source" : ""} ${mergeTarget ? "is-merge-target" : ""}" tabindex="0" data-space-id="${box.space.id}" data-assignment-id="${box.space.assignment?.id || ""}" data-lab-id="${box.space.lab?.id || ""}" data-room-tooltip="${escapeHtml(tooltip)}" data-room-x="${box.x}" data-room-y="${box.y}" data-room-width="${box.width}" data-room-height="${box.height}">
       <rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" rx="4" fill="${fill}"></rect>
+      ${mergeBadge}
       <text class="room-label room-label-door" data-label-role="door" data-label-text="${escapeHtml(doorLabel)}" x="${box.x + 8}" y="${box.y + 18}" fill="${labelFill}" font-size="13" font-weight="700">${escapeHtml(doorLabel)}</text>
       <text class="room-label room-label-name" data-label-role="name" data-label-text="${escapeHtml(label)}" x="${box.x + 8}" y="${box.y + 36}" fill="${labelFill}" font-size="12">${escapeHtml(label)}</text>
       <text class="room-label room-label-meta" data-label-role="meta" data-label-text="${escapeHtml(subLabel)}" x="${box.x + 8}" y="${box.y + 53}" fill="${labelFill}" font-size="12">${escapeHtml(subLabel)}</text>
@@ -193,18 +201,25 @@
   function floorRenderData(data, buildingCode, floorCode, planId) {
     const segments = data.floor_segments.filter((row) => row.building_code === buildingCode && row.floor_code === floorCode);
     const assignments = data.plan_assignments.filter((row) => row.plan_id === planId && row.assignment_status === "assigned");
-    const labs = new Map(data.labs.map((row) => [row.id, row]));
+    const labsById = new Map(data.labs.map((row) => [row.id, row]));
+    const labsByCode = new Map(data.labs.map((row) => [row.lab_code, row]));
+    const assignmentsBySpace = new Map();
+    assignments.forEach((assignment) => {
+      if (assignment.space_id) assignmentsBySpace.set(assignment.space_id, assignment);
+      if (assignment.space_code) assignmentsBySpace.set(`code:${assignment.space_code}`, assignment);
+    });
     const spaces = data.spaces
       .filter((row) => row.building_code === buildingCode && row.floor_code === floorCode)
       .map((space) => {
-        const assignment = assignments.find((row) => row.space_id === space.id) || null;
-        return { ...space, lab: assignment ? labs.get(assignment.lab_id) || null : null, assignment };
+        const assignment = assignmentsBySpace.get(space.id) || assignmentsBySpace.get(`code:${space.space_code}`) || null;
+        const lab = assignment ? labsById.get(assignment.lab_id) || labsByCode.get(assignment.lab_code) || null : null;
+        return { ...space, lab, assignment };
       });
     return { segments, spaces };
   }
 
   function renderFloorplan(params) {
-    const { floorplanEl, activePlanBadgeEl, data, building, floorCode, activePlan, colors, selectedSpaceId, mutedColleges = new Set(), moveBasket, canMoveLabs, onSelectSpace, onRoomPointerDown } = params;
+    const { floorplanEl, activePlanBadgeEl, data, building, floorCode, activePlan, colors, selectedSpaceId, mutedColleges = new Set(), moveBasket, canMoveLabs, mergeSelection, onSelectSpace, onRoomPointerDown } = params;
     if (!activePlan) {
       floorplanEl.innerHTML = `<div class="empty">当前没有可用方案。</div>`;
       activePlanBadgeEl.textContent = "当前主图";
@@ -228,7 +243,7 @@
         <svg viewBox="0 0 ${layout.width} ${layout.height}">
           <rect width="${layout.width}" height="${layout.height}" fill="#fbfcfe"></rect>
           ${layout.corridors.map((item) => structureSvg(item, false)).join("")}
-          ${layout.rooms.map((item) => roomSvg(item, colors, false, selectedSpaceId, mutedColleges, moveBasket, canMoveLabs)).join("")}
+          ${layout.rooms.map((item) => roomSvg(item, colors, false, selectedSpaceId, mutedColleges, moveBasket, canMoveLabs, mergeSelection)).join("")}
         </svg>
       </div>
       <div class="room-hover-card is-hidden" aria-hidden="true"></div>`;
@@ -294,6 +309,8 @@
       onOpenMove,
       onDetailAction,
       onSubmitDetailEdit,
+      onDetailDraftChange,
+      onToggleMergeTarget,
       onCancelDetailEdit,
       onMoveFieldChange,
       onConfirmMove,
@@ -312,6 +329,7 @@
       onEditBasketLab,
       onSubmitBasketLabEdit,
       onCancelBasketLabEdit,
+      onDeleteBasketLab,
     } = params;
     detailsEl.dataset.moveBasketDropzone = "true";
 
@@ -325,6 +343,7 @@
         onEditBasketLab,
         onSubmitBasketLabEdit,
         onCancelBasketLabEdit,
+        onDeleteBasketLab,
       });
       return;
     }
@@ -332,6 +351,7 @@
     if (detailsEdit?.mode === "createSpace") {
       renderDetailEditPanel(detailsEl, context, Boolean(canEditDetails || (canEdit && canAdmin)), detailsEdit, detailEditOptions, moveBasket, {
         onSubmitDetailEdit,
+        onDetailDraftChange,
         onCancelDetailEdit,
         onSetInspectorMode,
       });
@@ -363,6 +383,8 @@
       renderDetailEditPanel(detailsEl, context, Boolean(canEditDetails || (canEdit && canAdmin)), detailsEdit, detailEditOptions, moveBasket, {
         onSubmitDetailEdit,
         onCancelDetailEdit,
+        onToggleMergeTarget,
+        onDetailDraftChange,
         onSetInspectorMode,
       });
       return;
@@ -454,10 +476,10 @@
       <div class="detail-more-wrap">
         <button type="button" class="secondary-button compact-button" data-detail-action="toggle-more" aria-expanded="${moreOpen ? "true" : "false"}">更多</button>
         ${moreOpen ? `<div class="detail-more-panel">
-          <button type="button" data-detail-action="edit-space">编辑房间</button>
-          <button type="button" data-detail-action="merge-space" disabled>合并房间<span>暂未开放</span></button>
-          <button type="button" data-detail-action="split-space" disabled>拆分房间<span>暂未开放</span></button>
-          <button type="button" class="is-danger" data-detail-action="delete-space">删除房间</button>
+          <button type="button" class="secondary-button compact-button" data-detail-action="edit-space">编辑房间</button>
+          <button type="button" class="secondary-button compact-button" data-detail-action="merge-space">合并房间</button>
+          <button type="button" class="secondary-button compact-button" data-detail-action="split-space">拆分房间</button>
+          <button type="button" class="secondary-button compact-button is-danger" data-detail-action="delete-space">删除房间</button>
         </div>` : ""}
       </div>` : ""}
     </div>`;
@@ -479,13 +501,27 @@
       renderReadonlyDetails(detailsEl, context, false, false, { mode: "view" }, null, null, null, moveBasket, handlers.onSetInspectorMode);
       return;
     }
-    const title = mode === "createSpace" ? "新增房间" : mode === "editSpace" ? "编辑房间" : mode === "renovateRoom" ? "改建房间" : "编辑实验室";
+    const title = mode === "createSpace"
+      ? "新增房间"
+      : mode === "editSpace"
+        ? "编辑房间"
+        : mode === "mergeSpace"
+          ? "合并房间"
+          : mode === "splitSpace"
+            ? "沿走廊方向拆分房间"
+            : mode === "renovateRoom"
+              ? "改建房间"
+              : "编辑实验室";
     const draft = detailsEdit?.draft || {};
     const formHtml = mode === "createSpace"
       ? spaceEditFormHtml(context, options, detailsEdit.errors || {}, true, draft)
       : mode === "editSpace"
-      ? spaceEditFormHtml(context, options, detailsEdit.errors || {}, false, draft)
-      : labEditFormHtml(context, options, detailsEdit.errors || {}, mode === "renovateRoom", draft);
+        ? spaceEditFormHtml(context, options, detailsEdit.errors || {}, false, draft)
+        : mode === "mergeSpace"
+          ? mergeSpaceFormHtml(context, options, detailsEdit.errors || {}, draft)
+          : mode === "splitSpace"
+            ? splitSpaceFormHtml(context, options, detailsEdit.errors || {}, draft)
+            : labEditFormHtml(context, options, detailsEdit.errors || {}, mode === "renovateRoom", draft);
     detailsEl.innerHTML = `<div class="details-panel is-editing" data-move-basket-dropzone="true">
       <div class="details-header">
         <div>
@@ -504,6 +540,16 @@
     form?.addEventListener("submit", (event) => {
       event.preventDefault();
       handlers.onSubmitDetailEdit?.(mode, new FormData(form));
+    });
+    form?.querySelectorAll("[data-detail-draft-watch]").forEach((input) => {
+      input.addEventListener("input", () => handlers.onDetailDraftChange?.(mode, new FormData(form)));
+      input.addEventListener("change", () => handlers.onDetailDraftChange?.(mode, new FormData(form)));
+    });
+    detailsEl.querySelectorAll("[data-merge-target-id]").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        handlers.onToggleMergeTarget?.(button.dataset.mergeTargetId);
+      });
     });
     const collegeSelect = detailsEl.querySelector('select[name="college"]');
     const majorSelect = detailsEl.querySelector('select[name="major"]');
@@ -573,6 +619,70 @@
           ${optionHtml("unavailable", "不可用", valueFor("currentStatus", space.current_status))}
         </select></label>
       </div>
+      ${errors.form ? `<p class="detail-form-error">${escapeHtml(errors.form)}</p>` : ""}
+      <div class="details-actions">
+        <button type="submit" class="primary-button">保存</button>
+        <button type="button" data-detail-cancel>取消</button>
+      </div>
+    </form>`;
+  }
+
+  function mergeSpaceFormHtml(context, options, errors, draft = {}) {
+    const selectedSpaces = options.mergeSelectedSpaces || [];
+    const selectedCodes = selectedSpaces.map((space) => space.space_code).filter(Boolean).join(",");
+    const currentLabel = doorRangeLabel(context.space) || context.space?.space_code || "当前房间";
+    const rangeLabel = [draft.frontDoor ?? options.mergeDefaultFrontDoor, draft.rearDoor ?? options.mergeDefaultRearDoor]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .join(" - ");
+    const selectedHtml = selectedSpaces.length
+      ? selectedSpaces.map((space) => `<button type="button" class="detail-chip" data-merge-target-id="${escapeHtml(space.id || "")}" title="${escapeHtml(space.space_code || "")}">${escapeHtml(doorRangeLabel(space) || space.space_code)}<small>${escapeHtml(space.space_code || "")}</small></button>`).join("")
+      : `<span class="detail-muted">尚未选择目标房间</span>`;
+    return `<form id="detailMergeSpaceForm" class="detail-edit-form" data-detail-edit-mode="mergeSpace">
+      ${roomContextHtml(context)}
+      <input name="targetSpaceCodes" type="hidden" value="${escapeHtml(selectedCodes)}" />
+      <div class="space-code-preview"><span>合并方式</span><strong>在主图点击房间加入合并</strong></div>
+      <div class="space-code-preview"><span>合并范围</span><strong>${escapeHtml(rangeLabel || currentLabel)}</strong></div>
+      <div class="space-code-preview"><span>选择状态</span><strong>当前房间 ${escapeHtml(currentLabel)} · 已选 ${escapeHtml(String(selectedSpaces.length))} 间</strong></div>
+      <div class="detail-selection-strip">${selectedHtml}</div>
+      <div class="detail-form-grid">
+        ${detailInput("合并后前门牌", "frontDoor", draft.frontDoor ?? options.mergeDefaultFrontDoor ?? "", "text")}
+        ${detailInput("合并后后门牌", "rearDoor", draft.rearDoor ?? options.mergeDefaultRearDoor ?? "", "text")}
+        ${detailInput("实验室名称", "labName", draft.labName ?? options.mergeDefaultLabName ?? "", "text")}
+      </div>
+      ${errors.form ? `<p class="detail-form-error">${escapeHtml(errors.form)}</p>` : ""}
+      <div class="details-actions">
+        <button type="submit" class="primary-button" ${selectedSpaces.length ? "" : "disabled"}>保存</button>
+        <button type="button" data-detail-cancel>取消</button>
+      </div>
+    </form>`;
+  }
+
+  function splitSpaceFormHtml(context, options, errors, draft = {}) {
+    const space = context.space || {};
+    const splitCount = Math.min(10, Math.max(2, Number(draft.splitCount || 2) || 2));
+    const defaultLength = Number(space.length_m) > 0 ? Number((Number(space.length_m) / splitCount).toFixed(2)) : "";
+    const splitDirectionLabel = options.splitDirectionLabel || "沿走廊方向";
+    const rows = Array.from({ length: splitCount }, (_, index) => {
+      const frontName = `splitFrontDoor${index}`;
+      const rearName = `splitRearDoor${index}`;
+      const lengthName = `splitLengthM${index}`;
+      const frontDefault = index === 0 ? (space.front_door || "") : "";
+      return `<div class="detail-split-row">
+        ${detailInput(`房间 ${index + 1} 前门牌`, frontName, draft[frontName] ?? frontDefault, "text")}
+        ${detailInput(`房间 ${index + 1} 后门牌`, rearName, draft[rearName] ?? "", "text")}
+        ${detailInput(`房间 ${index + 1} 长度`, lengthName, draft[lengthName] ?? defaultLength, "number", "0.1")}
+      </div>`;
+    }).join("");
+    return `<form id="detailSplitSpaceForm" class="detail-edit-form" data-detail-edit-mode="splitSpace">
+      ${roomContextHtml(context)}
+      <input name="splitAxis" type="hidden" value="length" />
+      <div class="space-code-preview"><span>拆分方向</span><strong>${escapeHtml(splitDirectionLabel)}</strong></div>
+      <div class="space-code-preview"><span>原房间长度</span><strong>${escapeHtml(space.length_m ?? "")}</strong></div>
+      <div class="detail-form-grid">
+        <label class="detail-field"><span>拆分数量</span><input name="splitCount" type="number" min="2" max="10" step="1" value="${escapeHtml(splitCount)}" data-detail-draft-watch /></label>
+      </div>
+      ${rows}
       ${errors.form ? `<p class="detail-form-error">${escapeHtml(errors.form)}</p>` : ""}
       <div class="details-actions">
         <button type="submit" class="primary-button">保存</button>
@@ -662,6 +772,9 @@
     detailsEl.querySelectorAll("[data-action='edit-basket-lab']").forEach((button) => {
       button.addEventListener("click", () => handlers.onEditBasketLab?.(button.dataset.itemId));
     });
+    detailsEl.querySelectorAll("[data-action='delete-basket-lab']").forEach((button) => {
+      button.addEventListener("click", () => handlers.onDeleteBasketLab?.(button.dataset.itemId));
+    });
     detailsEl.querySelector("#basketLabEditForm")?.addEventListener("submit", (event) => {
       event.preventDefault();
       handlers.onSubmitBasketLabEdit?.(editingItem?.id, new FormData(event.currentTarget));
@@ -723,6 +836,7 @@
         <button type="button" data-action="locate-basket-source" data-item-id="${escapeHtml(item.id)}">定位</button>
         ${canEdit ? `<button type="button" data-action="edit-basket-lab" data-item-id="${escapeHtml(item.id)}">编辑</button>` : ""}
         ${canEdit ? `<button type="button" data-action="return-basket-item" data-item-id="${escapeHtml(item.id)}">归位</button>` : ""}
+        ${canEdit && item.isSavedUnplaced ? `<button type="button" class="is-danger" data-action="delete-basket-lab" data-item-id="${escapeHtml(item.id)}">删除</button>` : ""}
       </div>
     </article>`;
   }
